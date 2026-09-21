@@ -37,7 +37,8 @@ function Invoke-RequiredCheck {
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     Push-Location $apiProject
     try {
-        Invoke-RequiredCheck "Backend Ruff" { uv --cache-dir $cacheDir run --project . --group dev ruff check src tests }
+        Invoke-RequiredCheck "uv lock verification" { uv --cache-dir $cacheDir lock --check }
+        Invoke-RequiredCheck "Backend Ruff" { uv --cache-dir $cacheDir run --project . --group dev ruff check src tests migrations }
         Invoke-RequiredCheck "Backend mypy" { uv --cache-dir $cacheDir run --project . --group dev mypy src tests }
         Invoke-RequiredCheck "Backend pytest" { uv --cache-dir $cacheDir run --project . --group dev pytest -p no:cacheprovider }
         Invoke-RequiredCheck "Alembic offline migration check" { uv --cache-dir $cacheDir run --project . alembic upgrade head --sql }

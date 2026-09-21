@@ -54,4 +54,8 @@ Do not add rented equipment, non-tipper machinery, payroll, accounting, customer
 
 ## Current status
 
-Phase 0 is a foundation milestone. It does not contain driver workflows, supervisor workflows, admin screens, domain persistence, authentication, or business APIs. Those are intentionally deferred to Phase 1 and later.
+Phase 1 contains the core company-owned tipper domain schema, PostgreSQL
+migration, effective-dated assignments, event envelopes, verification history,
+audit foundation, and database-backed invariant tests. Authentication, driver
+workflows, supervisor workflows, admin screens, and business APIs remain
+deferred to later phases.

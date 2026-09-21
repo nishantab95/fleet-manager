@@ -51,3 +51,6 @@ warn_unused_configs = true
 testpaths = ["tests"]
 addopts = "--strict-config --strict-markers"
 pythonpath = ["src"]
+markers = [
+    "postgres: test requires the dedicated PostgreSQL test database",
+]

@@ -1,52 +1,72 @@
-# Initial Domain Model
+# Phase 1 Domain Model
 
-This is a specification for later phases, not a claim that all tables or workflows exist in Phase 0.
+Phase 1 implements the company-owned tipper core. Authentication, HTTP CRUD,
+RBAC middleware, mobile synchronization, and business UI remain deferred.
 
-## Entities
+## Implemented entities
 
-| Entity | Ownership and purpose |
+| Entity | Purpose |
 | --- | --- |
-| `Company` | Tenant root. Every business record belongs to exactly one company. |
-| `User` | Authenticated identity with one or more scoped roles; includes owner/admin, supervisor, or driver capability. |
-| `Driver` | Company-scoped operational profile linked to a user identity. |
-| `Supervisor` | Company-scoped operational profile linked to a user identity. |
-| `Site` | Company-owned/permitted work location. |
-| `Tipper` | Company-owned tipper asset. Rented and non-tipper equipment are out of V1 scope. |
-| `Assignment` | Effective-dated driver + tipper + site + supervisor relationship. Historical events keep this reference. |
-| `Device` | Registered mobile device/session metadata used for event provenance and sync diagnostics. |
-| `TripEvent` | Immutable-ish driver event identified by client event UUID, assignment, device time, server receive time, sync state, and verification state. |
-| `KmReading` | START or END odometer submission with reading value and supporting photo reference. Conflicts and missing pairs become explicit exceptions. |
-| `DieselEvent` | DIESEL_ISSUED / DIESEL_RECORDED event with litres and supporting photo. It is not fuel consumption. |
-| `EmergencyEvent` | BREAKDOWN, ACCIDENT, TYRE_OR_VEHICLE_PROBLEM, or CONTACT_SUPERVISOR event with timestamps and lifecycle status. |
-| `Verification` | Actor, decision, time, reason, and target event/version for supervisor review. |
-| `AuditLog` | Append-only record of actor, company, action, target, time, old value, new value, reason, and request ID. |
+| `Company` | Tenant root and ownership boundary. |
+| `User` | Global application identity with normalized phone number and display name. |
+| `CompanyMembership` | Company-scoped role (`OWNER_ADMIN`, `SUPERVISOR`, or `DRIVER`) and status. |
+| `Site` | Company-scoped work location with company-scoped name/code uniqueness. |
+| `Tipper` | Company-owned tipper; registration is stored uppercase without spaces or hyphens. |
+| `SupervisorSiteAccess` | Explicit company-consistent supervisor-to-site grant. |
+| `Assignment` | Effective-dated driver, supervisor, tipper, and site relationship. |
+| `Device` | Minimal installation identifier, platform, membership association, and active/revoked state. |
+| `OperationalEvent` | Common server event envelope and company-scoped client UUID idempotency boundary. |
+| `TripEvent` | Trip-complete payload attached to an operational event. |
+| `KmReading` | Non-negative start/end odometer reading and future object reference. |
+| `DieselEvent` | Positive litres issued/recorded and future object reference; not consumption. |
+| `EmergencyEvent` | Constrained category, lifecycle status, and optional description. |
+| `EventVerification` | Append-only verification history while the envelope stores current status. |
+| `AuditLog` | Explicit append-only operational audit record with old/new JSON values and reason. |
 
-## Relationships
+## Actual schema relationships
 
-```text
-Company
-├── Users ── Driver / Supervisor profiles
-├── Sites
-├── owned Tippers
-├── Assignments ── Driver + Tipper + Site + Supervisor
-├── Devices
-└── operational events ──> one historical Assignment
-                         ├── TripEvent
-                         ├── KmReading
-                         ├── DieselEvent
-                         └── EmergencyEvent
+```mermaid
+erDiagram
+    COMPANIES ||--o{ COMPANY_MEMBERSHIPS : has
+    USERS ||--o{ COMPANY_MEMBERSHIPS : joins
+    COMPANIES ||--o{ SITES : owns
+    COMPANIES ||--o{ TIPPERS : owns
+    COMPANIES ||--o{ DEVICES : registers
+    COMPANY_MEMBERSHIPS ||--o{ DEVICES : uses
+    COMPANY_MEMBERSHIPS ||--o{ SUPERVISOR_SITE_ACCESS : grants
+    SITES ||--o{ SUPERVISOR_SITE_ACCESS : permits
+    COMPANY_MEMBERSHIPS ||--o{ ASSIGNMENTS : drives
+    COMPANY_MEMBERSHIPS ||--o{ ASSIGNMENTS : supervises
+    SITES ||--o{ ASSIGNMENTS : serves
+    TIPPERS ||--o{ ASSIGNMENTS : operates
+    ASSIGNMENTS ||--o{ OPERATIONAL_EVENTS : records
+    DEVICES ||--o{ OPERATIONAL_EVENTS : originates
+    OPERATIONAL_EVENTS ||--o| TRIP_EVENTS : specializes
+    OPERATIONAL_EVENTS ||--o| KM_READINGS : specializes
+    OPERATIONAL_EVENTS ||--o| DIESEL_EVENTS : specializes
+    OPERATIONAL_EVENTS ||--o| EMERGENCY_EVENTS : specializes
+    OPERATIONAL_EVENTS ||--o{ EVENT_VERIFICATIONS : changes
+    COMPANY_MEMBERSHIPS ||--o{ EVENT_VERIFICATIONS : records
+    COMPANY_MEMBERSHIPS ||--o{ AUDIT_LOGS : acts
 ```
+
+`company_id` is intentionally carried on every company-owned table and on
+composite foreign keys. PostgreSQL therefore rejects a reference to a site,
+tipper, membership, assignment, or device belonging to another company.
 
 ## Invariants
 
-1. A business record cannot be read across companies, even if a caller guesses its UUID.
-2. An active assignment is determined by effective timestamps and company scope; driver/tipper permanence is forbidden.
-3. Event UUID is unique within the backend event namespace and repeated sync is idempotent.
-4. Separate event UUIDs remain separate records even when timestamps are close. A possible duplicate is a review signal, never silent deletion.
-5. Device-created and server-received timestamps are both retained and interpreted as UTC.
-6. Sync state and verification state are separate state machines.
-7. KM readings never silently overwrite conflicts. End below start, missing pair, and conflicting readings are explicit exceptions.
-8. Diesel issued is not fuel consumed and must not produce same-day km/litre by default.
-9. Approved history cannot be silently overwritten. Amendments and audit records preserve who, when, reason, old value, and new value.
-10. Supporting uploads are validated for size and MIME type, sanitized, and stored through the S3-compatible abstraction.
-
+1. Membership role is the source of assignment eligibility; an owner/admin is
+   not silently accepted as a driver and a driver is not accepted as a
+   supervisor.
+2. Assignment intervals are `[starts_at, ends_at)`. `ends_at` must be after
+   `starts_at`, and PostgreSQL exclusion constraints prevent overlaps for the
+   same company/driver or company/tipper, including open-ended intervals.
+3. Events retain the historical assignment, device-created time, server
+   receive time, and independent business verification status.
+4. `(company_id, client_event_uuid)` is unique in `operational_events`. A retry
+   returns the existing logical event; a different UUID is never deduplicated
+   by timestamp similarity.
+5. Verification changes append `EventVerification` rows. Current status is
+   updated on the event envelope, but the history is not overwritten.
+6. Audit entries are explicit and must not contain secrets or unnecessary PII.

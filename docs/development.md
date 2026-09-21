@@ -78,7 +78,7 @@ The readiness endpoint requires PostgreSQL to be reachable. The health endpoint 
 .\scripts\test.ps1
 ```
 
-The script runs backend Ruff, mypy, pytest, and Alembic checks, then web lint/typecheck/build and Flutter format/analyze/test/debug-APK checks. `scripts/check-environment.ps1` prints the expected local toolchain versions before running the suite.
+The script runs backend Ruff, mypy, pytest, and Alembic checks, then web lint/typecheck/build and Flutter format/analyze/test/debug-APK checks. PostgreSQL integration tests use the dedicated `fleet_test` database created by Docker Compose on a fresh local volume. `scripts/check-environment.ps1` prints the expected local toolchain versions before running the suite.
 
 ## Migration workflow
 
@@ -89,4 +89,13 @@ uv run --project . alembic upgrade head
 uv run --project . alembic upgrade head --sql
 ```
 
-Phase 0 contains an empty foundation revision by design. Domain migrations start in Phase 1.
+Phase 1 adds `0002_core_domain`, which creates the domain tables, tenant
+foreign keys, enums, checks, indexes, event idempotency constraint, and
+assignment overlap constraints. Run the online round trip against the test
+database with:
+
+```powershell
+uv run --project . alembic upgrade head
+uv run --project . alembic downgrade base
+uv run --project . alembic upgrade head
+```
