@@ -45,5 +45,8 @@ concurrent writes. No `current_driver_id` is stored on `Tipper`.
 server UUID, company, assignment, optional device, client-generated UUID,
 device-created time, server-received time, and current verification status.
 Subtype tables hold the event-specific payload. The unique company/client UUID
-constraint is the database idempotency boundary; verification history is a
-separate append-only table and is not sync state.
+constraint is the database idempotency boundary. The domain service handles a
+unique-key race inside a savepoint and reloads the committed envelope, so
+retries resolve to the same logical event without poisoning the caller
+transaction. Verification history is a separate append-only table and is not
+sync state.

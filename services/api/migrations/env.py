@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -9,6 +10,12 @@ from fleet_api.db.base import Base
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Keep the checked-in Alembic default useful for local development, while
+# allowing CI and isolated test databases to select their URL explicitly.
+environment_database_url = os.getenv("FLEET_TEST_DATABASE_URL") or os.getenv("FLEET_DATABASE_URL")
+if environment_database_url:
+    config.set_main_option("sqlalchemy.url", environment_database_url)
 
 target_metadata = Base.metadata
 

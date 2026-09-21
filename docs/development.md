@@ -99,3 +99,8 @@ uv run --project . alembic upgrade head
 uv run --project . alembic downgrade base
 uv run --project . alembic upgrade head
 ```
+
+Alembic uses the checked-in local URL by default and honors
+`FLEET_DATABASE_URL` or `FLEET_TEST_DATABASE_URL` when an explicit database
+is required. The test suite always requires a database name containing
+`test`.

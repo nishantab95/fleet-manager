@@ -2,7 +2,7 @@
 
 Production foundation for a construction company's company-owned tipper operations.
 
-V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 establishes the modular-monolith workspace, backend runtime foundation, local infrastructure, frontend shells, domain specification, security baseline, and verification workflow. Product workflows are deliberately not implemented yet.
+V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants. Product workflows are deliberately not implemented yet.
 
 ## Repository layout
 

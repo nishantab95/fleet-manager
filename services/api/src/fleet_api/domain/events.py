@@ -92,11 +92,28 @@ def _existing_or_new_event(
         device_created_at=device_created_at,
         event_type=event_type,
     )
-    session.add(event)
     try:
-        session.flush()
+        # Keep the unique-key race inside a savepoint so a concurrent retry
+        # can recover the committed envelope without poisoning the caller's
+        # transaction. PostgreSQL's company/client UUID constraint remains
+        # the authoritative idempotency boundary.
+        with session.begin_nested():
+            session.add(event)
+            session.flush()
     except IntegrityError:
-        raise
+        existing = session.scalar(
+            select(OperationalEvent).where(
+                OperationalEvent.company_id == company_id,
+                OperationalEvent.client_event_uuid == client_event_uuid,
+            )
+        )
+        if existing is None:
+            raise
+        if existing.event_type != event_type:
+            raise EventTypeMismatchError(
+                "client event UUID is already used by another event type"
+            ) from None
+        return existing, True
     return event, False
 
 

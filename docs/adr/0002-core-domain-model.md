@@ -42,7 +42,9 @@ flush where possible.
 
 `OperationalEvent` is the shared event envelope. Its unique
 `(company_id, client_event_uuid)` constraint makes retries idempotent without
-confusing close timestamps. Four one-to-one subtype tables hold trip, KM,
+confusing close timestamps. The domain service catches a unique-key race in a
+savepoint and reloads the committed envelope, while preserving the database
+constraint as the authority. Four one-to-one subtype tables hold trip, KM,
 diesel, and emergency payloads. Sync state is deliberately absent from the
 server business model; local-only/pending-sync state belongs to the future
 mobile database.

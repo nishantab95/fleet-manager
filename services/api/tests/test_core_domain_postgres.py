@@ -255,6 +255,22 @@ def test_supervisor_site_access_is_company_consistent_and_unique(
     access_scenario.rollback()
 
 
+def test_supervisor_site_access_rejects_cross_company_grant(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    company_a = value(tenant_records, "company_a", Company)
+    supervisor_a = value(tenant_records, "supervisor_a", CompanyMembership)
+    site_b = value(tenant_records, "site_b", Site)
+
+    with pytest.raises(TenantConsistencyError):
+        grant_supervisor_site_access(
+            db_session,
+            company_id=company_a.id,
+            supervisor_membership_id=supervisor_a.id,
+            site_id=site_b.id,
+        )
+
+
 def test_event_can_reference_historical_assignment_and_rejects_out_of_range_timestamp(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
