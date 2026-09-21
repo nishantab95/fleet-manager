@@ -23,9 +23,10 @@ contain Phase 1 business workflows.
 - `migrations/versions/0003_authentication.py`: OTP challenge and
   authentication-session persistence.
 
-The API exposes the Phase 0 `/health` and `/ready` endpoints plus the Phase 2
-authentication routes under `/api/v1/auth`. Admin CRUD, operational business
-routes, and sync endpoints remain later-phase work.
+The API exposes the Phase 0 `/health` and `/ready` endpoints, authentication
+under `/api/v1/auth`, Phase 3 administration under `/api/v1/admin`, and the
+Phase 4 driver boundary under `/api/v1/driver`. Supervisor verification remains
+later-phase work.
 
 ## Phase 2 authentication boundary
 
@@ -73,6 +74,23 @@ The web shell performs phone OTP, membership selection, owner-role gating, and
 real API calls for each administration area. Access and refresh tokens are
 held only in runtime memory; a reload requires authentication again, and the
 browser never writes a refresh token to localStorage.
+
+## Phase 4 driver and sync boundary
+
+The driver client captures exactly four event types. It stores an immutable
+assignment snapshot and client event UUID in a local Drift queue before any
+network call. Sync uploads required private evidence first, submits the event
+envelope second, refreshes an access token at most once per attempt, and keeps
+retryable failures in the queue with bounded delay. Secure storage holds mobile
+session tokens and the installation identifier; event payloads do not contain
+company IDs supplied by the user.
+
+The backend derives the assignment from the authenticated driver and event
+timestamp. It registers an installation-scoped device, enforces the
+company/client UUID idempotency boundary, checks duplicate ownership by driver
+and device, and persists private evidence metadata only after object storage
+accepts the object. `EvidenceObject` keys are server-generated and contain no
+user-provided path segments.
 
 ## Tenant boundary
 

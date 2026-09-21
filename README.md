@@ -2,7 +2,7 @@
 
 Production foundation for a construction company's company-owned tipper operations.
 
-V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell. Product workflows are deliberately not implemented yet.
+V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell; Phase 4 adds the offline-first driver event client and reliable event/evidence sync. Supervisor verification remains outside the implemented scope.
 
 ## Repository layout
 
@@ -54,14 +54,20 @@ Do not add rented equipment, non-tipper machinery, payroll, accounting, customer
 
 ## Current status
 
+Phase 4 contains the Android-first driver client with secure session storage,
+assignment-scoped four-button event capture, camera evidence for KM and DIESEL,
+an on-device Drift queue, bounded retry/refresh sync, and tenant-safe backend
+event/evidence APIs. The backend remains authoritative for assignment, role,
+device, event idempotency, evidence ownership, and verification state. Phase 5
+supervisor verification is not started.
+
 Phase 3 contains owner/admin management for sites, owned tippers, people,
 supervisor site grants, and effective-dated assignments, plus the authenticated
-web administration shell. The backend remains authoritative for tenant and
-role access. Driver operational workflows, supervisor verification, reporting,
-and business event APIs remain deferred to later phases.
+web administration shell.
 
 Phase 2 contains the authentication boundary, OTP challenge persistence,
 membership selection, access/refresh session rotation, authenticated identity
 routes, and reusable tenant/RBAC dependencies. The default OTP provider is
 unavailable and fails closed; development OTP requires explicit development
-configuration. Driver workflows, supervisor workflows, admin management APIs,
+configuration. Supervisor verification, reporting, and business expansion remain
+deferred; no Phase 6 work has started.

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from fleet_api.domain.enums import MembershipRole, MembershipStatus, SiteStatus, TipperStatus
+from fleet_api.domain.enums import (
+    DevicePlatform,
+    EmergencyCategory,
+    KmReadingType,
+    MembershipRole,
+    MembershipStatus,
+    OperationalEventType,
+    SiteStatus,
+    TipperStatus,
+)
 
 
 class OtpRequest(BaseModel):
@@ -173,3 +183,52 @@ class AssignmentResponse(BaseModel):
     site_name: str
     starts_at: datetime
     ends_at: datetime | None
+
+
+class DriverAssignmentResponse(BaseModel):
+    assignment_id: UUID
+    tipper_id: UUID
+    tipper_registration_number: str
+    tipper_short_name: str | None
+    site_id: UUID
+    site_name: str
+    supervisor_name: str
+
+
+class DriverDeviceRequest(BaseModel):
+    installation_identifier: str = Field(min_length=1, max_length=200)
+    platform: DevicePlatform
+
+
+class DriverDeviceResponse(BaseModel):
+    device_id: UUID
+    installation_identifier: str
+    platform: DevicePlatform
+
+
+class DriverEventRequest(BaseModel):
+    client_event_uuid: UUID
+    event_type: OperationalEventType
+    device_created_at: datetime
+    installation_identifier: str = Field(min_length=1, max_length=200)
+    platform: DevicePlatform
+    reading_type: KmReadingType | None = None
+    reading_value: Decimal | None = Field(default=None, ge=0)
+    litres: Decimal | None = Field(default=None, gt=0)
+    category: EmergencyCategory | None = None
+    description: str | None = Field(default=None, max_length=500)
+    object_reference: str | None = Field(default=None, max_length=500)
+
+
+class DriverEventResponse(BaseModel):
+    event_id: UUID
+    client_event_uuid: UUID
+    status: Literal["accepted", "already_accepted"]
+    verification_status: str
+
+
+class EvidenceUploadResponse(BaseModel):
+    client_event_uuid: UUID
+    object_reference: str
+    content_type: str
+    size_bytes: int

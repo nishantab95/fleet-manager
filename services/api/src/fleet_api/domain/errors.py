@@ -64,3 +64,11 @@ class AuthConfigurationError(DomainError):
 
 class OtpProviderUnavailableError(DomainError):
     pass
+
+
+class EvidenceValidationError(DomainError):
+    pass
+
+
+class ObjectStorageUnavailableError(DomainError):
+    pass

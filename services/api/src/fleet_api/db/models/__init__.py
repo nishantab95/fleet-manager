@@ -13,6 +13,7 @@ from fleet_api.db.models.events import (
     OperationalEvent,
     TripEvent,
 )
+from fleet_api.db.models.evidence import EvidenceObject
 from fleet_api.db.models.membership import CompanyMembership, SupervisorSiteAccess
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "DieselEvent",
     "EmergencyEvent",
     "EventVerification",
+    "EvidenceObject",
     "KmReading",
     "OperationalEvent",
     "OtpChallenge",

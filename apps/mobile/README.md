@@ -1,17 +1,22 @@
-# fleet_manager_mobile
+# Fleet Manager mobile
 
-A new Flutter project.
+Android-first driver client for Phase 4. The operational surface is deliberately
+limited to `TRIP COMPLETE`, `KM READING`, `DIESEL`, and `EMERGENCY`.
 
-## Getting Started
+Events are written to a local Drift SQLite queue before network sync. Session
+tokens and the installation identifier use secure storage. KM and DIESEL require
+camera evidence; evidence uploads complete before the event envelope is sent.
+The server remains authoritative for the active assignment, role, device, and
+event idempotency boundary.
 
-This project is a starting point for a Flutter application.
+## Checks
 
-A few resources to get you started if this is your first Flutter project:
+```powershell
+flutter pub get
+dart run build_runner build
+flutter analyze
+flutter test
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Use `--dart-define=FLEET_API_BASE_URL=http://10.0.2.2:8000` for an Android
+emulator pointing at the local API.

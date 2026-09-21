@@ -37,6 +37,9 @@ function Invoke-RequiredCheck {
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     Push-Location $apiProject
     try {
+        if (-not $env:FLEET_TEST_DATABASE_URL) {
+            $env:FLEET_TEST_DATABASE_URL = "postgresql+psycopg://fleet:fleet@127.0.0.1:5432/fleet_test"
+        }
         Invoke-RequiredCheck "uv lock verification" { uv --cache-dir $cacheDir lock --check }
         Invoke-RequiredCheck "Backend Ruff" { uv --cache-dir $cacheDir run --project . --group dev ruff check src tests migrations }
         Invoke-RequiredCheck "Backend mypy" { uv --cache-dir $cacheDir run --project . --group dev mypy src tests }

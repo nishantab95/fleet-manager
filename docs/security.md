@@ -19,9 +19,12 @@
 ## Data handling
 
 Audit values are explicit caller-provided JSON fields. Callers must omit
-secrets, tokens, credentials, uploaded content, and unnecessary PII. Object
-references are placeholders only; upload validation, scanning, MIME allowlists,
-size limits, and sanitized provider-independent keys remain future work.
+secrets, tokens, credentials, uploaded content, and unnecessary PII. Phase 4
+validates evidence MIME type and size, uses server-generated provider-neutral
+private keys, scopes metadata by company/membership/event, and removes an
+object on metadata-flush failure when the provider supports deletion. Malware
+scanning, content inspection, and production secret management remain deferred
+controls.
 
 ## Phase 2 authentication controls
 
@@ -65,6 +68,21 @@ size limits, and sanitized provider-independent keys remain future work.
 - The web shell stores tokens in React runtime state only. It does not use
   localStorage and clears the session on logout; backend authorization remains
   authoritative.
+
+## Phase 4 driver controls
+
+- Driver routes require a live authenticated `DRIVER` membership. The current
+  assignment response contains only the driver's active tipper, site, and
+  supervisor context; no company-wide data is exposed.
+- Device registration is company- and membership-scoped. Duplicate client UUID
+  retries must match the original driver and device, preventing a second driver
+  from replaying another driver's event.
+- Evidence uploads allow only configured image MIME types and a bounded byte
+  size. Object storage is private; the API returns an opaque server key rather
+  than a public URL.
+- The mobile queue writes event data before attempting network sync, never logs
+  access or refresh tokens, and refreshes an expired access token at most once
+  before retaining the event for a later retry.
 
 ## Deferred controls
 

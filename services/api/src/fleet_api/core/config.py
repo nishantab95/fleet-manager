@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     s3_bucket: str = "fleet-local"
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = Field(default=None, repr=False)
+    object_storage_provider: str = "unavailable"
+    evidence_max_bytes: int = 5_000_000
+    evidence_allowed_mime_types: str = "image/jpeg,image/png,image/webp"
+    event_future_skew_seconds: int = 300
     phone_default_region: str | None = None
     otp_provider: str = "unavailable"
     enable_development_otp: bool = False
@@ -46,6 +50,10 @@ class Settings(BaseSettings):
             raise ValueError("token lifetimes must be positive")
         if self.refresh_token_ttl_seconds <= self.access_token_ttl_seconds:
             raise ValueError("refresh token lifetime must exceed access token lifetime")
+        if self.evidence_max_bytes <= 0:
+            raise ValueError("evidence_max_bytes must be positive")
+        if self.event_future_skew_seconds < 0:
+            raise ValueError("event_future_skew_seconds cannot be negative")
 
         if self.environment.lower() in {"production", "prod"}:
             if not self.jwt_signing_key or len(self.jwt_signing_key) < 32:
@@ -57,6 +65,14 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def evidence_mime_types(self) -> set[str]:
+        return {
+            mime.strip().lower()
+            for mime in self.evidence_allowed_mime_types.split(",")
+            if mime.strip()
+        }
 
 
 @lru_cache

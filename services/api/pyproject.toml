@@ -9,9 +9,11 @@ description = "FastAPI modular monolith foundation for Fleet Manager"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "alembic==1.16.4",
+    "boto3==1.40.31",
     "fastapi==0.116.1",
     "phonenumbers>=9.0.39",
     "psycopg[binary]==3.2.9",
+    "python-multipart==0.0.20",
     "pydantic-settings==2.10.1",
     "pyjwt==2.10.1",
     "sqlalchemy==2.0.43",

@@ -3,8 +3,8 @@
 Phase 1 implements the company-owned tipper core. Phase 2 adds the identity,
 session, and authorization persistence needed to protect later business APIs.
 Phase 3 adds owner/admin management APIs and an authenticated web shell over
-these entities. Mobile synchronization, driver workflows, supervisor
-verification, and operational business UI remain deferred.
+these entities. Phase 4 adds the driver event/evidence boundary and offline
+sync queue; supervisor verification remains deferred.
 
 ## Implemented entities
 
@@ -27,6 +27,7 @@ verification, and operational business UI remain deferred.
 | `AuditLog` | Explicit append-only operational audit record with old/new JSON values and reason. |
 | `OtpChallenge` | Short-lived normalized-phone challenge with salted OTP hash, bounded attempts, cooldown, expiry, and delivery metadata hashes. |
 | `AuthSession` | Company/membership-scoped server session with hashed refresh token, rotation state, expiry, revocation, and replay family. |
+| `EvidenceObject` | Private object-storage metadata scoped to one company, driver membership, and client event UUID. |
 
 ## Actual schema relationships
 
@@ -90,3 +91,7 @@ tipper, membership, assignment, or device belonging to another company.
     assignments may reference only active, same-company driver/supervisor
     memberships, sites, and tippers; their effective-date overlap rules stay
     in the existing domain service and PostgreSQL constraints.
+11. Driver events are accepted only for the authenticated driver's effective
+    assignment and registered device. KM readings and diesel events require a
+    same-driver evidence object; evidence metadata is never a substitute for
+    the event envelope or its verification state.

@@ -26,6 +26,7 @@ from fleet_api.domain.errors import (
     RoleViolationError,
     TenantConsistencyError,
 )
+from fleet_api.storage.objects import ObjectStorage, build_object_storage
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -36,6 +37,10 @@ def get_app_settings(request: Request) -> Settings:
 
 def get_otp_provider(settings: Annotated[Settings, Depends(get_app_settings)]) -> OtpProvider:
     return build_otp_provider(settings)
+
+
+def get_object_storage(settings: Annotated[Settings, Depends(get_app_settings)]) -> ObjectStorage:
+    return build_object_storage(settings)
 
 
 def get_auth_service(
