@@ -24,9 +24,9 @@ contain Phase 1 business workflows.
   authentication-session persistence.
 
 The API exposes the Phase 0 `/health` and `/ready` endpoints, authentication
-under `/api/v1/auth`, Phase 3 administration under `/api/v1/admin`, and the
-Phase 4 driver boundary under `/api/v1/driver`. Supervisor verification remains
-later-phase work.
+under `/api/v1/auth`, Phase 3 administration under `/api/v1/admin`, the Phase 4
+driver boundary under `/api/v1/driver`, and Phase 5 supervisor operations under
+`/api/v1/supervisor`.
 
 ## Phase 2 authentication boundary
 
@@ -91,6 +91,26 @@ company/client UUID idempotency boundary, checks duplicate ownership by driver
 and device, and persists private evidence metadata only after object storage
 accepts the object. `EvidenceObject` keys are server-generated and contain no
 user-provided path segments.
+
+## Phase 5 supervisor verification boundary
+
+The supervisor web shell uses the existing authenticated web application. A
+`SUPERVISOR` membership can list and review only sites granted through its
+company-scoped `SupervisorSiteAccess` rows; owners and drivers are denied by the
+backend role dependency even if they call the routes directly. Site review is
+date-scoped and shows each captured trip, KM, diesel, and emergency event with
+driver/tipper identity, evidence availability, current decision, and append-only
+history.
+
+Individual decisions use an expected current verification status and a row lock.
+If another supervisor has changed the event, the stale decision returns a
+conflict instead of overwriting it. Reject and dispute decisions require a
+reason and append an `EventVerification` row; batch approval loops through the
+same individual decision path so each event retains its own history. Emergency
+acknowledgement is a separate audited lifecycle action. Completeness is derived
+per assigned tipper and UTC review date, reporting missing start/end readings,
+pending trip/diesel decisions, and unresolved emergencies. Private evidence is
+read through an authorization-checked API response rather than a public URL.
 
 ## Tenant boundary
 

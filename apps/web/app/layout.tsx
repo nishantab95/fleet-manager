@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Fleet Manager",
-  description: "Tenant-safe owner administration for company-owned tippers",
+  description: "Tenant-safe owner administration and supervisor verification for company-owned tippers",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

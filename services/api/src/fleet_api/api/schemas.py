@@ -16,6 +16,7 @@ from fleet_api.domain.enums import (
     OperationalEventType,
     SiteStatus,
     TipperStatus,
+    VerificationStatus,
 )
 
 
@@ -232,3 +233,69 @@ class EvidenceUploadResponse(BaseModel):
     object_reference: str
     content_type: str
     size_bytes: int
+
+
+class SupervisorSiteResponse(BaseModel):
+    id: UUID
+    name: str
+    code: str | None
+    status: SiteStatus
+
+
+class SupervisorVerificationHistoryResponse(BaseModel):
+    status: VerificationStatus
+    reason: str | None
+    actor_name: str | None
+    created_at: datetime
+
+
+class SupervisorEventResponse(BaseModel):
+    event_id: UUID
+    event_type: OperationalEventType
+    assignment_id: UUID
+    driver_name: str
+    tipper_registration_number: str
+    site_id: UUID
+    site_name: str
+    device_created_at: datetime
+    server_received_at: datetime
+    verification_status: VerificationStatus
+    reading_type: KmReadingType | None
+    reading_value: Decimal | None
+    litres: Decimal | None
+    emergency_category: EmergencyCategory | None
+    emergency_status: str | None
+    emergency_description: str | None
+    evidence_id: UUID | None
+    evidence_available: bool
+    verification_history: list[SupervisorVerificationHistoryResponse]
+
+
+class SupervisorVerificationRequest(BaseModel):
+    decision: Literal["APPROVED", "REJECTED", "DISPUTED"]
+    reason: str | None = Field(default=None, max_length=1000)
+    expected_status: VerificationStatus = VerificationStatus.PENDING_VERIFICATION
+
+
+class SupervisorBatchVerificationRequest(SupervisorVerificationRequest):
+    event_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class SupervisorBatchVerificationResponse(BaseModel):
+    events: list[SupervisorEventResponse]
+
+
+class SupervisorCompletenessResponse(BaseModel):
+    assignment_id: UUID
+    driver_name: str
+    tipper_registration_number: str
+    site_id: UUID
+    site_name: str
+    has_start_reading: bool
+    has_end_reading: bool
+    start_reading_value: Decimal | None
+    end_reading_value: Decimal | None
+    odometer_regression: bool
+    pending_trip_verification: bool
+    pending_diesel_verification: bool
+    unresolved_emergency: bool

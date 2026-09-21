@@ -84,6 +84,24 @@ controls.
   access or refresh tokens, and refreshes an expired access token at most once
   before retaining the event for a later retry.
 
+## Phase 5 supervisor controls
+
+- Supervisor routes require an active `SUPERVISOR` membership and verify an
+  explicit same-company `SupervisorSiteAccess` row for every site-scoped read,
+  decision, acknowledgement, and evidence request. Owners and drivers receive
+  `403` from this boundary; cross-company data is not returned.
+- Individual verification uses an expected status with a row lock. A stale
+  decision returns `409` and cannot silently overwrite another supervisor's
+  result. Rejection and dispute require a non-empty reason.
+- Verification history is append-only and records the supervisor membership,
+  status, reason, and timestamp. Batch approval calls the same individual
+  decision path, preserving per-event records. Emergency acknowledgement is an
+  audited lifecycle change.
+- Evidence remains private. Supervisors receive bytes only after event and site
+  authorization succeeds; no public object URL is exposed. Daily completeness
+  is scoped to assigned tippers and reports missing readings, pending decisions,
+  and unresolved emergencies without introducing financial or operational totals.
+
 ## Deferred controls
 
 Rate limiting beyond the OTP cooldown/attempt bound, upload scanning, key

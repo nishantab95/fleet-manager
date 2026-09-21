@@ -16,6 +16,9 @@ class ObjectStorage(Protocol):
     def delete_private(self, *, object_key: str) -> None:
         """Delete one private object during metadata rollback."""
 
+    def read_private(self, *, object_key: str) -> tuple[bytes, str]:
+        """Read one private object after an authorization decision."""
+
 
 class UnavailableObjectStorage:
     def put_private(self, *, object_key: str, content: bytes, content_type: str) -> str:
@@ -24,6 +27,10 @@ class UnavailableObjectStorage:
 
     def delete_private(self, *, object_key: str) -> None:
         del object_key
+
+    def read_private(self, *, object_key: str) -> tuple[bytes, str]:
+        del object_key
+        raise ObjectStorageUnavailableError("object storage is not configured")
 
 
 class S3ObjectStorage:
@@ -66,6 +73,15 @@ class S3ObjectStorage:
             self.client.delete_object(Bucket=self.bucket, Key=object_key)
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailableError("object deletion failed") from exc
+
+    def read_private(self, *, object_key: str) -> tuple[bytes, str]:
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=object_key)
+            content = response["Body"].read()
+            content_type = str(response.get("ContentType") or "application/octet-stream")
+            return content, content_type
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStorageUnavailableError("object read failed") from exc
 
 
 def build_object_storage(settings: Settings) -> ObjectStorage:

@@ -2,7 +2,7 @@
 
 Production foundation for a construction company's company-owned tipper operations.
 
-V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell; Phase 4 adds the offline-first driver event client and reliable event/evidence sync. Supervisor verification remains outside the implemented scope.
+V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell; Phase 4 adds the offline-first driver event client and reliable event/evidence sync; Phase 5 adds supervisor site-scoped verification and operational completeness review.
 
 ## Repository layout
 
@@ -57,9 +57,12 @@ Do not add rented equipment, non-tipper machinery, payroll, accounting, customer
 Phase 4 contains the Android-first driver client with secure session storage,
 assignment-scoped four-button event capture, camera evidence for KM and DIESEL,
 an on-device Drift queue, bounded retry/refresh sync, and tenant-safe backend
-event/evidence APIs. The backend remains authoritative for assignment, role,
-device, event idempotency, evidence ownership, and verification state. Phase 5
-supervisor verification is not started.
+event/evidence APIs. Phase 5 adds the authenticated supervisor web workflow:
+explicit `SupervisorSiteAccess` site scope, trip/KM/diesel/emergency review,
+reasoned individual or batch decisions, append-only verification history, private
+evidence access, emergency acknowledgement, stale-decision conflicts, and daily
+per-tipper completeness flags. The backend remains authoritative for assignment,
+role, device, event idempotency, evidence ownership, and verification state.
 
 Phase 3 contains owner/admin management for sites, owned tippers, people,
 supervisor site grants, and effective-dated assignments, plus the authenticated
@@ -69,5 +72,5 @@ Phase 2 contains the authentication boundary, OTP challenge persistence,
 membership selection, access/refresh session rotation, authenticated identity
 routes, and reusable tenant/RBAC dependencies. The default OTP provider is
 unavailable and fails closed; development OTP requires explicit development
-configuration. Supervisor verification, reporting, and business expansion remain
-deferred; no Phase 6 work has started.
+configuration. Reporting and business expansion remain deferred; Phase 6 has
+not started.

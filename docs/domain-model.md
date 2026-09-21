@@ -1,10 +1,11 @@
-# Phase 2 Domain Model
+# Domain Model
 
 Phase 1 implements the company-owned tipper core. Phase 2 adds the identity,
 session, and authorization persistence needed to protect later business APIs.
 Phase 3 adds owner/admin management APIs and an authenticated web shell over
 these entities. Phase 4 adds the driver event/evidence boundary and offline
-sync queue; supervisor verification remains deferred.
+sync queue. Phase 5 adds supervisor verification and site completeness review
+without adding a new persistence boundary.
 
 ## Implemented entities
 
@@ -95,3 +96,11 @@ tipper, membership, assignment, or device belonging to another company.
     assignment and registered device. KM readings and diesel events require a
     same-driver evidence object; evidence metadata is never a substitute for
     the event envelope or its verification state.
+12. Supervisor reads and writes require an active `SUPERVISOR` membership and
+    an explicit same-company `SupervisorSiteAccess` row for the event's site.
+13. Supervisor verification decisions require the current expected status;
+    stale decisions conflict, while each accepted decision appends history with
+    actor, timestamp, and optional reason. Emergency acknowledgement is audited
+    separately from event verification.
+14. Site completeness is derived for each assignment intersecting the UTC review
+    day. It does not invent totals or treat diesel litres as consumption.

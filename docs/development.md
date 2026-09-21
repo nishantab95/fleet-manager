@@ -118,9 +118,11 @@ response instead of pretending to deliver an OTP.
 
 The web shell uses `NEXT_PUBLIC_API_BASE_URL` when set and otherwise calls
 `http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3
-shell keeps tokens in memory only, so refreshing the page intentionally returns
-to phone authentication. A development OTP provider and signing key must be
-configured in the API environment for a manual end-to-end login.
+owner shell and Phase 5 supervisor verification shell keep tokens in memory
+only, so refreshing the page intentionally returns to phone authentication. A
+development OTP provider and signing key must be configured in the API
+environment for a manual end-to-end login. Supervisor accounts must also have
+an admin-created `SupervisorSiteAccess` grant before site data is visible.
 
 ## Migration workflow
 
@@ -148,7 +150,8 @@ Alembic uses the checked-in local URL by default and honors
 is required. The test suite always requires a database name containing
 `test`.
 
-Phase 4 adds `0004_evidence_objects`. Set
+Phase 4 adds `0004_evidence_objects`. Phase 5 adds no migration; it reads the
+existing event, verification, emergency, assignment, and evidence tables. Set
 `FLEET_OBJECT_STORAGE_PROVIDER=s3` with the local MinIO credentials when
 running evidence-upload flows; leave it `unavailable` when object storage is
 not configured.

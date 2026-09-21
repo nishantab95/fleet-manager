@@ -24,4 +24,3 @@ def test_request_id_is_normalized_and_returned() -> None:
 
     assert response.status_code == 200
     assert response.headers["x-request-id"] == request_id
-

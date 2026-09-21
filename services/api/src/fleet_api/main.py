@@ -11,6 +11,7 @@ from fleet_api import __version__
 from fleet_api.api.admin import router as admin_router
 from fleet_api.api.auth import router as auth_router
 from fleet_api.api.driver import router as driver_router
+from fleet_api.api.supervisor import router as supervisor_router
 from fleet_api.core.config import Settings, get_settings
 from fleet_api.core.request_id import RequestIdMiddleware
 from fleet_api.core.structured_logging import configure_logging
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(driver_router)
+    app.include_router(supervisor_router)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
