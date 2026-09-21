@@ -105,6 +105,12 @@ provider requires both `FLEET_ENVIRONMENT=development`,
 The default unavailable provider intentionally returns a service-unavailable
 response instead of pretending to deliver an OTP.
 
+The web shell uses `NEXT_PUBLIC_API_BASE_URL` when set and otherwise calls
+`http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3
+shell keeps tokens in memory only, so refreshing the page intentionally returns
+to phone authentication. A development OTP provider and signing key must be
+configured in the API environment for a manual end-to-end login.
+
 ## Migration workflow
 
 Run from `services/api` after PostgreSQL is available:

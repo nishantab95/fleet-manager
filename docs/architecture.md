@@ -48,8 +48,31 @@ routes, and sync endpoints remain later-phase work.
 
 The Phase 2 API surface is intentionally small: request/verify OTP, list
 memberships, create a selected-membership session, refresh, logout, and `me`.
-The default provider is unavailable; no fake provider is selectable through
-production configuration.
+Phase 3 adds `/api/v1/admin` management routes for sites, owned tippers,
+people/memberships, supervisor site access, and assignments. Every admin route
+requires an authenticated `OWNER_ADMIN` membership and derives the company
+from that context. The default OTP provider is unavailable; no fake provider
+is selectable through production configuration.
+
+## Phase 3 management boundary
+
+`fleet_api.domain.admin.AdminService` is the application service for the web
+administration surface. Routes remain transport adapters: they validate
+schemas, translate domain failures to stable HTTP errors, commit transactions,
+and delegate business rules to the service or the existing asset/assignment
+domain services.
+
+Management uses status changes instead of destructive deletion for sites,
+tippers, and memberships. People creation associates an existing global User
+by normalized phone or creates one, then creates only DRIVER or SUPERVISOR
+memberships; owner/admin privilege is not granted through this onboarding
+flow. Assignment creation reuses the existing effective-dated overlap
+constraints and rejects inactive or cross-company resources before creation.
+
+The web shell performs phone OTP, membership selection, owner-role gating, and
+real API calls for each administration area. Access and refresh tokens are
+held only in runtime memory; a reload requires authentication again, and the
+browser never writes a refresh token to localStorage.
 
 ## Tenant boundary
 

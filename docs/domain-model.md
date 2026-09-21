@@ -2,7 +2,9 @@
 
 Phase 1 implements the company-owned tipper core. Phase 2 adds the identity,
 session, and authorization persistence needed to protect later business APIs.
-HTTP CRUD, mobile synchronization, and business UI remain deferred.
+Phase 3 adds owner/admin management APIs and an authenticated web shell over
+these entities. Mobile synchronization, driver workflows, supervisor
+verification, and operational business UI remain deferred.
 
 ## Implemented entities
 
@@ -84,3 +86,7 @@ tipper, membership, assignment, or device belonging to another company.
    company/membership foreign key prevents a cross-tenant session row.
 9. Refresh rotation stores only hashes. Reuse of a previous refresh hash
    revokes the complete session family.
+10. Administrative status changes preserve records for audit/history. New
+    assignments may reference only active, same-company driver/supervisor
+    memberships, sites, and tippers; their effective-date overlap rules stay
+    in the existing domain service and PostgreSQL constraints.

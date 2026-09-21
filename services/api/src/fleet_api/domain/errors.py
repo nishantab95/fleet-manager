@@ -6,6 +6,10 @@ class NotFoundError(DomainError):
     pass
 
 
+class ConflictError(DomainError):
+    pass
+
+
 class TenantConsistencyError(DomainError):
     pass
 

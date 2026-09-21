@@ -47,6 +47,25 @@ size limits, and sanitized provider-independent keys remain future work.
 - HTTP responses use generic authentication failures and do not expose OTPs,
   token values, or raw provider/configuration details.
 
+## Phase 3 management controls
+
+- All management routes require the backend `OWNER_ADMIN` dependency. Hiding
+  a web tab is only convenience; supervisor and driver sessions receive a
+  backend `403`.
+- Admin queries scope by the authenticated company and return a generic
+  `NOT_FOUND` for foreign resource identifiers, reducing cross-tenant
+  existence leakage. Foreign memberships, sites, tippers, and assignment
+  resources are rejected by the service/domain layer before writes.
+- Onboarding may create or associate a global User, but can create only
+  DRIVER or SUPERVISOR memberships. It cannot self-escalate to
+  `OWNER_ADMIN`. Deactivation is a membership status change and immediately
+  invalidates that identity on subsequent authenticated requests.
+- Site grants require a same-company SUPERVISOR membership and Site. Assignment
+  creation reuses role, tenant, active-resource, and PostgreSQL overlap rules.
+- The web shell stores tokens in React runtime state only. It does not use
+  localStorage and clears the session on logout; backend authorization remains
+  authoritative.
+
 ## Deferred controls
 
 Rate limiting beyond the OTP cooldown/attempt bound, upload scanning, key

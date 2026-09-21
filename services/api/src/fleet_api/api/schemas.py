@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from fleet_api.domain.enums import MembershipRole
+from fleet_api.domain.enums import MembershipRole, MembershipStatus, SiteStatus, TipperStatus
 
 
 class OtpRequest(BaseModel):
@@ -71,3 +72,104 @@ class MeResponse(BaseModel):
     company_id: UUID
     company_name: str
     role: MembershipRole
+
+
+class SiteCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=64)
+
+
+class SiteUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=64)
+    status: SiteStatus | None = None
+
+
+class SiteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    code: str | None
+    status: SiteStatus
+
+
+class TipperCreateRequest(BaseModel):
+    registration_number: str = Field(min_length=1, max_length=32)
+    short_name: str | None = Field(default=None, max_length=100)
+
+
+class TipperUpdateRequest(BaseModel):
+    registration_number: str | None = Field(default=None, min_length=1, max_length=32)
+    short_name: str | None = Field(default=None, max_length=100)
+    status: TipperStatus | None = None
+
+
+class TipperResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    registration_number: str
+    short_name: str | None
+    status: TipperStatus
+
+
+class PersonCreateRequest(BaseModel):
+    phone: str = Field(min_length=3, max_length=64)
+    display_name: str = Field(min_length=1, max_length=200)
+    role: Literal[MembershipRole.DRIVER, MembershipRole.SUPERVISOR]
+
+
+class PersonUpdateRequest(BaseModel):
+    role: Literal[MembershipRole.DRIVER, MembershipRole.SUPERVISOR] | None = None
+    status: MembershipStatus | None = None
+
+
+class PersonResponse(BaseModel):
+    user_id: UUID
+    membership_id: UUID
+    phone: str
+    display_name: str
+    role: MembershipRole
+    status: MembershipStatus
+    user_status: str
+
+
+class SupervisorSiteAccessCreateRequest(BaseModel):
+    supervisor_membership_id: UUID
+    site_id: UUID
+
+
+class SupervisorSiteAccessResponse(BaseModel):
+    id: UUID
+    supervisor_membership_id: UUID
+    supervisor_name: str
+    site_id: UUID
+    site_name: str
+
+
+class AssignmentCreateRequest(BaseModel):
+    driver_membership_id: UUID
+    supervisor_membership_id: UUID
+    tipper_id: UUID
+    site_id: UUID
+    starts_at: datetime
+    ends_at: datetime | None = None
+
+
+class AssignmentCloseRequest(BaseModel):
+    ends_at: datetime
+
+
+class AssignmentResponse(BaseModel):
+    id: UUID
+    driver_membership_id: UUID
+    driver_name: str
+    supervisor_membership_id: UUID
+    supervisor_name: str
+    tipper_id: UUID
+    registration_number: str
+    site_id: UUID
+    site_name: str
+    starts_at: datetime
+    ends_at: datetime | None

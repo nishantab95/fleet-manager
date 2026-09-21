@@ -18,6 +18,7 @@ from fleet_api.auth.service import (
 from fleet_api.core.config import Settings
 from fleet_api.db.models import CompanyMembership
 from fleet_api.db.session import get_db
+from fleet_api.domain.admin import AdminService
 from fleet_api.domain.enums import MembershipRole
 from fleet_api.domain.errors import (
     AuthConfigurationError,
@@ -96,6 +97,20 @@ def require_role(*allowed_roles: MembershipRole) -> Callable[..., AuthContext]:
 require_owner_admin = require_role(MembershipRole.OWNER_ADMIN)
 require_supervisor = require_role(MembershipRole.SUPERVISOR)
 require_driver = require_role(MembershipRole.DRIVER)
+
+
+def get_admin_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+    settings: Annotated[Settings, Depends(get_app_settings)],
+) -> AdminService:
+    return AdminService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+        phone_default_region=settings.phone_default_region,
+    )
 
 
 def require_company_context(

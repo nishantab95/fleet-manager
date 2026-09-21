@@ -2,7 +2,7 @@
 
 Production foundation for a construction company's company-owned tipper operations.
 
-V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC. Product workflows are deliberately not implemented yet.
+V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell. Product workflows are deliberately not implemented yet.
 
 ## Repository layout
 
@@ -54,9 +54,14 @@ Do not add rented equipment, non-tipper machinery, payroll, accounting, customer
 
 ## Current status
 
+Phase 3 contains owner/admin management for sites, owned tippers, people,
+supervisor site grants, and effective-dated assignments, plus the authenticated
+web administration shell. The backend remains authoritative for tenant and
+role access. Driver operational workflows, supervisor verification, reporting,
+and business event APIs remain deferred to later phases.
+
 Phase 2 contains the authentication boundary, OTP challenge persistence,
 membership selection, access/refresh session rotation, authenticated identity
 routes, and reusable tenant/RBAC dependencies. The default OTP provider is
 unavailable and fails closed; development OTP requires explicit development
 configuration. Driver workflows, supervisor workflows, admin management APIs,
-and business APIs remain deferred to later phases.
