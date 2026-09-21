@@ -1,0 +1,45 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv-cache/
+.mypy_cache/
+.pytest_cache/
+pytest-cache-files-*/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node / web
+node_modules/
+.next/
+*.tsbuildinfo
+out/
+dist/
+npm-debug.log*
+pnpm-debug.log*
+
+# Flutter / Dart
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local infrastructure data
+infra/data/
+*.log

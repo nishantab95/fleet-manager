@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fleet-manager-api"
+version = "0.1.0"
+description = "FastAPI modular monolith foundation for Fleet Manager"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "alembic==1.16.4",
+    "fastapi==0.116.1",
+    "psycopg[binary]==3.2.9",
+    "pydantic-settings==2.10.1",
+    "sqlalchemy==2.0.43",
+    "uvicorn[standard]==0.35.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx==0.28.1",
+    "mypy==1.17.1",
+    "pytest==8.4.1",
+    "pytest-cov==6.2.1",
+    "ruff==0.12.10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fleet_api"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+plugins = []
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers"
+pythonpath = ["src"]

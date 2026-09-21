@@ -1,0 +1,26 @@
+name: fleet_manager_mobile
+description: Android-first offline-capable driver client shell for Fleet Manager.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.8.0 <4.0.0"
+  flutter: ">=3.32.0"
+
+dependencies:
+  cupertino_icons: 1.0.8
+  drift: 2.28.1
+  flutter:
+    sdk: flutter
+  path_provider: 2.1.5
+  sqlite3_flutter_libs: 0.5.29
+
+dev_dependencies:
+  build_runner: 2.7.1
+  drift_dev: 2.28.1
+  flutter_lints: 5.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
