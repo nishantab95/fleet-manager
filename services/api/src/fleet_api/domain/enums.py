@@ -22,6 +22,14 @@ class MembershipStatus(StrEnum):
     INACTIVE = "INACTIVE"
 
 
+class OtpChallengeStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    CONSUMED = "CONSUMED"
+    EXPIRED = "EXPIRED"
+    EXHAUSTED = "EXHAUSTED"
+    CANCELLED = "CANCELLED"
+
+
 class SiteStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"

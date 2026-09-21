@@ -7,7 +7,7 @@ deployment with explicit domain services, SQLAlchemy models, and one
 PostgreSQL database. Mobile and web clients remain separate shells and do not
 contain Phase 1 business workflows.
 
-## Phase 1 backend boundaries
+## Phase 1 and Phase 2 backend boundaries
 
 - `fleet_api.db.models`: persistence models grouped by company, membership,
   assignments, devices, events, and audit concerns.
@@ -16,10 +16,40 @@ contain Phase 1 business workflows.
 - `migrations/versions/0002_core_domain.py`: the authoritative PostgreSQL
   schema migration, including composite tenant foreign keys, checks, indexes,
   event idempotency, and assignment exclusion constraints.
+- `fleet_api.auth`: phone normalization, OTP challenges, pre-session tokens,
+  server-side sessions, refresh rotation, and authorization predicates.
+- `fleet_api.api.dependencies`: authenticated request context, role checks,
+  tenant consistency, and supervisor site-access dependencies.
+- `migrations/versions/0003_authentication.py`: OTP challenge and
+  authentication-session persistence.
 
-The API continues to expose only the Phase 0 `/health` and `/ready` endpoints.
-Pydantic/API schemas, authentication, RBAC dependencies, admin CRUD, and sync
-endpoints are later-phase work.
+The API exposes the Phase 0 `/health` and `/ready` endpoints plus the Phase 2
+authentication routes under `/api/v1/auth`. Admin CRUD, operational business
+routes, and sync endpoints remain later-phase work.
+
+## Phase 2 authentication boundary
+
+- `fleet_api.auth.phone` normalizes input to canonical E.164 values. A default
+  region is configuration, not a hardcoded country assumption.
+- `fleet_api.auth.service` owns OTP challenge state, membership selection,
+  server-side session state, refresh rotation, logout, and authorization
+  predicates.
+- `fleet_api.auth.tokens` issues short-lived JWT pre-session and access tokens.
+  Access tokens carry user, membership, company, role, and session identity;
+  every authenticated request revalidates the session and active membership in
+  PostgreSQL.
+- Refresh tokens are opaque high-entropy values. Only their hashes are stored,
+  and rotation uses a previous hash only to detect replay and revoke the
+  entire session family.
+- `fleet_api.api.dependencies` is the HTTP authorization boundary. Routes use
+  the authenticated membership/company context rather than trusting a client
+  supplied company ID. Supervisor site access is checked against the explicit
+  company-scoped grant table.
+
+The Phase 2 API surface is intentionally small: request/verify OTP, list
+memberships, create a selected-membership session, refresh, logout, and `me`.
+The default provider is unavailable; no fake provider is selectable through
+production configuration.
 
 ## Tenant boundary
 
@@ -28,8 +58,9 @@ endpoints are later-phase work.
 foreign keys such as `(company_id, site_id)` and `(company_id,
 driver_membership_id)`. Domain services also load records by identity and
 validate company scope before flushing a transaction. Client-supplied company
-IDs are not authorization in this phase because authentication is deferred,
-but the persistence boundary is ready for Phase 2 scoped dependencies.
+IDs are not authorization. The authenticated membership and its company are
+the source of tenant context, and the persistence boundary uses composite
+foreign keys to reject cross-tenant relationships.
 
 ## Effective-dated assignments
 

@@ -1,7 +1,8 @@
-# Phase 1 Domain Model
+# Phase 2 Domain Model
 
-Phase 1 implements the company-owned tipper core. Authentication, HTTP CRUD,
-RBAC middleware, mobile synchronization, and business UI remain deferred.
+Phase 1 implements the company-owned tipper core. Phase 2 adds the identity,
+session, and authorization persistence needed to protect later business APIs.
+HTTP CRUD, mobile synchronization, and business UI remain deferred.
 
 ## Implemented entities
 
@@ -22,6 +23,8 @@ RBAC middleware, mobile synchronization, and business UI remain deferred.
 | `EmergencyEvent` | Constrained category, lifecycle status, and optional description. |
 | `EventVerification` | Append-only verification history while the envelope stores current status. |
 | `AuditLog` | Explicit append-only operational audit record with old/new JSON values and reason. |
+| `OtpChallenge` | Short-lived normalized-phone challenge with salted OTP hash, bounded attempts, cooldown, expiry, and delivery metadata hashes. |
+| `AuthSession` | Company/membership-scoped server session with hashed refresh token, rotation state, expiry, revocation, and replay family. |
 
 ## Actual schema relationships
 
@@ -48,6 +51,9 @@ erDiagram
     OPERATIONAL_EVENTS ||--o{ EVENT_VERIFICATIONS : changes
     COMPANY_MEMBERSHIPS ||--o{ EVENT_VERIFICATIONS : records
     COMPANY_MEMBERSHIPS ||--o{ AUDIT_LOGS : acts
+    USERS ||--o{ AUTH_SESSIONS : starts
+    COMPANIES ||--o{ AUTH_SESSIONS : scopes
+    COMPANY_MEMBERSHIPS ||--o{ AUTH_SESSIONS : selects
 ```
 
 `company_id` is intentionally carried on every company-owned table and on
@@ -70,3 +76,11 @@ tipper, membership, assignment, or device belonging to another company.
 5. Verification changes append `EventVerification` rows. Current status is
    updated on the event envelope, but the history is not overwritten.
 6. Audit entries are explicit and must not contain secrets or unnecessary PII.
+7. OTP challenges store no plaintext code, are single-use, expire, and become
+   unusable after the bounded failed-attempt count. The phone is normalized
+   before lookup or persistence.
+8. An authentication session is valid only while its user, membership, and
+   company are active and its session is not expired or revoked. Its composite
+   company/membership foreign key prevents a cross-tenant session row.
+9. Refresh rotation stores only hashes. Reuse of a previous refresh hash
+   revokes the complete session family.

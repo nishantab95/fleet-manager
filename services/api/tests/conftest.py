@@ -61,7 +61,7 @@ def postgres_engine() -> Iterator[Engine]:
 def db_session(postgres_engine: Engine) -> Iterator[Session]:
     with postgres_engine.connect() as connection:
         transaction = connection.begin()
-        session = Session(bind=connection)
+        session = Session(bind=connection, join_transaction_mode="create_savepoint")
         try:
             yield session
         finally:

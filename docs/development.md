@@ -80,6 +80,31 @@ The readiness endpoint requires PostgreSQL to be reachable. The health endpoint 
 
 The script runs backend Ruff, mypy, pytest, and Alembic checks, then web lint/typecheck/build and Flutter format/analyze/test/debug-APK checks. PostgreSQL integration tests use the dedicated `fleet_test` database created by Docker Compose on a fresh local volume. `scripts/check-environment.ps1` prints the expected local toolchain versions before running the suite.
 
+## Authentication configuration
+
+Authentication settings use the `FLEET_` prefix. The important Phase 2
+settings are:
+
+```text
+FLEET_PHONE_DEFAULT_REGION=IN       # optional; only for non-E.164 input
+FLEET_OTP_PROVIDER=unavailable      # production must use a real provider
+FLEET_ENABLE_DEVELOPMENT_OTP=false
+FLEET_OTP_TTL_SECONDS=300
+FLEET_OTP_MAX_ATTEMPTS=5
+FLEET_OTP_RESEND_COOLDOWN_SECONDS=60
+FLEET_JWT_SIGNING_KEY=<secret of at least 32 characters>
+FLEET_JWT_ISSUER=fleet-manager-api
+FLEET_JWT_AUDIENCE=fleet-manager-client
+```
+
+For local integration tests, inject a fake provider through test dependency
+overrides. For manual non-production development, the in-memory development
+provider requires both `FLEET_ENVIRONMENT=development`,
+`FLEET_OTP_PROVIDER=development`, and
+`FLEET_ENABLE_DEVELOPMENT_OTP=true`; it must never be enabled in production.
+The default unavailable provider intentionally returns a service-unavailable
+response instead of pretending to deliver an OTP.
+
 ## Migration workflow
 
 Run from `services/api` after PostgreSQL is available:
@@ -91,7 +116,8 @@ uv run --project . alembic upgrade head --sql
 
 Phase 1 adds `0002_core_domain`, which creates the domain tables, tenant
 foreign keys, enums, checks, indexes, event idempotency constraint, and
-assignment overlap constraints. Run the online round trip against the test
+assignment overlap constraints. Phase 2 adds `0003_authentication`, which
+creates OTP challenge state and server-side authentication sessions. Run the online round trip against the test
 database with:
 
 ```powershell

@@ -1,7 +1,8 @@
-"""SQLAlchemy models for the Phase 1 core domain."""
+"""SQLAlchemy models for the core domain and authentication boundary."""
 
 from fleet_api.db.models.assignment import Assignment
 from fleet_api.db.models.audit import AuditLog
+from fleet_api.db.models.auth import AuthSession, OtpChallenge
 from fleet_api.db.models.company import Company, Site, Tipper, User
 from fleet_api.db.models.device import Device
 from fleet_api.db.models.events import (
@@ -17,6 +18,7 @@ from fleet_api.db.models.membership import CompanyMembership, SupervisorSiteAcce
 __all__ = [
     "Assignment",
     "AuditLog",
+    "AuthSession",
     "Company",
     "CompanyMembership",
     "Device",
@@ -25,6 +27,7 @@ __all__ = [
     "EventVerification",
     "KmReading",
     "OperationalEvent",
+    "OtpChallenge",
     "Site",
     "SupervisorSiteAccess",
     "Tipper",
