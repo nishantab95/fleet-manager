@@ -26,12 +26,41 @@ class PendingEvents extends Table {
   Set<Column<Object>> get primaryKey => {clientEventUuid};
 }
 
-@DriftDatabase(tables: [PendingEvents])
+class SyncMetadata extends Table {
+  TextColumn get key => text()();
+  TextColumn get value => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {key};
+}
+
+@DriftDatabase(tables: [PendingEvents, SyncMetadata])
 class LocalDatabase extends _$LocalDatabase {
   LocalDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) => m.createAll(),
+    onUpgrade: (m, from, to) async {
+      if (from < 2) await m.createTable(syncMetadata);
+    },
+  );
+
+  Future<void> setMetadata(String key, String value) {
+    return into(syncMetadata).insertOnConflictUpdate(
+      SyncMetadataCompanion.insert(key: key, value: value),
+    );
+  }
+
+  Future<String?> metadata(String key) async {
+    final row = await (select(
+      syncMetadata,
+    )..where((item) => item.key.equals(key))).getSingleOrNull();
+    return row?.value;
+  }
 
   Future<void> enqueue(PendingEventsCompanion event) {
     return into(pendingEvents).insertOnConflictUpdate(event);

@@ -255,8 +255,12 @@ def test_access_token_expiry_and_signature_validation(
     )
     with pytest.raises(InvalidTokenError):
         service.authenticate_access_token(access_token=expired)
+    token_parts = tokens.access_token.split(".")
+    signature = token_parts[2]
+    replacement = "A" if signature[0] != "A" else "B"
+    tampered = ".".join((*token_parts[:2], replacement + signature[1:]))
     with pytest.raises(InvalidTokenError):
-        service.authenticate_access_token(access_token=tokens.access_token[:-1] + "x")
+        service.authenticate_access_token(access_token=tampered)
 
     wrong_issuer = issue_access_token(
         auth_settings(jwt_issuer="unexpected-issuer"),

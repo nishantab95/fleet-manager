@@ -40,7 +40,10 @@ jobs:
           enable-cache: true
       - run: uv sync --locked --all-groups
       - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests migrations
       - run: uv run mypy src tests
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
       - run: uv run pytest
       - run: uv run alembic upgrade head --sql
 
@@ -59,6 +62,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
 
   mobile:

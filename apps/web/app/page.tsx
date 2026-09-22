@@ -8,7 +8,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
 type MembershipRole = "OWNER_ADMIN" | "SUPERVISOR" | "DRIVER";
 type Status = "ACTIVE" | "INACTIVE";
 type Tab = "operations" | "overview" | "sites" | "tippers" | "people" | "assignments" | "access";
-type Tokens = { access_token: string; refresh_token: string; expires_in: number; role: MembershipRole };
+type Tokens = { access_token: string; expires_in: number; role: MembershipRole };
 type Membership = { membership_id: string; company_id: string; company_name: string; role: MembershipRole };
 type Site = { id: string; name: string; code: string | null; status: Status };
 type Tipper = { id: string; registration_number: string; short_name: string | null; status: Status };
@@ -38,15 +38,30 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}, accessToken?: string): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, accessToken?: string, retryOnUnauthorized = true): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    response = await fetch(`${API_BASE}${path}`, { ...options, credentials: "include", headers });
   } catch {
     throw new ApiError(0, "The API is unavailable. Start the backend and try again.");
+  }
+  if (response.status === 401 && accessToken && retryOnUnauthorized && !path.startsWith("/api/v1/auth/")) {
+    try {
+      const refresh = await fetch(`${API_BASE}/api/v1/auth/web-refresh`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (refresh.ok) {
+        const refreshed = (await refresh.json()) as Tokens;
+        return request<T>(path, options, refreshed.access_token, false);
+      }
+    } catch {
+      // Preserve the original authorization error below.
+    }
   }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
@@ -133,7 +148,7 @@ export default function HomePage() {
     setBusy(true);
     setError("");
     try {
-      const nextTokens = await request<Tokens>("/api/v1/auth/session", { method: "POST", body: JSON.stringify({ pre_session_token: preSessionToken, membership_id: membershipId }) });
+      const nextTokens = await request<Tokens>("/api/v1/auth/web-session", { method: "POST", body: JSON.stringify({ pre_session_token: preSessionToken, membership_id: membershipId }) });
       setTokens(nextTokens);
       if (nextTokens.role === "SUPERVISOR") {
         await loadSupervisorSites(nextTokens.access_token);
@@ -153,7 +168,7 @@ export default function HomePage() {
   }
 
   async function logout() {
-    if (tokens) await request<void>("/api/v1/auth/logout", { method: "POST" }, tokens.access_token).catch(() => undefined);
+    if (tokens) await request<void>("/api/v1/auth/web-logout", { method: "POST" }, tokens.access_token).catch(() => undefined);
     setTokens(null);
     setPreSessionToken("");
     setMemberships([]);

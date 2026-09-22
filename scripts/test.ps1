@@ -42,8 +42,10 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
         }
         Invoke-RequiredCheck "uv lock verification" { uv --cache-dir $cacheDir lock --check }
         Invoke-RequiredCheck "Backend Ruff" { uv --cache-dir $cacheDir run --project . --group dev ruff check src tests migrations }
+        Invoke-RequiredCheck "Backend formatter" { uv --cache-dir $cacheDir run --project . --group dev ruff format --check src tests migrations }
         Invoke-RequiredCheck "Backend mypy" { uv --cache-dir $cacheDir run --project . --group dev mypy src tests }
         Invoke-RequiredCheck "Backend pytest" { uv --cache-dir $cacheDir run --project . --group dev pytest -p no:cacheprovider }
+        Invoke-RequiredCheck "Alembic schema check" { uv --cache-dir $cacheDir run --project . alembic check }
         Invoke-RequiredCheck "Alembic offline migration check" { uv --cache-dir $cacheDir run --project . alembic upgrade head --sql }
     } finally {
         Pop-Location
@@ -56,6 +58,7 @@ $npm = Get-Command npm -ErrorAction SilentlyContinue
 if ($npm) {
     Invoke-RequiredCheck "Web lint" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm run lint } finally { Pop-Location } }
     Invoke-RequiredCheck "Web typecheck" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm run typecheck } finally { Pop-Location } }
+    Invoke-RequiredCheck "Web tests" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm test } finally { Pop-Location } }
     Invoke-RequiredCheck "Web build" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm run build } finally { Pop-Location } }
 } else {
     Write-Warning "Web checks skipped: Node.js/npm is not installed."
@@ -63,6 +66,7 @@ if ($npm) {
 
 $flutter = Get-Command flutter -ErrorAction SilentlyContinue
 if ($flutter) {
+    Invoke-RequiredCheck "Flutter format" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { dart format --output=none --set-exit-if-changed lib test integration_test } finally { Pop-Location } }
     Invoke-RequiredCheck "Flutter analyze" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { flutter analyze } finally { Pop-Location } }
     Invoke-RequiredCheck "Flutter tests" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { flutter test } finally { Pop-Location } }
     Invoke-RequiredCheck "Flutter debug APK" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { flutter build apk --debug } finally { Pop-Location } }

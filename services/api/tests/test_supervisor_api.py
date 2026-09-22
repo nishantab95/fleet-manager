@@ -340,7 +340,7 @@ def test_km_evidence_is_available_only_to_authorized_supervisor_and_completeness
         uploaded = driver_client.post(
             "/api/v1/driver/evidence",
             params={"client_event_uuid": km_event_id},
-            files={"file": ("meter.jpg", b"meter-photo", "image/jpeg")},
+            files={"file": ("meter.jpg", b"\xff\xd8\xffmeter-photo", "image/jpeg")},
         )
         assert uploaded.status_code == 200
         event = driver_client.post(
@@ -358,7 +358,7 @@ def test_km_evidence_is_available_only_to_authorized_supervisor_and_completeness
         diesel_uploaded = driver_client.post(
             "/api/v1/driver/evidence",
             params={"client_event_uuid": diesel_event_id},
-            files={"file": ("diesel.jpg", b"diesel-photo", "image/jpeg")},
+            files={"file": ("diesel.jpg", b"\xff\xd8\xffdiesel-photo", "image/jpeg")},
         )
         assert diesel_uploaded.status_code == 200
         diesel = driver_client.post(
@@ -404,12 +404,12 @@ def test_km_evidence_is_available_only_to_authorized_supervisor_and_completeness
         assert event_by_type["DIESEL"]["litres"] == "12.500"
         evidence = supervisor_client.get(f"/api/v1/supervisor/events/{km_event_id}/evidence")
         assert evidence.status_code == 200
-        assert evidence.content == b"meter-photo"
+        assert evidence.content == b"\xff\xd8\xffmeter-photo"
         diesel_evidence = supervisor_client.get(
             f"/api/v1/supervisor/events/{diesel_event_id}/evidence"
         )
         assert diesel_evidence.status_code == 200
-        assert diesel_evidence.content == b"diesel-photo"
+        assert diesel_evidence.content == b"\xff\xd8\xffdiesel-photo"
 
         approved_km = supervisor_client.post(
             f"/api/v1/supervisor/events/{km_event_id}/verify",
@@ -465,7 +465,7 @@ def test_completeness_surfaces_odometer_regression(
             uploaded = driver_client.post(
                 "/api/v1/driver/evidence",
                 params={"client_event_uuid": client_event_uuid},
-                files={"file": ("meter.jpg", b"meter-photo", "image/jpeg")},
+                files={"file": ("meter.jpg", b"\xff\xd8\xffmeter-photo", "image/jpeg")},
             )
             assert uploaded.status_code == 200
             response = driver_client.post(

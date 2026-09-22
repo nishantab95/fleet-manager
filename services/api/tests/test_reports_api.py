@@ -105,7 +105,7 @@ def create_event(
         uploaded = client.post(
             "/api/v1/driver/evidence",
             params={"client_event_uuid": client_event_uuid},
-            files={"file": ("evidence.jpg", b"phase6-evidence", "image/jpeg")},
+            files={"file": ("evidence.jpg", b"\xff\xd8\xffphase6-evidence", "image/jpeg")},
         )
         assert uploaded.status_code == 200
         payload_extra["object_reference"] = uploaded.json()["object_reference"]
@@ -253,7 +253,7 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         )
         evidence = owner.get(f"/api/v1/reports/events/{start}/evidence")
         assert evidence.status_code == 200
-        assert evidence.content == b"phase6-evidence"
+        assert evidence.content == b"\xff\xd8\xffphase6-evidence"
         exceptions = owner.get(
             "/api/v1/reports/exceptions", params={"operational_date": REPORT_DATE.isoformat()}
         )

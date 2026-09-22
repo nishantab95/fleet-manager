@@ -126,7 +126,25 @@ controls.
 
 ## Deferred controls
 
-Rate limiting beyond the OTP cooldown/attempt bound, upload scanning, key
-rotation, production SMS provider integration, and production secret
-management remain follow-up work. The Phase 1 domain services and Phase 2
-dependencies are not a substitute for endpoint-specific business validation.
+Phase 7 adds a hashed source-address OTP cooldown in addition to the
+per-phone cooldown, magic-byte checks for configured image types, explicit
+security headers, production profile validation, and browser HttpOnly refresh
+cookies. A real SMS provider is still an integration boundary and must be
+configured explicitly; the unavailable provider fails closed.
+
+Malware scanning/content inspection, automated key rotation, and a full BFF
+that removes the browser access token from JavaScript remain follow-up work.
+The current browser access token is short-lived, runtime-only, protected by
+backend authorization, and never written to localStorage; the longer-lived
+refresh credential is now HttpOnly/SameSite. The Phase 1 domain services and
+Phase 2 dependencies are not a substitute for endpoint-specific validation.
+
+## Controlled internal pilot policy
+
+The one-tipper internal pilot may use an explicitly enabled development/test
+OTP provider and controlled local connectivity. This is not an Internet or
+production deployment: public exposure and plaintext authentication traffic are
+forbidden, and HTTPS/TLS plus a real OTP provider are required before broader
+rollout. Evidence MIME/signature, size, private-key, storage, and authorization
+controls are the pilot baseline; malware scanning/content inspection remains a
+required pre-production follow-up.

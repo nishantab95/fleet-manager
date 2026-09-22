@@ -75,6 +75,15 @@ class TokenResponse(BaseModel):
     role: MembershipRole
 
 
+class WebTokenResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+    membership_id: UUID
+    company_id: UUID
+    role: MembershipRole
+
+
 class MeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

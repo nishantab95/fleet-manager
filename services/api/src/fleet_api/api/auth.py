@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import get_auth_service, get_current_session
@@ -16,6 +16,7 @@ from fleet_api.api.schemas import (
     RefreshRequest,
     SessionRequest,
     TokenResponse,
+    WebTokenResponse,
 )
 from fleet_api.auth.service import AuthContext, AuthService, SessionTokens
 from fleet_api.db.session import get_db
@@ -26,6 +27,7 @@ from fleet_api.domain.errors import (
     InvalidTokenError,
     MembershipSelectionError,
     OtpProviderUnavailableError,
+    OtpRateLimitError,
     PhoneNormalizationError,
     RefreshTokenReuseError,
 )
@@ -45,6 +47,32 @@ def _token_response(tokens: SessionTokens) -> TokenResponse:
         membership_id=tokens.context.membership.id,
         company_id=tokens.context.company.id,
         role=tokens.context.membership.role,
+    )
+
+
+def _web_token_response(tokens: SessionTokens) -> WebTokenResponse:
+    return WebTokenResponse(
+        access_token=tokens.access_token,
+        expires_in=tokens.expires_in,
+        membership_id=tokens.context.membership.id,
+        company_id=tokens.context.company.id,
+        role=tokens.context.membership.role,
+    )
+
+
+def _set_web_refresh_cookie(
+    response: Response,
+    tokens: SessionTokens,
+    service: AuthService,
+) -> None:
+    response.set_cookie(
+        key="fleet_web_refresh",
+        value=tokens.refresh_token,
+        max_age=service.settings.refresh_token_ttl_seconds,
+        httponly=True,
+        secure=service.settings.secure_cookies,
+        samesite="lax",
+        path="/api/v1/auth",
     )
 
 
@@ -80,6 +108,13 @@ def request_otp(
             "AUTH_PROVIDER_UNAVAILABLE",
             "authentication is temporarily unavailable",
             status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    except OtpRateLimitError as exc:
+        db.rollback()
+        raise _error(
+            "RATE_LIMITED",
+            "authentication requests are temporarily limited",
+            status.HTTP_429_TOO_MANY_REQUESTS,
         ) from exc
     except AuthConfigurationError as exc:
         db.rollback()
@@ -173,6 +208,81 @@ def create_session(
             "membership selection context is invalid",
             status.HTTP_401_UNAUTHORIZED,
         ) from exc
+
+
+@router.post("/web-session", response_model=WebTokenResponse)
+def create_web_session(
+    payload: SessionRequest,
+    response: Response,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> WebTokenResponse:
+    """Create a browser session without exposing the refresh token to JavaScript."""
+    try:
+        tokens = service.create_session(
+            pre_session_token=payload.pre_session_token,
+            membership_id=payload.membership_id,
+        )
+        db.commit()
+        _set_web_refresh_cookie(response, tokens, service)
+        return _web_token_response(tokens)
+    except MembershipSelectionError as exc:
+        db.rollback()
+        raise _error(
+            "FORBIDDEN",
+            "membership selection is not permitted",
+            status.HTTP_403_FORBIDDEN,
+        ) from exc
+    except (InvalidTokenError, AuthConfigurationError) as exc:
+        db.rollback()
+        raise _error(
+            "UNAUTHENTICATED",
+            "membership selection context is invalid",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+
+
+@router.post("/web-refresh", response_model=WebTokenResponse)
+def refresh_web_session(
+    response: Response,
+    fleet_web_refresh: str | None = Cookie(default=None),
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> WebTokenResponse:
+    if not fleet_web_refresh:
+        raise _error(
+            "AUTHENTICATION_FAILED",
+            "refresh token is invalid",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+    try:
+        tokens = service.refresh(refresh_token=fleet_web_refresh)
+        db.commit()
+        _set_web_refresh_cookie(response, tokens, service)
+        return _web_token_response(tokens)
+    except (AuthenticationError, RefreshTokenReuseError, AuthConfigurationError) as exc:
+        if isinstance(exc, RefreshTokenReuseError):
+            db.commit()
+        else:
+            db.rollback()
+        raise _error(
+            "AUTHENTICATION_FAILED",
+            "refresh token is invalid",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+
+
+@router.post("/web-logout", response_model=None, status_code=status.HTTP_204_NO_CONTENT)
+def web_logout(
+    response: Response,
+    context: AuthContext | None = Depends(get_current_session),
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> None:
+    if context is not None:
+        service.logout(context)
+        db.commit()
+    response.delete_cookie("fleet_web_refresh", path="/api/v1/auth")
 
 
 @router.post("/refresh", response_model=TokenResponse)

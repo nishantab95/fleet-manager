@@ -179,6 +179,8 @@ def tenant_records(db_session: Session) -> dict[str, object]:
         "site_b": site_b,
         "tipper_a": tipper_a,
         "tipper_b": tipper_b,
+        "owner_a_user": users["owner_a"],
+        "owner_a_membership": memberships["owner_a"],
         **users,
         **memberships,
     }

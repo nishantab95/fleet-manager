@@ -318,6 +318,8 @@ def upload_evidence(
         raise EvidenceValidationError("unsupported evidence type")
     if not content or len(content) > settings.evidence_max_bytes:
         raise EvidenceValidationError("evidence size is invalid")
+    if not _matches_image_signature(normalized_type, content):
+        raise EvidenceValidationError("evidence content does not match its image type")
     existing = session.scalar(
         select(EvidenceObject).where(
             EvidenceObject.company_id == context.company.id,
@@ -364,3 +366,14 @@ def upload_evidence(
             except ObjectStorageUnavailableError:
                 pass
         raise
+
+
+def _matches_image_signature(content_type: str, content: bytes) -> bool:
+    """Reject MIME-spoofed uploads before they reach private object storage."""
+    if content_type == "image/jpeg":
+        return content.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
+    return False

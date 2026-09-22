@@ -40,7 +40,7 @@ Copy-Item .env.example .env
 .\scripts\dev.ps1
 ```
 
-The API is then available at `http://localhost:8000`, with `GET /health` and `GET /ready`. Local PostgreSQL and MinIO are started by Docker Compose.
+The API is then available at `http://localhost:8000`, with `GET /health` and `GET /ready`. Local PostgreSQL and MinIO are started by Docker Compose. MinIO uses host ports `19000` (S3 API) and `19001` (console) by default so it does not collide with TallyPrime on port `9000`; change `MINIO_API_PORT`, `MINIO_CONSOLE_PORT`, and `FLEET_S3_ENDPOINT_URL` together when selecting other free host ports.
 
 Run checks with:
 
@@ -77,3 +77,11 @@ unavailable and fails closed; development OTP requires explicit development
 configuration. Reporting is limited to company-owned tippers; rented
 equipment, machinery, fuel-efficiency calculations, and later business
 expansion remain deferred.
+
+Phase 7 adds release-candidate hardening for a controlled one-tipper pilot:
+production-profile validation, API/web security headers, browser refresh
+cookies, durable mobile sync diagnostics, cold-restart/retry tests, evidence
+content validation, backup/restore tooling, and pilot documentation. It does
+not add new equipment or change the driver's four-button contract. See
+`docs/phase7-e2e-matrix.md`, `docs/pilot-runbook.md`, and
+`docs/pilot-checklist.md`.

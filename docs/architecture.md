@@ -171,3 +171,18 @@ creates five private, macro-free sheets: Daily Summary, Trip Register, KM
 Register, Diesel Register, and Exceptions. User-controlled text beginning
 with `=`, `+`, `-`, or `@` is prefixed before writing cells, and no object-store
 key or session/token value is exported.
+
+## Phase 7 pilot-hardening boundary
+
+Phase 7 does not introduce a new business service. It hardens boundaries that
+already exist: production configuration validation, explicit API and Next.js
+security headers, trusted-host checks when configured, and a browser-only
+refresh-cookie adapter that keeps refresh credentials out of JavaScript. The
+web access token remains runtime-only and is refreshed through the HttpOnly
+cookie; mobile refresh tokens remain in secure device storage.
+
+The mobile queue is a durable Drift/SQLite state machine. A row is marked
+`syncing` before network work and remains retryable after a process kill. Event
+submission and evidence upload use the existing client UUID idempotency
+boundary. Diagnostics persist only safe support categories and timestamps;
+they never expose payloads or credentials.

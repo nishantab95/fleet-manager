@@ -24,6 +24,8 @@ dev_dependencies:
   build_runner: 2.16.1
   drift_dev: 2.35.0
   flutter_lints: 5.0.0
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
 

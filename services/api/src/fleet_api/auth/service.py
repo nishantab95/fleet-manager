@@ -42,6 +42,7 @@ from fleet_api.domain.errors import (
     InvalidOtpError,
     InvalidTokenError,
     MembershipSelectionError,
+    OtpRateLimitError,
     RefreshTokenReuseError,
     RoleViolationError,
     TenantConsistencyError,
@@ -150,6 +151,24 @@ class AuthService:
             else:
                 latest.status = OtpChallengeStatus.CANCELLED
 
+        # The phone cooldown prevents repeated challenges for one account. A
+        # second, hashed-IP check prevents using many phone numbers to bypass
+        # that control while keeping source addresses out of the database.
+        request_ip_hash = _hash_metadata(request_ip)
+        if request_ip_hash:
+            latest_from_ip = self.session.scalar(
+                select(OtpChallenge)
+                .where(
+                    OtpChallenge.request_ip_hash == request_ip_hash,
+                    OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+                    OtpChallenge.expires_at > now,
+                )
+                .order_by(OtpChallenge.created_at.desc())
+                .limit(1)
+            )
+            if latest_from_ip is not None and latest_from_ip.next_allowed_at > now:
+                raise OtpRateLimitError("OTP request cooldown is active")
+
         otp = _new_otp()
         salt = token_bytes(16).hex()
         challenge = OtpChallenge(
@@ -161,7 +180,7 @@ class AuthService:
             attempt_count=0,
             max_attempts=self.settings.otp_max_attempts,
             next_allowed_at=now + timedelta(seconds=self.settings.otp_resend_cooldown_seconds),
-            request_ip_hash=_hash_metadata(request_ip),
+            request_ip_hash=request_ip_hash,
             request_user_agent_hash=_hash_metadata(user_agent),
             provider_name=type(self.otp_provider).__name__,
         )

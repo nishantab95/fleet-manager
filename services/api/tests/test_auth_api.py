@@ -95,6 +95,21 @@ def test_auth_http_flow_and_generic_otp_request(
             access_token = session_json["access_token"]
             refresh_token = session_json["refresh_token"]
 
+            web_session = client.post(
+                "/api/v1/auth/web-session",
+                json={
+                    "pre_session_token": pre_session_token,
+                    "membership_id": membership_id,
+                },
+            )
+            assert web_session.status_code == 200
+            assert "refresh_token" not in web_session.json()
+            assert "fleet_web_refresh=" in web_session.headers["set-cookie"]
+            web_refresh = client.post("/api/v1/auth/web-refresh")
+            assert web_refresh.status_code == 200
+            assert "refresh_token" not in web_refresh.json()
+            assert "HttpOnly" in web_refresh.headers["set-cookie"]
+
             me_response = client.get(
                 "/api/v1/auth/me",
                 headers={"Authorization": f"Bearer {access_token}"},

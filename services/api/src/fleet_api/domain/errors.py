@@ -66,6 +66,10 @@ class OtpProviderUnavailableError(DomainError):
     pass
 
 
+class OtpRateLimitError(AuthenticationError):
+    pass
+
+
 class EvidenceValidationError(DomainError):
     pass
 

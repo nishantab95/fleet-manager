@@ -15,6 +15,10 @@ def test_health_endpoint() -> None:
         "version": __version__,
     }
     assert response.headers["x-request-id"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
 def test_request_id_is_normalized_and_returned() -> None:

@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from fleet_api import __version__
 from fleet_api.api.admin import router as admin_router
@@ -52,6 +53,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
+    if "*" not in runtime_settings.allowed_host_values:
+        app.add_middleware(
+            TrustedHostMiddleware,
+            allowed_hosts=runtime_settings.allowed_host_values,
+        )
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next: Any) -> Any:
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'",
+        )
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()",
+        )
+        return response
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, _: Exception) -> JSONResponse:

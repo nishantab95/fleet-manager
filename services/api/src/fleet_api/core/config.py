@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://fleet:fleet@localhost:5432/fleet"
     cors_allowed_origins: str = "http://localhost:3000"
-    s3_endpoint_url: str = "http://localhost:9000"
+    allowed_hosts: str = "*"
+    s3_endpoint_url: str = "http://localhost:19000"
     s3_region: str = "us-east-1"
     s3_bucket: str = "fleet-local"
     s3_access_key_id: str | None = None
@@ -60,11 +61,37 @@ class Settings(BaseSettings):
                 raise ValueError("production requires a JWT signing key of at least 32 characters")
             if self.enable_development_otp or self.otp_provider.lower() in {"development", "fake"}:
                 raise ValueError("development OTP provider is forbidden in production")
+            if self.otp_provider.lower() == "unavailable":
+                raise ValueError("production requires a configured OTP provider")
+            if not self.cors_origins or "*" in self.cors_origins:
+                raise ValueError("production requires explicit CORS origins")
+            if not self.allowed_host_values or "*" in self.allowed_host_values:
+                raise ValueError("production requires explicit allowed hosts")
+            if self.object_storage_provider.lower() != "s3":
+                raise ValueError("production requires private S3-compatible object storage")
+            if not self.s3_access_key_id or not self.s3_secret_access_key:
+                raise ValueError("production requires object-storage credentials")
+            if self.s3_access_key_id.lower() in {"minioadmin", "changeme"}:
+                raise ValueError(
+                    "production object-storage credentials must not use local defaults"
+                )
+            if self.s3_secret_access_key.lower() in {"minioadmin", "changeme", "secret123"}:
+                raise ValueError(
+                    "production object-storage credentials must not use local defaults"
+                )
         return self
 
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_host_values(self) -> list[str]:
+        return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
+
+    @property
+    def secure_cookies(self) -> bool:
+        return self.environment.lower() in {"pilot", "production", "prod"}
 
     @property
     def evidence_mime_types(self) -> set[str]:

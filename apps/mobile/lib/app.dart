@@ -8,6 +8,15 @@ import 'data/secure_session_store.dart';
 import 'data/sync_engine.dart';
 import 'domain/driver_models.dart';
 
+const appVersion = String.fromEnvironment(
+  'FLUTTER_BUILD_NAME',
+  defaultValue: '0.1.0',
+);
+const appBuild = String.fromEnvironment(
+  'FLUTTER_BUILD_NUMBER',
+  defaultValue: '1',
+);
+
 class DriverAppDependencies {
   const DriverAppDependencies({
     required this.api,
@@ -299,6 +308,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   int _pendingCount = 0;
   String? _message;
   bool _busy = false;
+  DateTime? _lastQueuedAt;
+  DriverEventType? _lastQueuedEventType;
 
   @override
   void initState() {
@@ -307,8 +318,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _refreshQueue() async {
-    final rows = await widget.dependencies.sync.database.pendingForSync();
-    if (mounted) setState(() => _pendingCount = rows.length);
+    final count = await widget.dependencies.sync.pendingCount();
+    if (mounted) setState(() => _pendingCount = count);
   }
 
   Future<void> _sync() async {
@@ -327,19 +338,33 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     Map<String, dynamic> payload = const <String, dynamic>{},
     String? evidencePath,
   }) async {
+    if (_busy) return;
     final assignment = widget.assignment;
     if (assignment == null) return;
-    await widget.dependencies.sync.enqueue(
-      assignment: assignment,
-      eventType: eventType,
-      payload: payload,
-      evidencePath: evidencePath,
-    );
-    await _refreshQueue();
-    if (mounted) {
-      setState(
-        () => _message = 'Saved on this device. It will sync when connected.',
+    final now = DateTime.now();
+    if (_lastQueuedEventType == eventType &&
+        _lastQueuedAt != null &&
+        now.difference(_lastQueuedAt!) < const Duration(milliseconds: 500)) {
+      return;
+    }
+    _lastQueuedAt = now;
+    _lastQueuedEventType = eventType;
+    setState(() => _busy = true);
+    try {
+      await widget.dependencies.sync.enqueue(
+        assignment: assignment,
+        eventType: eventType,
+        payload: payload,
+        evidencePath: evidencePath,
       );
+      await _refreshQueue();
+      if (mounted) {
+        setState(
+          () => _message = 'Saved on this device. It will sync when connected.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -422,6 +447,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             icon: const Icon(Icons.sync),
           ),
           IconButton(
+            tooltip: 'Diagnostics',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    DriverDiagnosticsScreen(dependencies: widget.dependencies),
+              ),
+            ),
+            icon: const Icon(Icons.info_outline),
+          ),
+          IconButton(
             tooltip: 'Sign out',
             onPressed: widget.onSignOut,
             icon: const Icon(Icons.logout),
@@ -443,30 +478,114 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           _ActionButton(
             label: 'TRIP COMPLETE',
             icon: Icons.check_circle_outline,
-            onPressed: canCapture
+            onPressed: canCapture && !_busy
                 ? () => _queue(DriverEventType.tripComplete)
                 : null,
           ),
           _ActionButton(
             label: 'KM READING',
             icon: Icons.speed,
-            onPressed: canCapture ? _showKmDialog : null,
+            onPressed: canCapture && !_busy ? _showKmDialog : null,
           ),
           _ActionButton(
             label: 'DIESEL',
             icon: Icons.local_gas_station,
-            onPressed: canCapture ? _showDieselDialog : null,
+            onPressed: canCapture && !_busy ? _showDieselDialog : null,
           ),
           _ActionButton(
             label: 'EMERGENCY',
             icon: Icons.warning_amber,
             danger: true,
-            onPressed: canCapture ? _showEmergencyDialog : null,
+            onPressed: canCapture && !_busy ? _showEmergencyDialog : null,
           ),
           if (_message != null) ...[
             const SizedBox(height: 16),
             Text(_message!, textAlign: TextAlign.center),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class DriverDiagnosticsScreen extends StatefulWidget {
+  const DriverDiagnosticsScreen({required this.dependencies, super.key});
+
+  final DriverAppDependencies dependencies;
+
+  @override
+  State<DriverDiagnosticsScreen> createState() =>
+      _DriverDiagnosticsScreenState();
+}
+
+class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
+  int _pendingCount = 0;
+  DateTime? _lastSuccessfulSync;
+  String? _lastSyncError;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final sync = widget.dependencies.sync;
+    final pendingCount = await sync.pendingCount();
+    final lastSuccessfulSync = await sync.lastSuccessfulSync();
+    final lastSyncError = await sync.lastSyncErrorCategory();
+    if (!mounted) return;
+    setState(() {
+      _pendingCount = pendingCount;
+      _lastSuccessfulSync = lastSuccessfulSync;
+      _lastSyncError = lastSyncError;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Diagnostics')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const Text(
+            'Support information',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 16),
+          ListTile(
+            title: const Text('App version'),
+            subtitle: Text('$appVersion+$appBuild'),
+          ),
+          ListTile(
+            title: const Text('Device registration ID'),
+            subtitle: Text(widget.dependencies.installationIdentifier),
+          ),
+          ListTile(
+            title: const Text('Pending local events'),
+            subtitle: Text('$_pendingCount'),
+          ),
+          ListTile(
+            title: const Text('Last successful sync'),
+            subtitle: Text(
+              _lastSuccessfulSync?.toLocal().toIso8601String() ??
+                  'Not yet recorded',
+            ),
+          ),
+          ListTile(
+            title: const Text('Last sync error category'),
+            subtitle: Text(_lastSyncError ?? 'None recorded'),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'This screen contains no trip totals, credentials, or auth tokens.',
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton(
+            onPressed: _load,
+            child: const Text('REFRESH DIAGNOSTICS'),
+          ),
         ],
       ),
     );

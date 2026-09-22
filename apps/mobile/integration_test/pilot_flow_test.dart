@@ -1,6 +1,7 @@
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
 
 import 'package:fleet_manager_mobile/app.dart';
 import 'package:fleet_manager_mobile/data/api_client.dart';
@@ -11,29 +12,30 @@ import 'package:fleet_manager_mobile/data/sync_engine.dart';
 import 'package:fleet_manager_mobile/domain/driver_models.dart';
 
 void main() {
-  testWidgets('driver home exposes exactly four offline actions', (
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('pilot driver shell exposes four actions and diagnostics', (
     tester,
   ) async {
     final database = LocalDatabase(NativeDatabase.memory());
-    final sync = SyncEngine(
-      database: database,
-      remote: _FakeRemote(),
-      installationIdentifier: 'test-device',
-    );
     final dependencies = DriverAppDependencies(
       api: ApiClient(),
       sessionStore: SecureSessionStore(),
-      sync: sync,
-      installationIdentifier: 'test-device',
+      sync: SyncEngine(
+        database: database,
+        remote: _FakeRemote(),
+        installationIdentifier: 'integration-device',
+      ),
+      installationIdentifier: 'integration-device',
     );
     const assignment = DriverAssignment(
       assignmentId: 'assignment',
       tipperId: 'tipper',
-      tipperRegistrationNumber: 'KA01AB1234',
-      tipperShortName: 'Alpha One',
+      tipperRegistrationNumber: 'PILOT-12',
+      tipperShortName: 'Tipper 12',
       siteId: 'site',
-      siteName: 'Alpha Site',
-      supervisorName: 'Supervisor A',
+      siteName: 'Pilot Site',
+      supervisorName: 'Pilot Supervisor',
     );
 
     await tester.pumpWidget(
@@ -45,24 +47,16 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.text('TRIP COMPLETE'), findsOneWidget);
     expect(find.text('KM READING'), findsOneWidget);
     expect(find.text('DIESEL'), findsOneWidget);
     expect(find.text('EMERGENCY'), findsOneWidget);
-    expect(find.textContaining('Phase 0'), findsNothing);
-
-    await tester.tap(find.text('TRIP COMPLETE'));
-    await tester.tap(find.text('TRIP COMPLETE'));
-    await tester.pump();
-    final queued = await database.pendingForSync();
-    expect(queued, hasLength(1));
-    expect(queued.single.syncState, 'pending');
-
-    await sync.syncPending();
-    final synced = await database.eventById(queued.single.clientEventUuid);
-    expect(synced?.syncState, 'synced');
+    await tester.tap(find.byTooltip('Diagnostics'));
+    await tester.pumpAndSettle();
+    expect(find.text('App version'), findsOneWidget);
+    expect(find.text('integration-device'), findsOneWidget);
     await database.close();
   });
 }

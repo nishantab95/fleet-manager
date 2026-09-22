@@ -24,6 +24,9 @@ class SyncEngine {
   final RefreshSession? refreshSession;
   final Uuid _uuid;
 
+  static const lastSuccessfulSyncKey = 'last_successful_sync_at';
+  static const lastSyncErrorKey = 'last_sync_error_category';
+
   Future<String> enqueue({
     required DriverAssignment assignment,
     required DriverEventType eventType,
@@ -61,11 +64,46 @@ class SyncEngine {
         synced++;
       } on ApiException catch (error) {
         await database.markFailed(event.clientEventUuid, error.message);
+        await database.setMetadata(lastSyncErrorKey, _errorCategory(error));
       } on Object catch (error) {
         await database.markFailed(event.clientEventUuid, error.toString());
+        await database.setMetadata(lastSyncErrorKey, 'LOCAL_OR_NETWORK_ERROR');
       }
     }
+    if (rows.isEmpty || synced == rows.length) {
+      await database.setMetadata(
+        lastSuccessfulSyncKey,
+        DateTime.now().toUtc().toIso8601String(),
+      );
+    }
+    if (rows.isNotEmpty && synced == rows.length) {
+      await database.setMetadata(lastSyncErrorKey, '');
+    }
     return synced;
+  }
+
+  Future<int> pendingCount() async => (await database.pendingForSync()).length;
+
+  Future<DateTime?> lastSuccessfulSync() async {
+    final value = await database.metadata(lastSuccessfulSyncKey);
+    return value == null ? null : DateTime.tryParse(value)?.toUtc();
+  }
+
+  Future<String?> lastSyncErrorCategory() async {
+    final value = await database.metadata(lastSyncErrorKey);
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  static String _errorCategory(ApiException error) {
+    if (error.statusCode == 401) return 'AUTH_REQUIRED';
+    if (error.statusCode == 403) return 'ACCESS_REVOKED_OR_DENIED';
+    if (error.statusCode >= 500 || error.statusCode == 0) {
+      return 'BACKEND_UNAVAILABLE';
+    }
+    if (error.statusCode == 408 || error.statusCode == 429) {
+      return 'RETRY_LATER';
+    }
+    return 'REQUEST_REJECTED_${error.statusCode}';
   }
 
   Future<void> _syncOne(PendingEvent event) async {

@@ -266,10 +266,17 @@ def test_driver_evidence_is_private_and_required_for_km_event(
         )
         assert invalid.status_code == 422
 
+        spoofed = client.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": client_event_uuid},
+            files={"file": ("evidence.jpg", b"not-an-image", "image/jpeg")},
+        )
+        assert spoofed.status_code == 422
+
         uploaded = client.post(
             "/api/v1/driver/evidence",
             params={"client_event_uuid": client_event_uuid},
-            files={"file": ("evidence.jpg", b"image-bytes", "image/jpeg")},
+            files={"file": ("evidence.jpg", b"\xff\xd8\xffimage-bytes", "image/jpeg")},
         )
         assert uploaded.status_code == 200
         object_reference = uploaded.json()["object_reference"]

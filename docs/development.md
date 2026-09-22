@@ -154,7 +154,10 @@ Phase 4 adds `0004_evidence_objects`. Phase 5 adds no migration; it reads the
 existing event, verification, emergency, assignment, and evidence tables. Set
 `FLEET_OBJECT_STORAGE_PROVIDER=s3` with the local MinIO credentials when
 running evidence-upload flows; leave it `unavailable` when object storage is
-not configured.
+not configured. Compose publishes MinIO's container ports 9000/9001 on host
+ports 19000/19001 by default so the S3 API does not collide with TallyPrime;
+keep `FLEET_S3_ENDPOINT_URL`, `MINIO_API_PORT`, and `MINIO_CONSOLE_PORT`
+aligned if you choose different free host ports.
 
 Phase 6 adds `0005_phase6_reporting`, which adds company reporting settings,
 the PostgreSQL closure enum, site/day closure snapshots, closure history,
@@ -185,3 +188,23 @@ npm run build
 Owner reports use the company-configured IANA timezone and operational-day
 start minute. The dashboard's Download Excel action calls the same report
 service as the JSON endpoints; it is not a second calculation path.
+
+## Phase 7 pilot hardening
+
+The `pilot` and `production` profiles fail closed for missing JWT signing
+material, development/unavailable OTP, wildcard CORS/hosts, local object-store
+credentials, and non-private object storage. Development may continue to use
+the unavailable provider and local Compose defaults explicitly.
+
+Browser sessions use an HttpOnly, SameSite refresh cookie through the
+`/api/v1/auth/web-session` and `/api/v1/auth/web-refresh` endpoints. Mobile
+sessions continue to use the token response and secure device storage. Neither
+client writes tokens to localStorage.
+
+The cold-restart test reopens a real SQLite file, not an in-memory repository.
+Run the device-level integration procedure from `docs/pilot-checklist.md`
+before pilot onboarding.
+
+Backups use `scripts/backup-postgres.ps1`; restore tests must target a separate
+database accepted by `scripts/restore-postgres.ps1`. PostgreSQL backups do not
+include evidence objects; use `scripts/backup-object-storage.ps1` separately.
