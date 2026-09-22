@@ -142,3 +142,32 @@ unique-key race inside a savepoint and reloads the committed envelope, so
 retries resolve to the same logical event without poisoning the caller
 transaction. Verification history is a separate append-only table and is not
 sync state.
+
+## Phase 6 reporting and closure boundary
+
+`fleet_api.domain.reporting.ReportingService` is the single calculation path
+for the owner dashboard, site/day report, tipper/day report, exception list,
+closure blockers, and Excel export. It scopes assignments and events to the
+authenticated company, follows `event -> assignment -> site` for historical
+ownership, bulk-loads subtype/evidence/verification data, and does not use a
+tipper's current location as history.
+
+`Company.reporting_timezone` and `Company.operational_day_start_minutes`
+define the operational day. The service converts the local wall-clock range
+to UTC for event queries; timestamps remain timezone-aware UTC values in the
+database. Only effective `APPROVED` events contribute to official trip,
+diesel-issued, and KM values. Pending, disputed, and rejected records remain
+separate and produce explicit exceptions where appropriate.
+
+`SiteDailyClosure` stores the company/site/operational-date closure snapshot;
+`SiteDailyClosureHistory` and `AuditLog` preserve every close and reopen
+action. `OPEN` and `REOPENED` with no blockers are presented as derived
+`READY_TO_CLOSE`; close is rejected with structured blockers until the day is
+complete. Supervisors may close only permitted sites, while only an owner may
+reopen a closed day with a reason.
+
+The Excel route calls the same dashboard report object as the JSON routes and
+creates five private, macro-free sheets: Daily Summary, Trip Register, KM
+Register, Diesel Register, and Exceptions. User-controlled text beginning
+with `=`, `+`, `-`, or `@` is prefixed before writing cells, and no object-store
+key or session/token value is exported.

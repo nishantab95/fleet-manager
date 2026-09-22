@@ -102,6 +102,28 @@ controls.
   is scoped to assigned tippers and reports missing readings, pending decisions,
   and unresolved emergencies without introducing financial or operational totals.
 
+## Phase 6 reporting and closure controls
+
+- Owner report routes require `OWNER_ADMIN`; closure reads/actions additionally
+  authorize a permitted supervisor site. Every report derives company scope
+  from the authenticated membership and returns no foreign site, tipper, event,
+  or evidence data.
+- Reporting ranges are calculated from the company IANA timezone and converted
+  to UTC for queries. The closure stores the timezone and day-start snapshot so
+  a later settings change cannot reinterpret a historical close.
+- Official totals use approved event status only. Pending, disputed, rejected,
+  ambiguous KM, and unresolved emergency states stay visible as separate
+  exceptions. Diesel is labelled issued/recorded and no consumption or
+  efficiency metric is derived.
+- Close/reopen transitions append both a closure-history row and an audit log.
+  Structured blockers prevent a close; only an owner can reopen a closed day,
+  and the reason is mandatory. A supervisor cannot bypass blockers or use a
+  foreign site's route.
+- Excel output is generated from the same tenant-scoped report object as the
+  JSON API. The workbook contains no macros, tokens, object-store keys, or
+  session data. Text values beginning with `=`, `+`, `-`, or `@` are prefixed
+  before cell creation to prevent formula injection.
+
 ## Deferred controls
 
 Rate limiting beyond the OTP cooldown/attempt bound, upload scanning, key

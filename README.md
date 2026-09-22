@@ -66,11 +66,14 @@ role, device, event idempotency, evidence ownership, and verification state.
 
 Phase 3 contains owner/admin management for sites, owned tippers, people,
 supervisor site grants, and effective-dated assignments, plus the authenticated
-web administration shell.
+web administration shell. Phase 6 adds the owner operations dashboard,
+timezone-aware operational-day reporting, site/tipper drill-downs, explicit
+exceptions, daily site closure/history, and a reconciled Excel export.
 
 Phase 2 contains the authentication boundary, OTP challenge persistence,
 membership selection, access/refresh session rotation, authenticated identity
 routes, and reusable tenant/RBAC dependencies. The default OTP provider is
 unavailable and fails closed; development OTP requires explicit development
-configuration. Reporting and business expansion remain deferred; Phase 6 has
-not started.
+configuration. Reporting is limited to company-owned tippers; rented
+equipment, machinery, fuel-efficiency calculations, and later business
+expansion remain deferred.

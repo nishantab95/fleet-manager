@@ -84,3 +84,10 @@ class EmergencyStatus(StrEnum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
     RESOLVED = "RESOLVED"
     CLOSED = "CLOSED"
+
+
+class SiteClosureStatus(StrEnum):
+    OPEN = "OPEN"
+    READY_TO_CLOSE = "READY_TO_CLOSE"
+    CLOSED = "CLOSED"
+    REOPENED = "REOPENED"

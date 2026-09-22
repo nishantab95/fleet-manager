@@ -18,6 +18,7 @@ dependencies = [
     "pyjwt==2.10.1",
     "sqlalchemy==2.0.43",
     "uvicorn[standard]==0.35.0",
+    "openpyxl==3.1.5",
 ]
 
 [dependency-groups]

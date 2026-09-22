@@ -72,3 +72,9 @@ class EvidenceValidationError(DomainError):
 
 class ObjectStorageUnavailableError(DomainError):
     pass
+
+
+class ClosureBlockedError(DomainError):
+    def __init__(self, message: str, blockers: list[dict[str, str]]) -> None:
+        super().__init__(message)
+        self.blockers = blockers

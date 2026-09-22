@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +13,7 @@ from fleet_api.auth.phone import normalize_phone
 from fleet_api.auth.service import AuthContext
 from fleet_api.db.models import (
     Assignment,
+    Company,
     CompanyMembership,
     Site,
     SupervisorSiteAccess,
@@ -107,6 +109,42 @@ class AdminService:
         if membership is None:
             raise NotFoundError("membership was not found")
         return membership
+
+    def get_company_settings(self) -> Company:
+        return self.context.company
+
+    def update_company_settings(
+        self,
+        *,
+        reporting_timezone: str | None,
+        operational_day_start_minutes: int | None,
+    ) -> Company:
+        company = self.context.company
+        old_values = {
+            "reporting_timezone": company.reporting_timezone,
+            "operational_day_start_minutes": company.operational_day_start_minutes,
+        }
+        if reporting_timezone is not None:
+            clean_timezone = reporting_timezone.strip()
+            try:
+                ZoneInfo(clean_timezone)
+            except ZoneInfoNotFoundError as exc:
+                raise DomainError("reporting timezone is invalid") from exc
+            company.reporting_timezone = clean_timezone
+        if operational_day_start_minutes is not None:
+            company.operational_day_start_minutes = operational_day_start_minutes
+        self.session.flush()
+        self._audit(
+            action="ADMIN_COMPANY_SETTINGS_UPDATED",
+            entity_type="COMPANY",
+            entity_id=company.id,
+            old_values=old_values,
+            new_values={
+                "reporting_timezone": company.reporting_timezone,
+                "operational_day_start_minutes": company.operational_day_start_minutes,
+            },
+        )
+        return company
 
     def list_sites(self) -> list[Site]:
         return list(

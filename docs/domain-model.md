@@ -29,6 +29,8 @@ without adding a new persistence boundary.
 | `OtpChallenge` | Short-lived normalized-phone challenge with salted OTP hash, bounded attempts, cooldown, expiry, and delivery metadata hashes. |
 | `AuthSession` | Company/membership-scoped server session with hashed refresh token, rotation state, expiry, revocation, and replay family. |
 | `EvidenceObject` | Private object-storage metadata scoped to one company, driver membership, and client event UUID. |
+| `SiteDailyClosure` | Company/site/operational-date closure snapshot with timezone, state, actor, and timestamps. |
+| `SiteDailyClosureHistory` | Append-only close/reopen state transitions with actor, reason, and time. |
 
 ## Actual schema relationships
 
@@ -55,6 +57,8 @@ erDiagram
     OPERATIONAL_EVENTS ||--o{ EVENT_VERIFICATIONS : changes
     COMPANY_MEMBERSHIPS ||--o{ EVENT_VERIFICATIONS : records
     COMPANY_MEMBERSHIPS ||--o{ AUDIT_LOGS : acts
+    SITES ||--o{ SITE_DAILY_CLOSURES : closes
+    SITE_DAILY_CLOSURES ||--o{ SITE_DAILY_CLOSURE_HISTORY : records
     USERS ||--o{ AUTH_SESSIONS : starts
     COMPANIES ||--o{ AUTH_SESSIONS : scopes
     COMPANY_MEMBERSHIPS ||--o{ AUTH_SESSIONS : selects
@@ -104,3 +108,16 @@ tipper, membership, assignment, or device belonging to another company.
     separately from event verification.
 14. Site completeness is derived for each assignment intersecting the UTC review
     day. It does not invent totals or treat diesel litres as consumption.
+15. The operational day is a company-configured timezone plus optional local
+    start minute; the persisted closure captures the configuration used for
+    that day so later setting changes do not rewrite history.
+16. Official reports count only approved event envelopes. Distance is available
+    only for one unambiguous approved START, one unambiguous approved END, and
+    `END >= START`; otherwise the report exposes an exception and `null` KM.
+17. Site and tipper reports group by effective-dated Assignment. A transfer
+    therefore retains event ownership and prevents double-counting; a reading
+    pair split across sites is not silently allocated and produces unavailable
+    site KM.
+18. A closure cannot bypass missing/conflicting readings, invalid KM, pending
+    or disputed trips/diesel, or unresolved emergencies. Reopen history is
+    append-only and requires an owner reason.

@@ -155,3 +155,33 @@ existing event, verification, emergency, assignment, and evidence tables. Set
 `FLEET_OBJECT_STORAGE_PROVIDER=s3` with the local MinIO credentials when
 running evidence-upload flows; leave it `unavailable` when object storage is
 not configured.
+
+Phase 6 adds `0005_phase6_reporting`, which adds company reporting settings,
+the PostgreSQL closure enum, site/day closure snapshots, closure history,
+tenant-scoped foreign keys, and operational indexes. Verify the migration with
+the full round trip and schema check:
+
+```powershell
+$env:FLEET_TEST_DATABASE_URL="postgresql+psycopg://fleet:fleet@127.0.0.1:5432/fleet_test"
+uv run --project . alembic upgrade head
+uv run --project . alembic check
+uv run --project . alembic downgrade base
+uv run --project . alembic upgrade head
+```
+
+The backend test suite uses PostgreSQL and includes reporting, closure,
+tenant-isolation, assignment-transfer, evidence-authorization, timezone, and
+openpyxl workbook checks. The web shell has a lightweight Vitest/jsdom suite:
+
+```powershell
+cd apps/web
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+Owner reports use the company-configured IANA timezone and operational-day
+start minute. The dashboard's Download Excel action calls the same report
+service as the JSON endpoints; it is not a second calculation path.

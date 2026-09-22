@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from fleet_api.db.models.common import UpdatedTimestampModel
@@ -16,6 +16,19 @@ class Company(UpdatedTimestampModel):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[CompanyStatus] = mapped_column(
         SAEnum(CompanyStatus, name="company_status_enum"), nullable=False
+    )
+    reporting_timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="Asia/Kolkata", server_default="Asia/Kolkata"
+    )
+    operational_day_start_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "operational_day_start_minutes >= 0 AND operational_day_start_minutes < 1440",
+            name="ck_companies_valid_operational_day_start",
+        ),
     )
 
 

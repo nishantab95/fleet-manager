@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -14,6 +14,7 @@ from fleet_api.domain.enums import (
     MembershipRole,
     MembershipStatus,
     OperationalEventType,
+    SiteClosureStatus,
     SiteStatus,
     TipperStatus,
     VerificationStatus,
@@ -83,6 +84,17 @@ class MeResponse(BaseModel):
     company_id: UUID
     company_name: str
     role: MembershipRole
+
+
+class CompanySettingsResponse(BaseModel):
+    company_id: UUID
+    reporting_timezone: str
+    operational_day_start_minutes: int
+
+
+class CompanySettingsUpdateRequest(BaseModel):
+    reporting_timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    operational_day_start_minutes: int | None = Field(default=None, ge=0, le=1439)
 
 
 class SiteCreateRequest(BaseModel):
@@ -299,3 +311,129 @@ class SupervisorCompletenessResponse(BaseModel):
     pending_trip_verification: bool
     pending_diesel_verification: bool
     unresolved_emergency: bool
+
+
+class ReportHistoryResponse(BaseModel):
+    status: VerificationStatus
+    actor_name: str | None
+    reason: str | None
+    created_at: datetime
+
+
+class ReportEventResponse(BaseModel):
+    event_id: UUID
+    event_type: OperationalEventType
+    assignment_id: UUID
+    tipper_id: UUID
+    tipper_registration_number: str
+    site_id: UUID
+    site_name: str
+    driver_name: str
+    supervisor_name: str
+    device_created_at: datetime
+    server_received_at: datetime
+    verification_status: VerificationStatus
+    reading_type: str | None
+    reading_value: Decimal | None
+    litres: Decimal | None
+    emergency_category: str | None
+    emergency_status: str | None
+    emergency_description: str | None
+    evidence_available: bool
+    verification_history: list[ReportHistoryResponse]
+
+
+class ReportExceptionResponse(BaseModel):
+    code: str
+    description: str
+    assignment_id: UUID
+    tipper_id: UUID
+    tipper_registration_number: str
+    site_id: UUID
+    event_id: UUID | None
+
+
+class TipperDailyReportResponse(BaseModel):
+    assignment_id: UUID
+    tipper_id: UUID
+    registration_number: str
+    short_name: str | None
+    site_id: UUID
+    site_name: str
+    driver_name: str
+    supervisor_name: str
+    assignment_starts_at: datetime
+    assignment_ends_at: datetime | None
+    approved_trip_count: int
+    pending_trip_count: int
+    disputed_trip_count: int
+    rejected_trip_count: int
+    start_km: Decimal | None
+    end_km: Decimal | None
+    distance_km: Decimal | None
+    verified_diesel_issued: Decimal
+    pending_diesel_count: int
+    disputed_diesel_count: int
+    unresolved_emergency_count: int
+    missing_start_reading: bool
+    missing_end_reading: bool
+    completeness_status: str
+    exceptions: list[ReportExceptionResponse]
+    events: list[ReportEventResponse]
+
+
+class ClosureHistoryResponse(BaseModel):
+    status: SiteClosureStatus
+    actor_name: str | None
+    reason: str | None
+    created_at: datetime
+
+
+class ClosureResponse(BaseModel):
+    site_id: UUID
+    site_name: str
+    operational_date: date
+    reporting_timezone: str
+    workday_start_minutes: int
+    status: SiteClosureStatus
+    blockers: list[ReportExceptionResponse]
+    history: list[ClosureHistoryResponse]
+
+
+class SiteDailyReportResponse(BaseModel):
+    site_id: UUID
+    site_name: str
+    operational_date: date
+    reporting_timezone: str
+    assigned_tippers_count: int
+    approved_trip_count: int
+    pending_trip_count: int
+    disputed_trip_count: int
+    total_km: Decimal | None
+    verified_diesel_issued: Decimal
+    missing_reading_count: int
+    unresolved_emergency_count: int
+    closure: ClosureResponse
+    tippers: list[TipperDailyReportResponse]
+
+
+class DashboardResponse(BaseModel):
+    operational_date: date
+    reporting_timezone: str
+    workday_start_minutes: int
+    assigned_tippers_count: int
+    approved_trip_count: int
+    pending_trip_count: int
+    total_km: Decimal | None
+    verified_diesel_issued: Decimal
+    pending_verification_count: int
+    missing_reading_count: int
+    unresolved_emergency_count: int
+    sites_not_closed_count: int
+    complete_tippers_count: int
+    sites: list[SiteDailyReportResponse]
+    exceptions: list[ReportExceptionResponse]
+
+
+class ClosureActionRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)

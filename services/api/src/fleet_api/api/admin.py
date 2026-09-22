@@ -11,6 +11,8 @@ from fleet_api.api.schemas import (
     AssignmentCloseRequest,
     AssignmentCreateRequest,
     AssignmentResponse,
+    CompanySettingsResponse,
+    CompanySettingsUpdateRequest,
     PersonCreateRequest,
     PersonResponse,
     PersonUpdateRequest,
@@ -57,6 +59,39 @@ def _fail(db: Session, exc: DomainError) -> NoReturn:
         status_code=http_status,
         detail={"code": code, "message": message},
     ) from exc
+
+
+@router.get("/company", response_model=CompanySettingsResponse)
+def get_company_settings(
+    service: AdminService = Depends(get_admin_service),
+) -> CompanySettingsResponse:
+    company = service.get_company_settings()
+    return CompanySettingsResponse(
+        company_id=company.id,
+        reporting_timezone=company.reporting_timezone,
+        operational_day_start_minutes=company.operational_day_start_minutes,
+    )
+
+
+@router.patch("/company", response_model=CompanySettingsResponse)
+def update_company_settings(
+    payload: CompanySettingsUpdateRequest,
+    service: AdminService = Depends(get_admin_service),
+    db: Session = Depends(get_db),
+) -> CompanySettingsResponse:
+    try:
+        company = service.update_company_settings(
+            reporting_timezone=payload.reporting_timezone,
+            operational_day_start_minutes=payload.operational_day_start_minutes,
+        )
+        db.commit()
+        return CompanySettingsResponse(
+            company_id=company.id,
+            reporting_timezone=company.reporting_timezone,
+            operational_day_start_minutes=company.operational_day_start_minutes,
+        )
+    except DomainError as exc:
+        _fail(db, exc)
 
 
 @router.get("/sites", response_model=list[SiteResponse])
