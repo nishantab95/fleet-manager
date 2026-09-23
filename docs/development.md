@@ -118,11 +118,12 @@ response instead of pretending to deliver an OTP.
 
 The web shell uses `NEXT_PUBLIC_API_BASE_URL` when set and otherwise calls
 `http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3
-owner shell and Phase 5 supervisor verification shell keep tokens in memory
-only, so refreshing the page intentionally returns to phone authentication. A
-development OTP provider and signing key must be configured in the API
-environment for a manual end-to-end login. Supervisor accounts must also have
-an admin-created `SupervisorSiteAccess` grant before site data is visible.
+owner shell and Phase 5 supervisor verification shell keep access tokens in
+memory only; an HttpOnly refresh cookie restores the browser session after a
+page reload. A development OTP provider and signing key must be configured in
+the API environment for a manual end-to-end login. Supervisor accounts must
+also have an admin-created `SupervisorSiteAccess` grant before site data is
+visible.
 
 ## Migration workflow
 

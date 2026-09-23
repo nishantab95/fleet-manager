@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, request, refreshWebSession } from "../../lib/api/client";
 import type { Membership, Me, Tokens } from "../../lib/types";
@@ -24,6 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("restoring");
   const [session, setSession] = useState<Tokens | null>(null);
   const [me, setMe] = useState<Me | null>(null);
+  const refreshInFlight = useRef<Promise<Tokens | null> | null>(null);
 
   const applySession = useCallback(async (tokens: Tokens) => {
     const identity = await request<Me>("/api/v1/auth/me", {}, tokens.access_token);
@@ -34,16 +35,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
-    try {
-      return await applySession(await refreshWebSession());
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        setSession(null);
-        setMe(null);
-        setStatus("unauthenticated");
-        return null;
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const pending = (async () => {
+      try {
+        return await applySession(await refreshWebSession());
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          setSession(null);
+          setMe(null);
+          setStatus("unauthenticated");
+          return null;
+        }
+        throw error;
       }
-      throw error;
+    })();
+    refreshInFlight.current = pending;
+    try {
+      return await pending;
+    } finally {
+      if (refreshInFlight.current === pending) refreshInFlight.current = null;
     }
   }, [applySession]);
 
