@@ -10,6 +10,7 @@ button:disabled { cursor: wait; opacity: 0.6; }
 h1 { margin: 10px 0 14px; font-size: clamp(2.2rem, 6vw, 4.5rem); line-height: 0.98; }
 h2 { margin-top: 0; }
 .summary, .muted { color: #5d6b72; line-height: 1.6; }
+.workspace-hint { display: inline-block; margin-top: 2px; padding: 6px 9px; border: 1px solid #b8ddd0; border-radius: 999px; background: #e8f4ef; color: #1b6b5a; font-size: 0.74rem; font-weight: 800; letter-spacing: 0.08em; }
 .stack { display: grid; gap: 14px; margin-top: 28px; }
 label { display: grid; gap: 7px; color: #44515c; font-size: 0.88rem; font-weight: 700; }
 input, select { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid #ccd8d4; border-radius: 9px; background: #fff; color: #17202a; }

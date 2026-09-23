@@ -10,7 +10,7 @@ import { driverQaEnabled } from "../../lib/auth/config";
 export default function DriverTestPage() {
   const router = useRouter();
   const { status, me } = useAuth();
-  useEffect(() => { if (status === "unauthenticated") router.replace("/login"); }, [router, status]);
+  useEffect(() => { if (status === "unauthenticated") router.replace("/login?workspace=driver-test"); }, [router, status]);
   if (status === "restoring") return <main className="auth-shell"><section className="auth-card">Restoring secure browser session…</section></main>;
   if (status !== "authenticated" || !me) return null;
   if (!driverQaEnabled) return <AccessDenied message="The Driver QA route is disabled by default. Set NEXT_PUBLIC_ENABLE_DRIVER_QA=true only for the controlled local QA build." />;

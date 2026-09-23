@@ -6,6 +6,17 @@ import { driverQaEnabled, workspaceForRole } from "../../lib/auth/config";
 import { useAuth } from "./AuthProvider";
 import { AccessDenied } from "./AccessDenied";
 
+const workspaceLabels = {
+  owner: "OWNER TEST WORKSPACE",
+  supervisor: "SUPERVISOR TEST WORKSPACE",
+  "driver-test": "DRIVER QA TEST WORKSPACE",
+} as const;
+
+export function workspaceHintLabel(value: string | null): string | null {
+  if (!value || !(value in workspaceLabels)) return null;
+  return workspaceLabels[value as keyof typeof workspaceLabels];
+}
+
 export function LoginWorkspace() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -27,6 +38,7 @@ export function LoginWorkspace() {
   }, [auth.me, auth.status, router]);
 
   const reason = searchParams.get("reason");
+  const workspaceLabel = workspaceHintLabel(searchParams.get("workspace"));
   const submitPhone = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
@@ -81,6 +93,7 @@ export function LoginWorkspace() {
       <section className="auth-card">
         <p className="eyebrow">Fleet Manager · Secure access</p>
         <h1>Choose your operations workspace</h1>
+        {workspaceLabel && <div className="workspace-hint">{workspaceLabel}</div>}
         <p className="summary">Sign in with your phone and choose an active company membership. The access token is runtime-only; the refresh credential is an HttpOnly cookie.</p>
         {reason === "driver-disabled" && <div className="notice error">Access denied: the Driver QA workspace is disabled by configuration.</div>}
         {!driverQaEnabled && <div className="notice">Driver QA is disabled by default. Owner and Supervisor workspaces remain available.</div>}

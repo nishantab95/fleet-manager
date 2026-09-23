@@ -9,7 +9,7 @@ import { SupervisorWorkspace } from "../../features/supervisor/SupervisorWorkspa
 export default function SupervisorPage() {
   const router = useRouter();
   const { status, me } = useAuth();
-  useEffect(() => { if (status === "unauthenticated") router.replace("/login"); }, [router, status]);
+  useEffect(() => { if (status === "unauthenticated") router.replace("/login?workspace=supervisor"); }, [router, status]);
   if (status === "restoring") return <main className="auth-shell"><section className="auth-card">Restoring secure browser session…</section></main>;
   if (status !== "authenticated" || !me) return null;
   if (me.role !== "SUPERVISOR") return <AccessDenied message="Only SUPERVISOR memberships may use this internal QA workspace." />;

@@ -43,3 +43,4 @@ Thumbs.db
 # Local infrastructure data
 infra/data/
 *.log
+.runtime/

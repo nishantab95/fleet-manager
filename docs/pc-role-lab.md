@@ -14,51 +14,90 @@ change backend authorization.
 
 ## Start the local role lab
 
-From the repository root:
+Normal PC acceptance uses the root launcher. From Windows:
 
-1. Create and edit the ignored local environment file:
+1. Start Docker Desktop.
+2. Open the repository:
 
-   ```powershell
-   Copy-Item .env.example .env
-   # Set FLEET_PILOT_DRIVER_PHONE to the local pilot driver's real number.
-   # Set FLEET_OTP_PROVIDER=pilot, FLEET_PILOT_OTP=<six digits>, and a local JWT key.
+   ```text
+   D:\Git\fleet maneger\fleet manager
    ```
 
-   Keep OTP values and the pilot driver number in `.env` only.
+3. Run:
 
-2. Start PostgreSQL and MinIO, then the API:
-
-   ```powershell
-   docker compose up -d postgres minio
-   .\scripts\dev.ps1 -SkipInfrastructure
+   ```text
+   python launch.py
    ```
 
-   In a second terminal, verify `http://localhost:8000/health` and
-   `http://localhost:8000/ready`.
+4. Choose `Start / continue current manual test` for the safe default, or
+   choose `Start a FRESH manual test day` and type `RESET PILOT` when you
+   intentionally want to clear only Pilot Construction operational test data.
+5. Use the three isolated workspaces opened by Microsoft Edge. If Edge is not
+   available, use the URLs printed by the launcher.
 
-3. Apply migrations and bootstrap the one named pilot fixture:
+The launcher validates the local non-production configuration, starts and
+health-checks PostgreSQL and MinIO, applies migrations, reuses the existing
+idempotent pilot bootstrap, starts the API and web app on ports 8000 and 3000,
+and enables Driver QA only in the managed web process. It never resets data on
+normal start or status checks.
 
-   ```powershell
-   uv --cache-dir .uv-cache run --project services/api alembic upgrade head
-   .\scripts\bootstrap-pilot.ps1
-   ```
+Each role opens in its own Microsoft Edge app window under
+`%LOCALAPPDATA%\FleetManagerRoleLab\profiles\owner`, `supervisor`, or `driver-qa`.
+The launcher suppresses Edge first-run tabs and does not touch the normal Edge
+profile. If role windows are already recorded, rerunning the launcher defaults
+to leaving them open rather than creating duplicates. Before authentication,
+each role route carries a cosmetic login hint (`OWNER TEST WORKSPACE`,
+`SUPERVISOR TEST WORKSPACE`, or `DRIVER QA TEST WORKSPACE`); backend membership
+authorization remains unchanged.
 
-4. Start the one web server. Driver QA must be explicitly enabled only in this
-   local process:
+## Troubleshooting / Manual startup
 
-   ```powershell
-   $env:NEXT_PUBLIC_ENABLE_DRIVER_QA="true"
-   cd apps/web
-   npm ci
-   npm run dev
-   ```
+The detailed commands below are fallback diagnostics when the launcher reports
+an actionable failure. Keep OTP values and the pilot driver number in `.env`
+only.
 
-   All three browser profiles use `http://localhost:3000`.
+Create and edit the ignored local environment file:
+
+```powershell
+Copy-Item .env.example .env
+# Set FLEET_PILOT_DRIVER_PHONE to the local pilot driver's real number.
+# Set FLEET_OTP_PROVIDER=pilot, FLEET_PILOT_OTP=<six digits>, and a local JWT key.
+```
+
+Start PostgreSQL and MinIO, then the API:
+
+```powershell
+docker compose up -d postgres minio
+.\scripts\dev.ps1 -SkipInfrastructure
+```
+
+In a second terminal, verify `http://localhost:8000/health` and
+`http://localhost:8000/ready`. Apply migrations from the API working directory:
+
+```powershell
+Push-Location services\api
+uv --cache-dir "..\..\.uv-cache" run alembic upgrade head
+Pop-Location
+.\scripts\bootstrap-pilot.ps1
+```
+
+Start the one web server with Driver QA explicitly enabled in that local
+process:
+
+```powershell
+$env:NEXT_PUBLIC_ENABLE_DRIVER_QA="true"
+Push-Location apps\web
+npm ci
+npm run dev
+Pop-Location
+```
+
+All three workspaces use `http://localhost:3000`.
 
 ## Three browser profiles
 
-Use separate browser profiles or isolated contexts so each role has its own
-HttpOnly refresh cookie:
+The launcher creates separate Microsoft Edge user-data directories so each role
+has its own HttpOnly refresh cookie:
 
 - Browser/Profile A — Owner/Admin, phone `+919876543210`.
 - Browser/Profile B — Supervisor, phone `+919876543222`.
