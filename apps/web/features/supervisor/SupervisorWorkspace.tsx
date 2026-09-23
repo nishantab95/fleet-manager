@@ -95,7 +95,7 @@ export function SupervisorShell(props: SupervisorShellProps) {
   const selectedSite = props.sites.find((site) => site.id === activeSiteId);
   return <main className="admin-shell">
     <WorkspaceHeader eyebrow="Supervisor · INTERNAL / QA REFERENCE" title="Site operations verification" onLogout={props.onLogout} />
-    <div className="admin-layout"><section className="content">
+    <div className="admin-layout single-column"><section className="content">
       {props.error && <div className="notice error">{props.error}</div>}
       <div className="inline-form"><label>Assigned site<select value={activeSiteId} onChange={(event) => setSelectedSiteId(event.target.value)}><option value="">Choose a permitted site…</option>{props.sites.map((site) => <option key={site.id} value={site.id}>{site.name}{site.code ? ` · ${site.code}` : ""}</option>)}</select></label><label>Review date<input type="date" value={reviewDate} onChange={(event) => setReviewDate(event.target.value)} /></label><button className="secondary" disabled={loading} onClick={() => setRefreshKey((value) => value + 1)} type="button">{loading ? "Loading…" : "Refresh"}</button></div>
       {!props.sites.length && <div className="notice">No SupervisorSiteAccess assignment is available for this membership.</div>}

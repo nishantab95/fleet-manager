@@ -24,11 +24,14 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .topbar .eyebrow { color: #a9e2cd; margin-bottom: 8px; }
 .topbar h1 { margin: 0; font-size: clamp(2rem, 4vw, 3.4rem); }
 .admin-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: calc(100vh - 164px); }
+.admin-layout.single-column { grid-template-columns: minmax(0, 1fr); }
 .sidebar { display: grid; align-content: start; gap: 6px; padding: 26px 16px; background: #e9f0ed; }
 .nav-item { background: transparent; color: #35504a; text-align: left; }
 .nav-item.selected { background: #fff; color: #1b6b5a; box-shadow: 0 3px 14px #17202a12; }
-.content { width: min(100%, 1180px); padding: clamp(24px, 5vw, 64px); }
+.content { width: min(100%, 1400px); margin-inline: auto; padding: clamp(24px, 5vw, 64px); }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 28px 0; }
+.qa-actions { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+.qa-actions button { min-height: 88px; }
 .metric { display: grid; gap: 8px; padding: 22px; border: 1px solid #dce5e2; border-radius: 14px; background: #fff; }
 .metric span { color: #68777d; font-size: 0.86rem; }
 .metric strong { font-size: 2.1rem; }

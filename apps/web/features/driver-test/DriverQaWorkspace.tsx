@@ -75,7 +75,7 @@ export function DriverQaWorkspace() {
 
   return <main className="admin-shell">
     <WorkspaceHeader eyebrow="DRIVER QA" title="QA Driver Simulator" onLogout={() => void logout()} />
-    <div className="admin-layout"><section className="content">
+    <div className="admin-layout single-column"><section className="content">
       <div className="notice error"><strong>QA DRIVER SIMULATOR</strong><br />NON-PRODUCTION WEB TEST CLIENT · INTERNAL / PILOT QA ONLY</div>
       <p className="muted">This browser client uses real authentication, the real DRIVER membership, the current assignment, PostgreSQL-backed APIs, and the real evidence pipeline. It is not the final Driver product.</p>
       {error && <div className="notice error">{error}</div>}
