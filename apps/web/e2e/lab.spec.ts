@@ -27,7 +27,7 @@ test.describe("PC Test Lab", () => {
     await expect(page.getByText("LAUNCHER")).toBeVisible();
 
     await page.getByRole("button", { name: "START FRESH TEST" }).click();
-    await expect(page.getByRole("status")).toContainText("choose option 2");
+    await expect(page.getByRole("status")).toContainText("python launch.py --fresh");
     await expect(page.getByRole("status")).toContainText("RESET PILOT");
   });
 });

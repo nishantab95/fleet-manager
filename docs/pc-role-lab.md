@@ -23,19 +23,28 @@ Normal PC acceptance uses the root launcher. From Windows:
    D:\Git\fleet maneger\fleet manager
    ```
 
-3. Run:
+3. Run the normal one-click launcher:
 
    ```text
    python launch.py
    ```
 
-4. Choose `Start / continue current manual test` for the safe default, or
-   choose `Start a FRESH manual test day` and type `RESET PILOT` when you
-   intentionally want to clear only Pilot Construction operational test data.
-5. Use the single `PC TEST LAB` control window opened by Microsoft Edge. Choose
-   Driver, Supervisor, or Owner there; each role route still requires its real
-   backend authentication and authorization. If Edge is not available, open
-   `http://localhost:3000/lab` manually.
+   It starts or reuses the local services, ensures the pilot fixture, opens one
+   `PC TEST LAB` control window, and prints a ready summary. No menu choice is
+   required.
+4. Choose Driver, Supervisor, or Owner in the Lab. Each role route still
+   requires its real backend authentication and authorization. If Edge is not
+   available, open `http://localhost:3000/lab` manually.
+
+Advanced launcher operations are available without changing the normal flow:
+
+```text
+python launch.py --fresh    # type RESET PILOT when prompted
+python launch.py --status
+python launch.py --stop
+python launch.py --menu
+python launch.py --help
+```
 
 The launcher validates the local non-production configuration, starts and
 health-checks PostgreSQL and MinIO, applies migrations, reuses the existing
@@ -56,10 +65,10 @@ authentication, each role route carries its existing cosmetic login hint;
 backend membership authorization remains unchanged.
 
 The Lab `START FRESH TEST` button never resets data from the browser. It
-explains that you must rerun `python launch.py`, choose option `2`, and type
-`RESET PILOT` at the launcher prompt. System status checks API and database
-readiness directly; Object Store is marked `LAUNCHER` because MinIO readiness
-continues to be checked by launcher option `3` rather than by a new backend
+explains that you must rerun `python launch.py --fresh` and type `RESET PILOT`
+at the launcher prompt. System status checks API and database readiness
+directly; Object Store is marked `LAUNCHER` because MinIO readiness continues
+to be checked by `python launch.py --status` rather than by a new backend
 endpoint.
 
 ## Troubleshooting / Manual startup

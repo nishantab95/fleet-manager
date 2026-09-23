@@ -37,6 +37,6 @@ describe("PC Test Lab home", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "START FRESH TEST" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("choose option 2"));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("python launch.py --fresh"));
   });
 });

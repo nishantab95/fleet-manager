@@ -7,6 +7,7 @@ not contain domain or database mutation logic of its own.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -1147,52 +1148,22 @@ class RoleLabLauncher:
             )
 
     def print_ready(self) -> None:
-        driver_phone = self.env.get(
-            "FLEET_PILOT_DRIVER_PHONE", "<configured local driver phone>"
-        )
-        print("\n" + "=" * 58)
-        print("FLEET MANAGER PC ROLE LAB — READY")
-        print("=" * 58)
-        print("Infrastructure")
-        print("PostgreSQL      READY")
-        print("MinIO           READY")
-        print("\nBackend")
-        print("API             READY")
-        print("http://localhost:8000")
-        print("\nFrontend")
-        print("Web             READY")
-        print("http://localhost:3000")
-        print("\nManual workspaces")
-        print(f"OWNER\n{ROLE_URLS['OWNER']}\nPhone: {OWNER_PHONE}")
-        print(f"\nSUPERVISOR\n{ROLE_URLS['SUPERVISOR']}\nPhone: {SUPERVISOR_PHONE}")
-        print(f"\nDRIVER QA\n{ROLE_URLS['DRIVER QA']}\nPhone: {driver_phone}")
-        print("\nPilot OTP: Configured in local .env")
-        print(
-            "\nExpected clean-test values: START KM 10000 · TRIPS 4 · DIESEL 30 L · END KM 10120"
-        )
-        print("\nManual checklist")
-        print(
-            "1. Owner: confirm Pilot Site, Tipper 12, Pilot Driver, Pilot Supervisor, active assignment."
-        )
-        print(
-            "2. Driver QA: START 10000, TRIP x4, DIESEL 30 L, END 10120, one test emergency."
-        )
-        print(
-            "3. Supervisor: confirm 8 events, evidence, approve 7 operational events, resolve emergency."
-        )
-        print(
-            "4. Owner: confirm Trips 4, Distance 120 KM, Diesel 30 L, Pending 0, Missing KM 0."
-        )
-        print("\nBrowser control window:")
+        print("\n" + "=" * 50)
+        print("FLEET MANAGER PC ROLE LAB")
+        print("=" * 50)
+        print("PostgreSQL     READY")
+        print("MinIO          READY")
+        print("API            READY")
+        print("Web            READY")
+        print("\nPC Test Lab:")
+        print(LAB_URL)
         if self.lab_workspace_opened:
-            print(f"PC TEST LAB\n{LAB_URL}")
-            print(
-                "Choose Driver, Supervisor or Owner from the QA navigator; each workspace still requires real authentication."
-            )
+            print("\nOpening Fleet Manager PC Test Lab...")
         else:
             print(
-                "Open the PC Test Lab URL manually; no Edge control window was opened."
+                "\nOpen the PC Test Lab URL manually; no Edge control window was opened."
             )
+        print("\nREADY")
         for warning in self.warnings:
             print(f"[WARN] {warning}")
 
@@ -1304,10 +1275,64 @@ def run_menu(launcher: RoleLabLauncher, input_fn: Callable[[str], str] = input) 
     return 0
 
 
-def main() -> int:
-    launcher = RoleLabLauncher()
+def build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python launch.py",
+        description="Start and manage the Fleet Manager PC Test Lab.",
+    )
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--fresh",
+        action="store_true",
+        help="reset the Pilot test day after exact RESET PILOT confirmation, then start",
+    )
+    modes.add_argument(
+        "--status",
+        action="store_true",
+        help="check service and Pilot fixture status without starting or resetting",
+    )
+    modes.add_argument(
+        "--stop",
+        action="store_true",
+        help="stop only launcher-owned API and web processes",
+    )
+    modes.add_argument(
+        "--menu",
+        action="store_true",
+        help="open the legacy interactive menu for advanced/manual use",
+    )
+    return parser
+
+
+def stop_launcher_processes(launcher: RoleLabLauncher) -> None:
+    stopped = launcher.stop_owned_processes()
+    print(
+        "Stopped: "
+        + (", ".join(stopped) if stopped else "no launcher-owned API/web processes")
+    )
+    print("Docker services were left running; volumes were not touched.")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     try:
-        return run_menu(launcher)
+        args = build_argument_parser().parse_args(argv)
+        launcher = RoleLabLauncher()
+        if args.menu:
+            return run_menu(launcher)
+        if args.status:
+            launcher.print_status()
+            return 0
+        if args.stop:
+            stop_launcher_processes(launcher)
+            return 0
+        if args.fresh:
+            if confirm_fresh_reset():
+                launcher.start(fresh=True)
+            else:
+                print("Fresh reset cancelled; no data was changed.")
+            return 0
+        launcher.start()
+        return 0
     except EOFError:
         print(
             "\nNo interactive console was available. Rerun python launch.py from a terminal."

@@ -38,6 +38,108 @@ def test_fresh_reset_requires_exact_confirmation() -> None:
     assert launch.confirm_fresh_reset(lambda _: "RESET PILOT") is True
 
 
+def test_cli_without_arguments_starts_without_showing_menu(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeLauncher:
+        def start(self, *, fresh: bool = False) -> None:
+            calls.append(("start", fresh))
+
+    monkeypatch.setattr(launch, "RoleLabLauncher", FakeLauncher)
+    monkeypatch.setattr(
+        launch, "run_menu", lambda _: pytest.fail("default CLI path opened menu")
+    )
+
+    assert launch.main([]) == 0
+    assert calls == [("start", False)]
+    assert capsys.readouterr().out == ""
+
+
+def test_cli_menu_preserves_legacy_menu_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeLauncher:
+        pass
+
+    monkeypatch.setattr(launch, "RoleLabLauncher", FakeLauncher)
+    monkeypatch.setattr(launch, "run_menu", lambda _: calls.append("menu") or 7)
+
+    assert launch.main(["--menu"]) == 7
+    assert calls == ["menu"]
+
+
+def test_cli_fresh_requires_confirmation_before_starting(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeLauncher:
+        def start(self, *, fresh: bool = False) -> None:
+            calls.append(("start", fresh))
+
+    monkeypatch.setattr(launch, "RoleLabLauncher", FakeLauncher)
+    monkeypatch.setattr(launch, "confirm_fresh_reset", lambda: False)
+
+    assert launch.main(["--fresh"]) == 0
+    assert calls == []
+    assert "Fresh reset cancelled" in capsys.readouterr().out
+
+
+def test_cli_fresh_starts_only_after_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeLauncher:
+        def start(self, *, fresh: bool = False) -> None:
+            calls.append(("start", fresh))
+
+    monkeypatch.setattr(launch, "RoleLabLauncher", FakeLauncher)
+    monkeypatch.setattr(launch, "confirm_fresh_reset", lambda: True)
+
+    assert launch.main(["--fresh"]) == 0
+    assert calls == [("start", True)]
+
+
+def test_cli_status_does_not_start_or_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeLauncher:
+        def start(self, *, fresh: bool = False) -> None:
+            calls.append("start")
+
+        def print_status(self) -> None:
+            calls.append("status")
+
+    monkeypatch.setattr(launch, "RoleLabLauncher", FakeLauncher)
+
+    assert launch.main(["--status"]) == 0
+    assert calls == ["status"]
+
+
+def test_cli_stop_only_stops_launcher_owned_processes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[str] = []
+
+    class FakeLauncher:
+        def stop_owned_processes(self) -> list[str]:
+            calls.append("stop")
+            return ["api"]
+
+    monkeypatch.setattr(launch, "RoleLabLauncher", FakeLauncher)
+
+    assert launch.main(["--stop"]) == 0
+    assert calls == ["stop"]
+    assert "Stopped: api" in capsys.readouterr().out
+
+
 def test_start_continue_does_not_reset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -490,4 +592,5 @@ def test_ready_summary_does_not_print_secrets(
 
     assert secret_otp not in output
     assert secret_jwt not in output
-    assert "Configured in local .env" in output
+    assert "PC Test Lab:" in output
+    assert launch.LAB_URL in output

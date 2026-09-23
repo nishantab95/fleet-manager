@@ -57,7 +57,7 @@ export function TestLabHome() {
       <div className="lab-status" aria-label="System status">
         <StatusItem label="API" value={apiStatus} />
         <StatusItem label="Database" value={databaseStatus} />
-        <StatusItem label="Object Store" value="launcher" detail="Use launch.py option 3 for MinIO readiness" />
+        <StatusItem label="Object Store" value="launcher" detail="Use python launch.py --status for MinIO readiness" />
       </div>
 
       <section aria-labelledby="role-heading">
@@ -78,7 +78,7 @@ export function TestLabHome() {
       </section>
 
       <div className="lab-actions">
-        <button onClick={() => setFreshMessage("Run python launch.py, then choose option 2 and type RESET PILOT. The browser never performs the reset.")} type="button">START FRESH TEST</button>
+        <button onClick={() => setFreshMessage("Run python launch.py --fresh and type RESET PILOT. The browser never performs the reset.")} type="button">START FRESH TEST</button>
         <a className="secondary lab-action-link" href="#system-status">SYSTEM STATUS</a>
       </div>
       {freshMessage && <div className="notice" role="status">{freshMessage}</div>}
