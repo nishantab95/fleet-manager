@@ -118,6 +118,170 @@ def test_web_environment_always_enables_driver_qa() -> None:
     assert web_env["NEXT_PUBLIC_ENABLE_DRIVER_QA"] == "true"
 
 
+def test_known_bookkeeper_process_is_recognized() -> None:
+    info = launch.ProcessInfo(
+        4321,
+        "python.exe",
+        r"D:\Git\AI-MSME-Book-Keeper\.venv\Scripts\python.exe",
+        r"python.exe -m uvicorn backend.app.main:create_app --port 8000",
+    )
+
+    assert launch.is_known_bookkeeper_process(info) is True
+
+
+def test_known_bookkeeper_is_not_stopped_without_explicit_yes(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    info = launch.ProcessInfo(
+        4321,
+        "python.exe",
+        r"D:\Git\AI-MSME-Book-Keeper\.venv\Scripts\python.exe",
+        r"python.exe -m uvicorn backend.app.main:create_app --port 8000",
+    )
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        run=lambda args, **_: calls.append(args)
+        or launch.subprocess.CompletedProcess(args, 0, "", ""),
+        process_info=lambda _: info,
+        listener_pid=lambda port: 4321,
+        input_fn=lambda _: "",
+    )
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher._api_probe = lambda: launch.ServiceStatus("occupied")
+
+    with pytest.raises(launch.PortOccupiedError, match="left running"):
+        launcher.ensure_api()
+
+    assert calls == []
+
+
+def test_yes_stops_only_identified_bookkeeper_pid_and_continues(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    info = launch.ProcessInfo(
+        4321,
+        "python.exe",
+        r"D:\Git\AI-MSME-Book-Keeper\.venv\Scripts\python.exe",
+        r"python.exe -m uvicorn backend.app.main:create_app --port 8000",
+    )
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        run=lambda args, **_: calls.append(args)
+        or launch.subprocess.CompletedProcess(args, 0, "", ""),
+        process_info=lambda _: info,
+        listener_pid=lambda port: 4321,
+        input_fn=lambda _: "Y",
+    )
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher._api_probe = lambda: launch.ServiceStatus("occupied")
+    monkeypatch.setattr(launch, "port_is_open", lambda port: False)
+    monkeypatch.setattr(
+        launcher, "_start_process", lambda *args, **kwargs: {"pid": 9999}
+    )
+    monkeypatch.setattr(launcher, "_wait_for", lambda *args, **kwargs: None)
+
+    assert launcher.ensure_api() == "started"
+    assert calls == [["taskkill", "/PID", "4321", "/F"]]
+
+
+def test_unknown_port_process_is_never_killed(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    info = launch.ProcessInfo(
+        9876,
+        "python.exe",
+        r"C:\Other\python.exe",
+        r"python.exe -m unrelated_service --port 8000",
+    )
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        run=lambda args, **_: calls.append(args)
+        or launch.subprocess.CompletedProcess(args, 0, "", ""),
+        process_info=lambda _: info,
+        listener_pid=lambda port: 9876,
+    )
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher._api_probe = lambda: launch.ServiceStatus("occupied")
+
+    with pytest.raises(launch.PortOccupiedError, match="PID: 9876") as error:
+        launcher.ensure_api()
+
+    assert "unrelated_service" in str(error.value)
+    assert calls == []
+
+
+def test_unknown_web_port_process_is_never_killed(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    info = launch.ProcessInfo(
+        9876,
+        "node.exe",
+        r"C:\Other\node.exe",
+        r"node.exe unrelated-web --port 3000",
+    )
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        run=lambda args, **_: calls.append(args)
+        or launch.subprocess.CompletedProcess(args, 0, "", ""),
+        process_info=lambda _: info,
+        listener_pid=lambda port: 9876,
+    )
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher._web_probe = lambda: launch.ServiceStatus("occupied")
+
+    with pytest.raises(launch.PortOccupiedError, match="PID: 9876"):
+        launcher.ensure_web()
+
+    assert calls == []
+
+
+def test_existing_fleet_manager_api_is_reused(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        run=lambda args, **_: calls.append(args)
+        or launch.subprocess.CompletedProcess(args, 0, "", ""),
+        probe=lambda url, timeout: launch.HttpProbe(
+            200,
+            '{"service":"fleet-manager-api","status":"ok"}',
+        ),
+    )
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher._api_probe = lambda: launch.ServiceStatus("ready")
+
+    assert launcher.ensure_api() == "reused"
+    assert calls == []
+
+
+def test_empty_port_does_not_query_a_process_pid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        process_info=lambda _: pytest.fail("process info queried without a listener"),
+        listener_pid=lambda port: pytest.fail("listener PID queried for a free port"),
+    )
+    monkeypatch.setattr(launch, "port_is_open", lambda port: False)
+
+    assert launcher._api_probe().state == "stopped"
+
+
+def test_no_listener_does_not_build_a_malformed_pid_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    launcher = launch.RoleLabLauncher(paths=launch.LauncherPaths.from_root(tmp_path))
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher._api_probe = lambda: launch.ServiceStatus("stopped")
+    launcher.listener_pid = lambda port: None
+    launcher.process_info = lambda _: pytest.fail("process info queried without a PID")
+    monkeypatch.setattr(
+        launcher, "_start_process", lambda *args, **kwargs: {"pid": 9999}
+    )
+    monkeypatch.setattr(launcher, "_wait_for", lambda *args, **kwargs: None)
+
+    assert launcher.ensure_api() == "started"
+
+
 def test_edge_command_isolated_app_and_first_run_safe(tmp_path: Path) -> None:
     command = launch.build_edge_command(
         Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),

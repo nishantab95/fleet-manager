@@ -60,6 +60,14 @@ class HttpProbe:
 
 
 @dataclass(frozen=True)
+class ProcessInfo:
+    pid: int
+    name: str
+    executable_path: str
+    command_line: str
+
+
+@dataclass(frozen=True)
 class ServiceStatus:
     state: str
     detail: str = ""
@@ -76,6 +84,7 @@ class CommandTools:
 
 OWNER_PHONE = "+919876543210"
 SUPERVISOR_PHONE = "+919876543222"
+KNOWN_BOOKKEEPER_ROOT = r"D:\Git\AI-MSME-Book-Keeper"
 ROLE_URLS = {
     "OWNER": "http://localhost:3000/owner",
     "SUPERVISOR": "http://localhost:3000/supervisor",
@@ -337,12 +346,15 @@ def default_http_probe(url: str, timeout: float = 3.0) -> HttpProbe | None:
         return None
 
 
-def default_process_command_line(pid: int) -> str:
+def default_process_info(pid: int) -> ProcessInfo:
     if os.name != "nt":
-        return ""
+        return ProcessInfo(pid, "", "", "")
     command = (
-        "$p = Get-CimInstance Win32_Process -Filter 'ProcessId = %d' -ErrorAction SilentlyContinue; "
-        "if ($p) { $p.CommandLine }" % pid
+        "$p = Get-CimInstance Win32_Process -Filter 'ProcessId = %d' "
+        "-ErrorAction SilentlyContinue; "
+        "if ($p) { [pscustomobject]@{ Name=$p.Name; "
+        "ExecutablePath=$p.ExecutablePath; CommandLine=$p.CommandLine } "
+        "| ConvertTo-Json -Compress }" % pid
     )
     result = subprocess.run(
         [
@@ -357,7 +369,52 @@ def default_process_command_line(pid: int) -> str:
         text=True,
         check=False,
     )
-    return result.stdout.strip()
+    try:
+        value = json.loads(result.stdout.strip())
+    except (json.JSONDecodeError, TypeError):
+        return ProcessInfo(pid, "", "", "")
+    if not isinstance(value, dict):
+        return ProcessInfo(pid, "", "", "")
+    return ProcessInfo(
+        pid,
+        str(value.get("Name") or ""),
+        str(value.get("ExecutablePath") or ""),
+        str(value.get("CommandLine") or ""),
+    )
+
+
+def default_process_command_line(pid: int) -> str:
+    return default_process_info(pid).command_line
+
+
+def normalized_process_text(value: str) -> str:
+    return value.replace("/", "\\").casefold()
+
+
+def is_known_bookkeeper_process(info: ProcessInfo | None) -> bool:
+    if info is None:
+        return False
+    root = normalized_process_text(KNOWN_BOOKKEEPER_ROOT)
+    return root in normalized_process_text(
+        info.executable_path
+    ) or root in normalized_process_text(info.command_line)
+
+
+def process_name(info: ProcessInfo) -> str:
+    if info.name.strip():
+        return Path(info.name.strip()).name
+    if info.executable_path.strip():
+        return Path(info.executable_path.strip()).name
+    return "unknown"
+
+
+def safe_command_summary(info: ProcessInfo, limit: int = 240) -> str:
+    value = " ".join((info.command_line or info.executable_path).split())
+    if not value:
+        return "unavailable"
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
 
 
 def find_listening_pid(
@@ -408,6 +465,7 @@ class RoleLabLauncher:
         popen: Callable[..., subprocess.Popen[Any]] = subprocess.Popen,
         run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         process_command_line: Callable[[int], str] = default_process_command_line,
+        process_info: Callable[[int], ProcessInfo] = default_process_info,
         listener_pid: Callable[[int], int | None] | None = None,
         command_lookup: Callable[[str], str | None] = shutil.which,
         input_fn: Callable[[str], str] = input,
@@ -420,6 +478,7 @@ class RoleLabLauncher:
         self.popen = popen
         self.run = run
         self.process_command_line = process_command_line
+        self.process_info = process_info
         self.listener_pid = listener_pid or (
             lambda port: find_listening_pid(port, run=self.run)
         )
@@ -734,6 +793,64 @@ class RoleLabLauncher:
         self._save_state(state)
         return record
 
+    def _port_process_info(self, port: int) -> ProcessInfo | None:
+        pid = self.listener_pid(port)
+        if pid is None:
+            return None
+        return self.process_info(pid)
+
+    def _unknown_port_error(
+        self, port: int, owner: ProcessInfo | None
+    ) -> PortOccupiedError:
+        if owner is None:
+            return PortOccupiedError(
+                f"Port {port} is occupied by another application, but no listening PID could be identified.\n"
+                "Close it manually and rerun launch.py."
+            )
+        return PortOccupiedError(
+            f"Port {port} is occupied by another application.\n"
+            f"PID: {owner.pid}\n"
+            f"Process: {process_name(owner)}\n"
+            f"Command: {safe_command_summary(owner)}\n"
+            "Close it manually and rerun launch.py."
+        )
+
+    def _terminate_known_bookkeeper(self, owner: ProcessInfo) -> None:
+        current = self.process_info(owner.pid)
+        if not is_known_bookkeeper_process(current):
+            raise LauncherError(
+                f"Refusing to stop PID {owner.pid}: its process identity changed."
+            )
+        if os.name != "nt":
+            raise LauncherError(
+                "Stopping the known Windows Bookkeeper development server is only supported on Windows."
+            )
+        result = self.run(
+            ["taskkill", "/PID", str(owner.pid), "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 and "not found" not in (result.stderr or "").lower():
+            raise LauncherError(
+                f"Could not stop AI-MSME-Book-Keeper PID {owner.pid}.\n"
+                f"{result.stderr or result.stdout}"
+            )
+
+    def _handle_api_port_conflict(self) -> None:
+        owner = self._port_process_info(8000)
+        if not is_known_bookkeeper_process(owner):
+            raise self._unknown_port_error(8000, owner)
+        print("Port 8000 is currently used by AI-MSME-Book-Keeper.")
+        answer = self.input_fn("Stop that development server and continue? [y/N] ")
+        if answer.strip().lower() not in {"y", "yes"}:
+            raise PortOccupiedError(
+                "AI-MSME-Book-Keeper was left running; port 8000 is still occupied."
+            )
+        assert owner is not None
+        self._terminate_known_bookkeeper(owner)
+        self._wait_for("Port 8000 to become free", lambda: not port_is_open(8000), 20)
+
     def ensure_api(self) -> str:
         tools = self._require_tools()
         status = self._api_probe()
@@ -749,9 +866,7 @@ class RoleLabLauncher:
             print("API 8000        READY (reused)")
             return "reused"
         if status.state == "occupied":
-            raise PortOccupiedError(
-                "Port 8000 is occupied by another application. Close it and rerun launch.py."
-            )
+            self._handle_api_port_conflict()
 
         command = build_api_command(tools.uv, self.paths.root / ".uv-cache")
         record = self._start_process(
@@ -796,25 +911,28 @@ class RoleLabLauncher:
                 print("Web 3000        READY (reused)")
                 return "reused"
             pid = self.listener_pid(3000)
-            record = {"kind": "web", "pid": pid, "owned": False} if pid else None
-            if pid and command_line_matches(
-                self.paths.root, record or {}, self.process_command_line(pid)
+            owner = self.process_info(pid) if pid is not None else None
+            record = existing if isinstance(existing, dict) else None
+            if (
+                pid
+                and record
+                and record.get("owned")
+                and record.get("pid") == pid
+                and command_line_matches(
+                    self.paths.root, record, self.process_command_line(pid)
+                )
             ):
                 print(
                     "Existing Fleet Manager web server found; restarting it with Driver QA enabled."
                 )
-                self._terminate_verified(record or {}, allow_external=True)
+                self._terminate_verified(record)
                 self._wait_for(
                     "Web port 3000 to become free", lambda: not port_is_open(3000), 20
                 )
             else:
-                raise PortOccupiedError(
-                    "Port 3000 already serves a web app, but its Fleet Manager identity or Driver QA flag cannot be verified."
-                )
+                raise self._unknown_port_error(3000, owner)
         elif status.state == "occupied":
-            raise PortOccupiedError(
-                "Port 3000 is occupied by another application. Close it and rerun launch.py."
-            )
+            raise self._unknown_port_error(3000, self._port_process_info(3000))
 
         tools = self._require_tools()
         command = [tools.npm, "run", "dev"]
