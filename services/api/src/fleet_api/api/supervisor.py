@@ -220,6 +220,21 @@ def acknowledge_supervisor_emergency(
         _fail(exc)
 
 
+@router.post("/events/{event_id}/emergency/resolve", response_model=SupervisorEventResponse)
+def resolve_supervisor_emergency(
+    event_id: UUID,
+    context: Annotated[AuthContext, Depends(require_supervisor)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SupervisorEventResponse:
+    try:
+        view = _service(db, context).resolve_emergency(event_id)
+        db.commit()
+        return _event_response(view)
+    except DomainError as exc:
+        db.rollback()
+        _fail(exc)
+
+
 @router.get("/events/{event_id}/evidence")
 def read_supervisor_evidence(
     event_id: UUID,

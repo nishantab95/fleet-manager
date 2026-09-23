@@ -131,13 +131,19 @@ def add_assignment(
     return assignment
 
 
-def event_payload(client_event_uuid: str, *, created_at: datetime | None = None) -> dict[str, str]:
+def event_payload(
+    client_event_uuid: str,
+    *,
+    created_at: datetime | None = None,
+    platform: str = "ANDROID",
+    installation_identifier: str = "android-test-device",
+) -> dict[str, str]:
     return {
         "client_event_uuid": client_event_uuid,
         "event_type": "TRIP_COMPLETE",
         "device_created_at": (created_at or datetime.now(UTC)).isoformat(),
-        "installation_identifier": "android-test-device",
-        "platform": "ANDROID",
+        "installation_identifier": installation_identifier,
+        "platform": platform,
     }
 
 
@@ -315,5 +321,41 @@ def test_driver_device_platform_is_restricted_to_supported_values(
             json={"installation_identifier": "device", "platform": "NOT_A_PLATFORM"},
         )
         assert invalid.status_code == 422
+    finally:
+        client.close()
+
+
+def test_driver_qa_registers_web_device_and_submits_real_event(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    add_assignment(db_session, tenant_records)
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+    )
+    try:
+        device = client.post(
+            "/api/v1/driver/device",
+            json={"installation_identifier": "qa-web-installation", "platform": "WEB"},
+        )
+        assert device.status_code == 200
+        assert device.json()["platform"] == "WEB"
+
+        event = client.post(
+            "/api/v1/driver/events",
+            json=event_payload(
+                str(uuid4()),
+                platform="WEB",
+                installation_identifier="qa-web-installation",
+            ),
+        )
+        assert event.status_code == 200
+        assert event.json()["status"] == "accepted"
     finally:
         client.close()

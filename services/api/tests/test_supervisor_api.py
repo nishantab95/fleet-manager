@@ -440,6 +440,19 @@ def test_km_evidence_is_available_only_to_authorized_supervisor_and_completeness
         assert completeness.json()[0]["has_start_reading"] is True
         assert completeness.json()[0]["has_end_reading"] is False
         assert completeness.json()[0]["unresolved_emergency"] is True
+
+        resolved = supervisor_client.post(
+            f"/api/v1/supervisor/events/{emergency_event_id}/emergency/resolve",
+        )
+        assert resolved.status_code == 200
+        assert resolved.json()["emergency_status"] == "RESOLVED"
+
+        resolved_completeness = supervisor_client.get(
+            f"/api/v1/supervisor/sites/{site.id}/completeness",
+            params={"review_date": datetime.now(UTC).date().isoformat()},
+        )
+        assert resolved_completeness.status_code == 200
+        assert resolved_completeness.json()[0]["unresolved_emergency"] is False
     finally:
         supervisor_client.close()
 

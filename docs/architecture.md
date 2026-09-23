@@ -70,10 +70,11 @@ memberships; owner/admin privilege is not granted through this onboarding
 flow. Assignment creation reuses the existing effective-dated overlap
 constraints and rejects inactive or cross-company resources before creation.
 
-The web shell performs phone OTP, membership selection, owner-role gating, and
-real API calls for each administration area. Access and refresh tokens are
-held only in runtime memory; a reload requires authentication again, and the
-browser never writes a refresh token to localStorage.
+The initial web shell performed phone OTP, membership selection, owner-role
+gating, and real API calls for each administration area. Stage A keeps the
+access token in runtime memory and uses the HttpOnly refresh-cookie adapter
+described below for reload restoration; the browser never writes a refresh
+token to localStorage.
 
 ## Phase 4 driver and sync boundary
 
@@ -91,6 +92,22 @@ company/client UUID idempotency boundary, checks duplicate ownership by driver
 and device, and persists private evidence metadata only after object storage
 accepts the object. `EvidenceObject` keys are server-generated and contain no
 user-provided path segments.
+
+## PC Role Lab web boundary
+
+The web client remains one Next.js application with route-specific workspaces:
+`/login`, `/owner`, `/supervisor`, and `/driver-test`. Shared browser
+authentication keeps the short-lived access token in React runtime state and
+uses the existing `/api/v1/auth/web-refresh` HttpOnly cookie on reload. The
+backend remains the authorization authority; route guards are convenience
+only. Owner reporting calls the existing report APIs, Supervisor is an
+`INTERNAL / QA REFERENCE`, and Driver QA is a development/pilot-only client
+behind `NEXT_PUBLIC_ENABLE_DRIVER_QA=true`.
+
+The Driver QA client registers `DevicePlatform.WEB`, obtains the current
+assignment from `/api/v1/driver/assignment/current`, uploads evidence through
+`/api/v1/driver/evidence`, and submits `/api/v1/driver/events`. It does not
+write PostgreSQL, synthesize acknowledgements, or calculate driver totals.
 
 ## Phase 5 supervisor verification boundary
 

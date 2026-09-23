@@ -124,13 +124,28 @@ controls.
   session data. Text values beginning with `=`, `+`, `-`, or `@` are prefixed
   before cell creation to prevent formula injection.
 
+## PC Role Lab controls
+
+- Browser access tokens remain in React runtime memory only; no access or
+  refresh token is written to localStorage or sessionStorage.
+- Browser refresh uses the existing HttpOnly `fleet_web_refresh` cookie and
+  `/api/v1/auth/web-refresh`, then resolves identity through `/api/v1/auth/me`.
+- `/driver-test` is disabled unless `NEXT_PUBLIC_ENABLE_DRIVER_QA=true` is
+  explicitly configured. A disabled route is not an authentication bypass.
+- Driver QA uses the authenticated `DRIVER` role, the real current assignment,
+  `WEB` device platform, private evidence upload, and the existing event API.
+- Pilot reset accepts only the named `Pilot Construction` fixture, refuses
+  production, requires explicit confirmation, and never deletes arbitrary
+  company data.
+
 ## Deferred controls
 
 Phase 7 adds a hashed source-address OTP cooldown in addition to the
 per-phone cooldown, magic-byte checks for configured image types, explicit
-security headers, production profile validation, and browser HttpOnly refresh
-cookies. A real SMS provider is still an integration boundary and must be
-configured explicitly; the unavailable provider fails closed.
+security headers, and production profile validation. The PC Role Lab already
+uses the browser HttpOnly refresh-cookie adapter described above. A real SMS
+provider is still an integration boundary and must be configured explicitly;
+the unavailable provider fails closed.
 
 Malware scanning/content inspection, automated key rotation, and a full BFF
 that removes the browser access token from JavaScript remain follow-up work.

@@ -309,6 +309,28 @@ class SupervisorService:
             self.session.flush()
         return self._event_view(row)
 
+    def resolve_emergency(self, event_id: UUID) -> SupervisorEvent:
+        row = self._event_row(event_id, lock=True)
+        event, _assignment, _tipper, _site, _membership, _driver = row
+        emergency = self.session.get(EmergencyEvent, event.id)
+        if emergency is None or event.event_type != OperationalEventType.EMERGENCY:
+            raise DomainError("event is not an emergency")
+        if emergency.status == EmergencyStatus.OPEN:
+            raise DomainError("emergency must be acknowledged before it can be resolved")
+        if emergency.status == EmergencyStatus.ACKNOWLEDGED:
+            emergency.status = EmergencyStatus.RESOLVED
+            write_audit_log(
+                self.session,
+                company_id=self.context.company.id,
+                actor_membership_id=self.context.membership.id,
+                action="SUPERVISOR_EMERGENCY_RESOLVED",
+                entity_type="EMERGENCY_EVENT",
+                entity_id=event.id,
+                new_values={"status": emergency.status.value},
+            )
+            self.session.flush()
+        return self._event_view(row)
+
     def evidence_for_event(self, event_id: UUID) -> EvidenceObject:
         view = self._event_view(self._event_row(event_id))
         if view.evidence is None:

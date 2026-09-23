@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OwnerOperations } from "./page";
+import { OwnerOperations } from "../features/owner/OwnerOperations";
 
 const site = {
   site_id: "site-1",

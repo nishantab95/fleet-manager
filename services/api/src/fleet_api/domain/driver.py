@@ -161,10 +161,25 @@ def register_device(
             status=DeviceStatus.ACTIVE,
         )
         session.add(device)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError:
+            # React development mode can replay the registration effect. Treat
+            # the company/installation unique key as an idempotency boundary.
+            session.rollback()
+            device = session.scalar(
+                select(Device).where(
+                    Device.company_id == context.company.id,
+                    Device.installation_identifier == clean_identifier,
+                )
+            )
+            if device is None:
+                raise
     elif device.membership_id != context.membership.id:
         raise TenantConsistencyError("device belongs to another driver")
-    elif device.status != DeviceStatus.ACTIVE:
+    if device.membership_id != context.membership.id:
+        raise TenantConsistencyError("device belongs to another driver")
+    if device.status != DeviceStatus.ACTIVE:
         raise DomainError("device is revoked")
     return device
 

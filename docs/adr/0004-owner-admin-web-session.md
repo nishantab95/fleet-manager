@@ -13,11 +13,14 @@ browser persistent storage would make a later XSS compromise more durable.
 
 ## Decision
 
-The initial shell calls the versioned FastAPI auth and admin APIs directly.
+The initial Phase 3 shell called the versioned FastAPI auth and admin APIs directly.
 After phone verification and membership selection, it keeps access and
 refresh tokens in React runtime state only. It clears that state on logout and
 does not write either token to localStorage, sessionStorage, cookies, or the
 URL. A reload therefore requires a new authentication flow.
+
+This is the historical Phase 3 decision. Stage A supersedes its reload
+behavior with the shared browser session adapter documented in ADR 0006.
 
 The backend remains the authorization authority: the web checks the selected
 role for navigation, while every management endpoint requires the authenticated
@@ -26,8 +29,9 @@ database session.
 
 ## Consequences
 
-This keeps the first administration shell simple and avoids persistent browser
-refresh-token exposure. It is intentionally not a final production browser
-session architecture: a later web hardening phase may add a BFF with
-HttpOnly/Secure/SameSite cookies, CSRF protection, and server-side session
-rotation. Until then, loss of state on reload is an explicit trade-off.
+This kept the first administration shell simple and avoided persistent browser
+refresh-token exposure. Stage A supersedes the reload behavior: the hardened
+browser session adapter now uses the existing HttpOnly/SameSite
+`fleet_web_refresh` cookie through `/api/v1/auth/web-refresh`, while the access
+token remains runtime-only. A full BFF that removes the access token from
+JavaScript and adds CSRF protection remains future hardening work.
