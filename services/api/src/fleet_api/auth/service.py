@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from hashlib import pbkdf2_hmac, sha256
 from hmac import compare_digest
-from secrets import randbelow, token_bytes
+from secrets import token_bytes
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -78,10 +78,6 @@ def _hash_otp(otp: str, salt_hex: str) -> str:
         bytes.fromhex(salt_hex),
         120_000,
     ).hex()
-
-
-def _new_otp() -> str:
-    return f"{randbelow(1_000_000):06d}"
 
 
 def _active_context_for_membership(
@@ -169,7 +165,7 @@ class AuthService:
             if latest_from_ip is not None and latest_from_ip.next_allowed_at > now:
                 raise OtpRateLimitError("OTP request cooldown is active")
 
-        otp = _new_otp()
+        otp = self.otp_provider.generate()
         salt = token_bytes(16).hex()
         challenge = OtpChallenge(
             phone_number=normalized_phone,

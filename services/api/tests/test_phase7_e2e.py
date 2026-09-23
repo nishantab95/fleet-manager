@@ -149,7 +149,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
 
         driver = client.post(
             "/api/v1/admin/people",
-            json={"phone": "+919876543221", "display_name": "Pilot Driver", "role": "DRIVER"},
+            json={"phone": "+919876543299", "display_name": "Pilot Driver", "role": "DRIVER"},
         )
         supervisor = client.post(
             "/api/v1/admin/people",
@@ -183,7 +183,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
         driver_token = _login(
             client,
             provider,
-            phone="+919876543221",
+            phone="+919876543299",
             membership_id=driver_membership_id,
         )
         _auth(client, driver_token)

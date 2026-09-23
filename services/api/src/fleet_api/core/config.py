@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     phone_default_region: str | None = None
     otp_provider: str = "unavailable"
     enable_development_otp: bool = False
+    pilot_otp: str | None = Field(default=None, repr=False)
     otp_ttl_seconds: int = 300
     otp_max_attempts: int = 5
     otp_resend_cooldown_seconds: int = 60
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 600
     pre_session_ttl_seconds: int = 300
     refresh_token_ttl_seconds: int = 2_592_000
+    pilot_driver_phone: str | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":
@@ -56,11 +58,26 @@ class Settings(BaseSettings):
         if self.event_future_skew_seconds < 0:
             raise ValueError("event_future_skew_seconds cannot be negative")
 
-        if self.environment.lower() in {"production", "prod"}:
+        environment = self.environment.lower()
+        otp_provider = self.otp_provider.lower()
+        if self.pilot_otp is not None and (
+            len(self.pilot_otp) != 6 or not self.pilot_otp.isdigit()
+        ):
+            raise ValueError("pilot OTP must be exactly six digits")
+        if otp_provider == "pilot" and environment not in {"development", "pilot", "test"}:
+            raise ValueError(
+                "pilot OTP provider is restricted to local non-production environments"
+            )
+        if otp_provider == "pilot" and not self.pilot_otp:
+            raise ValueError("pilot OTP provider requires FLEET_PILOT_OTP")
+
+        if environment in {"production", "prod"}:
             if not self.jwt_signing_key or len(self.jwt_signing_key) < 32:
                 raise ValueError("production requires a JWT signing key of at least 32 characters")
-            if self.enable_development_otp or self.otp_provider.lower() in {"development", "fake"}:
-                raise ValueError("development OTP provider is forbidden in production")
+            if self.enable_development_otp or otp_provider in {"development", "fake", "pilot"}:
+                raise ValueError("development and pilot OTP providers are forbidden in production")
+            if self.pilot_otp:
+                raise ValueError("pilot OTP material is forbidden in production")
             if self.otp_provider.lower() == "unavailable":
                 raise ValueError("production requires a configured OTP provider")
             if not self.cors_origins or "*" in self.cors_origins:
