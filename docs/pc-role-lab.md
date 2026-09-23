@@ -32,8 +32,10 @@ Normal PC acceptance uses the root launcher. From Windows:
 4. Choose `Start / continue current manual test` for the safe default, or
    choose `Start a FRESH manual test day` and type `RESET PILOT` when you
    intentionally want to clear only Pilot Construction operational test data.
-5. Use the three isolated workspaces opened by Microsoft Edge. If Edge is not
-   available, use the URLs printed by the launcher.
+5. Use the single `PC TEST LAB` control window opened by Microsoft Edge. Choose
+   Driver, Supervisor, or Owner there; each role route still requires its real
+   backend authentication and authorization. If Edge is not available, open
+   `http://localhost:3000/lab` manually.
 
 The launcher validates the local non-production configuration, starts and
 health-checks PostgreSQL and MinIO, applies migrations, reuses the existing
@@ -41,14 +43,24 @@ idempotent pilot bootstrap, starts the API and web app on ports 8000 and 3000,
 and enables Driver QA only in the managed web process. It never resets data on
 normal start or status checks.
 
-Each role opens in its own Microsoft Edge app window under
-`%LOCALAPPDATA%\FleetManagerRoleLab\profiles\owner`, `supervisor`, or `driver-qa`.
-The launcher suppresses Edge first-run tabs and does not touch the normal Edge
-profile. If role windows are already recorded, rerunning the launcher defaults
-to leaving them open rather than creating duplicates. Before authentication,
-each role route carries a cosmetic login hint (`OWNER TEST WORKSPACE`,
-`SUPERVISOR TEST WORKSPACE`, or `DRIVER QA TEST WORKSPACE`); backend membership
-authorization remains unchanged.
+The normal launcher uses one control profile under
+`%LOCALAPPDATA%\FleetManagerRoleLab\profiles\control` and does not open three
+visible role windows. The Lab cards are navigation only: they do not
+impersonate a role or grant access. The existing isolated role-profile routine
+remains available for advanced/manual use under
+`%LOCALAPPDATA%\FleetManagerRoleLab\profiles\owner`, `supervisor`, and
+`driver-qa`; those profiles keep separate browser sessions. The launcher
+suppresses Edge first-run tabs, does not touch the normal Edge profile, and
+does not open a duplicate control window when one is active. Before
+authentication, each role route carries its existing cosmetic login hint;
+backend membership authorization remains unchanged.
+
+The Lab `START FRESH TEST` button never resets data from the browser. It
+explains that you must rerun `python launch.py`, choose option `2`, and type
+`RESET PILOT` at the launcher prompt. System status checks API and database
+readiness directly; Object Store is marked `LAUNCHER` because MinIO readiness
+continues to be checked by launcher option `3` rather than by a new backend
+endpoint.
 
 ## Troubleshooting / Manual startup
 
@@ -92,12 +104,14 @@ npm run dev
 Pop-Location
 ```
 
-All three workspaces use `http://localhost:3000`.
+All workspaces use `http://localhost:3000`; the normal entry point is
+`http://localhost:3000/lab`.
 
-## Three browser profiles
+## Isolated manual browser profiles
 
-The launcher creates separate Microsoft Edge user-data directories so each role
-has its own HttpOnly refresh cookie:
+For advanced/manual three-role testing, the preserved role-workspace routine
+creates separate Microsoft Edge user-data directories so each role has its own
+HttpOnly refresh cookie:
 
 - Browser/Profile A — Owner/Admin, phone `+919876543210`.
 - Browser/Profile B — Supervisor, phone `+919876543222`.

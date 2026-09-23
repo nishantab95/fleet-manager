@@ -90,6 +90,7 @@ ROLE_URLS = {
     "SUPERVISOR": "http://localhost:3000/supervisor",
     "DRIVER QA": "http://localhost:3000/driver-test",
 }
+LAB_URL = "http://localhost:3000/lab"
 ROLE_PHONES = {
     "OWNER": OWNER_PHONE,
     "SUPERVISOR": SUPERVISOR_PHONE,
@@ -489,6 +490,7 @@ class RoleLabLauncher:
         self.tools: CommandTools | None = None
         self.warnings: list[str] = []
         self.browser_workspaces: list[str] = []
+        self.lab_workspace_opened = False
 
     def prepare_config(self) -> None:
         self.env, self.local_env = load_local_environment(self.paths.root)
@@ -1039,6 +1041,48 @@ class RoleLabLauncher:
                 self.paths.state.unlink()
         return stopped
 
+    def open_lab_workspace(self) -> None:
+        state = self._load_state()
+        browser_state = state.get("browser")
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        profile = base / "FleetManagerRoleLab" / "profiles" / "control"
+        profile_in_use = any(
+            (profile / lock_name).exists()
+            for lock_name in ("SingletonLock", "lockfile")
+        )
+        if profile_in_use:
+            self.lab_workspace_opened = True
+            print(
+                "[INFO] Existing PC Test Lab window left untouched; no duplicate window opened."
+            )
+            return
+
+        edge = locate_edge()
+        if edge is None:
+            print(
+                "[INFO] Microsoft Edge was not found; open the PC Test Lab URL manually."
+            )
+            return
+        profile.mkdir(parents=True, exist_ok=True)
+        try:
+            self.popen(
+                build_edge_command(edge, LAB_URL, profile),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as error:
+            print(f"[WARN] Could not open the PC Test Lab in Edge: {error}")
+            return
+        self.lab_workspace_opened = True
+        next_state = dict(browser_state) if isinstance(browser_state, dict) else {}
+        next_state["lab"] = {
+            "opened": True,
+            "profile": str(profile),
+            "url": LAB_URL,
+        }
+        state["browser"] = next_state
+        self._save_state(state)
+
     def open_role_workspaces(self) -> None:
         state = self._load_state()
         previous = state.get("browser")
@@ -1139,21 +1183,15 @@ class RoleLabLauncher:
         print(
             "4. Owner: confirm Trips 4, Distance 120 KM, Diesel 30 L, Pending 0, Missing KM 0."
         )
-        print("\nBrowser workspaces opened:")
-        if self.browser_workspaces:
-            for role in self.browser_workspaces:
-                phone = (
-                    self.env.get(ROLE_PHONES[role], "<configured driver phone>")
-                    if role == "DRIVER QA"
-                    else ROLE_PHONES[role]
-                )
-                print(f"{role}\n{phone}")
+        print("\nBrowser control window:")
+        if self.lab_workspace_opened:
+            print(f"PC TEST LAB\n{LAB_URL}")
             print(
-                "Use the locally configured pilot OTP. Three isolated Edge app windows should be open."
+                "Choose Driver, Supervisor or Owner from the QA navigator; each workspace still requires real authentication."
             )
         else:
             print(
-                "Open the three printed role URLs manually; no Edge windows were opened."
+                "Open the PC Test Lab URL manually; no Edge control window was opened."
             )
         for warning in self.warnings:
             print(f"[WARN] {warning}")
@@ -1167,7 +1205,7 @@ class RoleLabLauncher:
         self.bootstrap_fixture()
         self.ensure_api()
         self.ensure_web()
-        self.open_role_workspaces()
+        self.open_lab_workspace()
         self.print_ready()
 
     def print_status(self) -> None:

@@ -53,9 +53,7 @@ def test_start_continue_does_not_reset(
     )
     monkeypatch.setattr(launcher, "ensure_api", lambda: calls.append("api") or "reused")
     monkeypatch.setattr(launcher, "ensure_web", lambda: calls.append("web") or "reused")
-    monkeypatch.setattr(
-        launcher, "open_role_workspaces", lambda: calls.append("browsers")
-    )
+    monkeypatch.setattr(launcher, "open_lab_workspace", lambda: calls.append("lab"))
     monkeypatch.setattr(launcher, "print_ready", lambda: calls.append("ready"))
     monkeypatch.setattr(launcher, "reset_fixture", lambda: calls.append("reset"))
 
@@ -69,7 +67,7 @@ def test_start_continue_does_not_reset(
         "bootstrap",
         "api",
         "web",
-        "browsers",
+        "lab",
         "ready",
     ]
 
@@ -366,6 +364,49 @@ def test_browser_profile_lock_prevents_duplicates_without_launcher_state(
     assert launcher.browser_workspaces == list(launch.ROLE_URLS)
 
 
+def test_lab_launcher_opens_one_control_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(launch, "locate_edge", lambda: Path("C:/edge/msedge.exe"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        popen=lambda args, **_: commands.append(args),
+    )
+
+    launcher.open_lab_workspace()
+
+    assert len(commands) == 1
+    assert commands[0][1] == f"--app={launch.LAB_URL}"
+    assert any(
+        item.endswith("FleetManagerRoleLab\\profiles\\control") for item in commands[0]
+    )
+    assert launcher.lab_workspace_opened is True
+
+
+def test_repeated_lab_launch_does_not_spawn_duplicate_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    commands: list[list[str]] = []
+    profile = (
+        tmp_path / "local-app-data" / "FleetManagerRoleLab" / "profiles" / "control"
+    )
+    profile.mkdir(parents=True)
+    (profile / "lockfile").write_text("active", encoding="utf-8")
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        popen=lambda args, **_: commands.append(args),
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    monkeypatch.setattr(launch, "locate_edge", lambda: Path("C:/edge/msedge.exe"))
+
+    launcher.open_lab_workspace()
+
+    assert commands == []
+    assert launcher.lab_workspace_opened is True
+
+
 def test_start_calls_browser_launcher_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -381,14 +422,12 @@ def test_start_calls_browser_launcher_once(
     )
     monkeypatch.setattr(launcher, "ensure_api", lambda: calls.append("api") or "reused")
     monkeypatch.setattr(launcher, "ensure_web", lambda: calls.append("web") or "reused")
-    monkeypatch.setattr(
-        launcher, "open_role_workspaces", lambda: calls.append("browsers")
-    )
+    monkeypatch.setattr(launcher, "open_lab_workspace", lambda: calls.append("lab"))
     monkeypatch.setattr(launcher, "print_ready", lambda: calls.append("ready"))
 
     launcher.start()
 
-    assert calls.count("browsers") == 1
+    assert calls.count("lab") == 1
 
 
 def test_unknown_port_process_is_not_safe_to_stop(tmp_path: Path) -> None:

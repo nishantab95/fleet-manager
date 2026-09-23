@@ -74,7 +74,7 @@ export function DriverQaWorkspace() {
   const submitEmergency = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); await submitEvent("EMERGENCY", { category: emergencyCategory, ...(description.trim() ? { description: description.trim() } : {}) }); };
 
   return <main className="admin-shell">
-    <WorkspaceHeader eyebrow="DRIVER QA" title="QA Driver Simulator" onLogout={() => void logout()} />
+    <WorkspaceHeader activeRole="DRIVER" eyebrow="DRIVER QA" qaNavigation title="QA Driver Simulator" onLogout={() => void logout()} />
     <div className="admin-layout single-column"><section className="content">
       <div className="notice error"><strong>QA DRIVER SIMULATOR</strong><br />NON-PRODUCTION WEB TEST CLIENT · INTERNAL / PILOT QA ONLY</div>
       <p className="muted">This browser client uses real authentication, the real DRIVER membership, the current assignment, PostgreSQL-backed APIs, and the real evidence pipeline. It is not the final Driver product.</p>

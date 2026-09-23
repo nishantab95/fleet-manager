@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthProvider";
 import type { Assignment, Person, Site, SupervisorAccess, Tipper } from "../../lib/types";
 import { Badge, Select, WorkspaceHeader } from "../shared/Ui";
 import { OwnerOperations } from "./OwnerOperations";
+import { pcRoleLabEnabled } from "../../lib/auth/config";
 
 type Tab = "operations" | "overview" | "sites" | "tippers" | "people" | "assignments" | "access";
 
@@ -43,7 +44,8 @@ export function OwnerWorkspace() {
   const supervisors = people.filter((person) => person.role === "SUPERVISOR" && person.status === "ACTIVE");
 
   return <main className="admin-shell">
-    <WorkspaceHeader eyebrow="Owner/Admin" title="Administration" onLogout={() => void logout()} />
+    <WorkspaceHeader activeRole="OWNER" eyebrow="Owner/Admin" qaNavigation={pcRoleLabEnabled} title="Administration" onLogout={() => void logout()} />
+    {pcRoleLabEnabled && <nav className="owner-qa-links" aria-label="Owner QA sections"><a href="#owner-operations">Operations</a><a href="#owner-reports">Reports</a><a href="#owner-exceptions">Exceptions</a><a href="#owner-closure">Closure</a><button className="secondary" onClick={() => setTab("overview")} type="button">Administration</button></nav>}
     <div className="admin-layout">
       <nav className="sidebar" aria-label="Administration sections">{(["operations", "overview", "sites", "tippers", "people", "assignments", "access"] as Tab[]).map((item) => <button className={tab === item ? "nav-item selected" : "nav-item"} key={item} onClick={() => setTab(item)} type="button">{item === "access" ? "Supervisor access" : item === "operations" ? "Operations" : item[0].toUpperCase() + item.slice(1)}</button>)}</nav>
       <section className="content">
