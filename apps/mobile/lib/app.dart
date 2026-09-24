@@ -7,6 +7,8 @@ import 'data/api_client.dart';
 import 'data/secure_session_store.dart';
 import 'data/sync_engine.dart';
 import 'domain/driver_models.dart';
+import 'domain/role_models.dart';
+import 'role_screens.dart';
 
 const appVersion = String.fromEnvironment(
   'FLUTTER_BUILD_NAME',
@@ -44,8 +46,17 @@ class FleetManagerApp extends StatelessWidget {
     return MaterialApp(
       title: 'Fleet Manager',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1B6B5A)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF155E63),
+          brightness: Brightness.light,
+        ),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF7F9F8),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(),
+          filled: true,
+          fillColor: Colors.white,
+        ),
       ),
       home: dependencies == null
           ? const _UnavailableScreen()
@@ -66,6 +77,7 @@ class DriverSessionScreen extends StatefulWidget {
 class _DriverSessionScreenState extends State<DriverSessionScreen> {
   DriverAssignment? _assignment;
   DriverDutyState _duty = const DriverDutyState.none();
+  String? _role;
   bool _loading = true;
   String? _error;
 
@@ -82,15 +94,22 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
       return;
     }
     try {
-      await api.registerDevice(
-        installationIdentifier: widget.dependencies.installationIdentifier,
-      );
-      final assignment = await api.currentAssignment();
-      final duty = await api.currentDuty();
+      DriverAssignment? assignment;
+      var duty = const DriverDutyState.none();
+      if (api.session?.role == 'DRIVER') {
+        await api.registerDevice(
+          installationIdentifier: widget.dependencies.installationIdentifier,
+        );
+        assignment = await api.currentAssignment();
+        duty = await api.currentDuty();
+      } else {
+        await api.validateSession();
+      }
       if (mounted) {
         setState(() {
           _assignment = assignment;
           _duty = duty;
+          _role = api.session?.role;
         });
       }
     } on ApiException catch (error) {
@@ -102,12 +121,18 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
     }
   }
 
-  Future<void> _signedIn(DriverAssignment? assignment) async {
-    final duty = await widget.dependencies.api.currentDuty();
+  Future<void> _signedIn(SessionTokens tokens) async {
+    DriverAssignment? assignment;
+    var duty = const DriverDutyState.none();
+    if (tokens.role == 'DRIVER') {
+      assignment = await widget.dependencies.api.currentAssignment();
+      duty = await widget.dependencies.api.currentDuty();
+    }
     if (!mounted) return;
     setState(() {
       _assignment = assignment;
       _duty = duty;
+      _role = tokens.role;
       _error = null;
     });
   }
@@ -121,7 +146,13 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
     }
     await widget.dependencies.sessionStore.clear();
     widget.dependencies.api.clearSession();
-    if (mounted) setState(() => _assignment = null);
+    if (mounted) {
+      setState(() {
+        _assignment = null;
+        _duty = const DriverDutyState.none();
+        _role = null;
+      });
+    }
   }
 
   @override
@@ -136,12 +167,22 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
         onSignedIn: _signedIn,
       );
     }
-    return DriverHomeScreen(
-      dependencies: widget.dependencies,
-      assignment: _assignment,
-      duty: _duty,
-      onSignOut: _signOut,
-    );
+    return switch (_role ?? widget.dependencies.api.session?.role) {
+      'SUPERVISOR' => SupervisorHomeScreen(
+        api: widget.dependencies.api,
+        onSignOut: _signOut,
+      ),
+      'OWNER_ADMIN' => OwnerHomeScreen(
+        api: widget.dependencies.api,
+        onSignOut: _signOut,
+      ),
+      _ => DriverHomeScreen(
+        dependencies: widget.dependencies,
+        assignment: _assignment,
+        duty: _duty,
+        onSignOut: _signOut,
+      ),
+    };
   }
 }
 
@@ -154,7 +195,7 @@ class LoginScreen extends StatefulWidget {
   });
 
   final DriverAppDependencies dependencies;
-  final Future<void> Function(DriverAssignment?) onSignedIn;
+  final Future<void> Function(SessionTokens) onSignedIn;
   final String? initialError;
 
   @override
@@ -166,7 +207,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _otpController = TextEditingController();
   String? _challengeId;
   String? _preSessionToken;
-  List<MembershipOption> _driverMemberships = const [];
+  List<MembershipOption> _memberships = const [];
+  String _selectedRole = 'DRIVER';
   String? _error;
   bool _busy = false;
 
@@ -187,6 +229,7 @@ class _LoginScreenState extends State<LoginScreen> {
     await _run(() async {
       _challengeId = await widget.dependencies.api.requestOtp(
         _phoneController.text.trim(),
+        requestedRole: _selectedRole,
       );
     });
   }
@@ -202,11 +245,11 @@ class _LoginScreenState extends State<LoginScreen> {
       final memberships = await widget.dependencies.api.memberships(
         _preSessionToken!,
       );
-      _driverMemberships = memberships
-          .where((item) => item.role == 'DRIVER')
+      _memberships = memberships
+          .where((item) => item.role == _selectedRole)
           .toList();
-      if (_driverMemberships.length == 1) {
-        await _selectMembership(_driverMemberships.single);
+      if (_memberships.length == 1) {
+        await _selectMembership(_memberships.single);
       }
       if (mounted) setState(() {});
     });
@@ -218,11 +261,12 @@ class _LoginScreenState extends State<LoginScreen> {
       membershipId: membership.membershipId,
     );
     await widget.dependencies.sessionStore.save(tokens);
-    await widget.dependencies.api.registerDevice(
-      installationIdentifier: widget.dependencies.installationIdentifier,
-    );
-    final assignment = await widget.dependencies.api.currentAssignment();
-    await widget.onSignedIn(assignment);
+    if (tokens.role == 'DRIVER') {
+      await widget.dependencies.api.registerDevice(
+        installationIdentifier: widget.dependencies.installationIdentifier,
+      );
+    }
+    await widget.onSignedIn(tokens);
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -242,17 +286,76 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final hasChallenge = _challengeId != null;
-    final hasMembershipChoice = _driverMemberships.isNotEmpty;
+    final hasMembershipChoice = _memberships.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Driver sign in')),
+      appBar: AppBar(
+        title: const Text('Fleet Manager'),
+        actions: isPilotBuild
+            ? [
+                IconButton(
+                  tooltip: 'Server settings',
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: () => _showPilotServerSettings(context),
+                ),
+              ]
+            : null,
+      ),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          const Text(
-            'Use your registered phone number to access today\'s assignment.',
-            style: TextStyle(fontSize: 18),
+          Row(
+            children: [
+              if (isPilotBuild)
+                Text(
+                  'PILOT / TEST',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              const Spacer(),
+              Flexible(
+                child: Text(
+                  widget.dependencies.api.baseUrl,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 18),
+          Text('Sign in', style: Theme.of(context).textTheme.headlineMedium),
+          const SizedBox(height: 6),
+          const Text(
+            'Choose your role, then use your registered phone number.',
+          ),
+          const SizedBox(height: 20),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(
+                value: 'DRIVER',
+                label: Text('DRIVER'),
+                icon: Icon(Icons.drive_eta),
+              ),
+              ButtonSegment(
+                value: 'SUPERVISOR',
+                label: Text('SUPERVISOR'),
+                icon: Icon(Icons.fact_check_outlined),
+              ),
+              ButtonSegment(
+                value: 'OWNER_ADMIN',
+                label: Text('OWNER'),
+                icon: Icon(Icons.dashboard_outlined),
+              ),
+            ],
+            selected: {_selectedRole},
+            onSelectionChanged: _busy
+                ? null
+                : (value) => setState(() {
+                    _selectedRole = value.first;
+                    _challengeId = null;
+                    _memberships = const [];
+                  }),
+          ),
+          const SizedBox(height: 18),
           TextField(
             controller: _phoneController,
             keyboardType: TextInputType.phone,
@@ -261,7 +364,7 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(height: 12),
           FilledButton(
             onPressed: _busy ? null : _requestOtp,
-            child: const Text('REQUEST OTP'),
+            child: const Text('SEND OTP'),
           ),
           if (hasChallenge) ...[
             const SizedBox(height: 20),
@@ -273,13 +376,13 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             FilledButton(
               onPressed: _busy ? null : _verifyOtp,
-              child: const Text('VERIFY OTP'),
+              child: const Text('CONTINUE'),
             ),
           ],
           if (hasMembershipChoice) ...[
             const SizedBox(height: 20),
-            const Text('Choose your driver company'),
-            for (final membership in _driverMemberships)
+            const Text('Choose your company'),
+            for (final membership in _memberships)
               ListTile(
                 title: Text(membership.companyName),
                 subtitle: Text(membership.role),
@@ -298,6 +401,83 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _showPilotServerSettings(BuildContext context) async {
+    final controller = TextEditingController(
+      text: widget.dependencies.api.baseUrl,
+    );
+    var message = '';
+    var testing = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Pilot server'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: 'Server URL',
+                  hintText: 'http://192.168.1.20:8000',
+                ),
+              ),
+              if (message.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(message),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('CANCEL'),
+            ),
+            OutlinedButton(
+              onPressed: testing
+                  ? null
+                  : () async {
+                      setDialogState(() => testing = true);
+                      try {
+                        widget.dependencies.api.setBaseUrl(controller.text);
+                        final connected = await widget.dependencies.api
+                            .testConnection();
+                        setDialogState(
+                          () => message = connected
+                              ? 'Connected to Fleet Manager server.'
+                              : 'Cannot reach Fleet Manager server.',
+                        );
+                      } on FormatException catch (error) {
+                        setDialogState(() => message = error.message);
+                      } finally {
+                        setDialogState(() => testing = false);
+                      }
+                    },
+              child: Text(testing ? 'TESTING…' : 'TEST CONNECTION'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                try {
+                  widget.dependencies.api.setBaseUrl(controller.text);
+                  await widget.dependencies.sessionStore.savePilotBaseUrl(
+                    widget.dependencies.api.baseUrl,
+                  );
+                  if (dialogContext.mounted) Navigator.pop(dialogContext);
+                  if (mounted) setState(() {});
+                } on FormatException catch (error) {
+                  setDialogState(() => message = error.message);
+                }
+              },
+              child: const Text('SAVE'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
   }
 }
 
@@ -349,7 +529,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       final duty = await widget.dependencies.api.currentDuty();
       if (mounted) setState(() => _duty = duty);
-    } on ApiException {
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) {
+        await widget.onSignOut();
+      }
       // Offline mode keeps the last server-confirmed duty state.
     }
   }
@@ -366,7 +549,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       await _refreshQueue();
       await _refreshDuty();
       final syncError = await widget.dependencies.sync.lastSyncErrorMessage();
-      if (mounted) setState(() => _message = syncError ?? 'Sync complete');
+      final pending = await widget.dependencies.sync.pendingCount();
+      if (mounted) {
+        setState(() {
+          _message = pending > 0
+              ? (syncError == null
+                    ? '$pending event(s) pending. Retry when connected.'
+                    : 'Needs attention: $syncError')
+              : 'Synced';
+        });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -399,9 +591,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       await _refreshQueue();
       if (eventType == DriverEventType.kmReading) await _refreshDuty();
       if (mounted) {
-        setState(
-          () => _message = 'Saved on this device. It will sync when connected.',
-        );
+        final label = switch (eventType) {
+          DriverEventType.tripComplete => 'Trip recorded',
+          DriverEventType.diesel => 'Diesel recorded',
+          DriverEventType.emergency => 'Emergency alert sent.',
+          DriverEventType.kmReading => 'KM reading saved',
+        };
+        setState(() => _message = label);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -420,10 +616,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     if (result == null) {
       return;
     }
-    final photo = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 85,
-    );
+    final photo = await _pickEvidence(mustChoose: true);
     if (photo == null) {
       return;
     }
@@ -445,10 +638,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     if (litres == null) {
       return;
     }
-    final photo = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 85,
-    );
+    final photo = await _pickEvidence(mustChoose: false);
     await _queue(
       DriverEventType.diesel,
       payload: {'litres': litres},
@@ -457,6 +647,36 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _sendEmergency() => _queue(DriverEventType.emergency);
+
+  Future<XFile?> _pickEvidence({required bool mustChoose}) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose Existing Photo'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            if (!mustChoose)
+              ListTile(
+                leading: const Icon(Icons.skip_next_outlined),
+                title: const Text('Continue Without Photo'),
+                onTap: () => Navigator.pop(context),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return null;
+    return _picker.pickImage(source: source, imageQuality: 85);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -508,35 +728,45 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           const SizedBox(height: 20),
           Text(
             _pendingCount == 0
-                ? 'All events synced'
-                : '$_pendingCount event(s) waiting to sync',
+                ? 'Synced'
+                : '$_pendingCount event(s) pending sync',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
           Text(dutyLabel, textAlign: TextAlign.center),
           const SizedBox(height: 16),
-          _ActionButton(
-            label: 'TRIP COMPLETE',
-            icon: Icons.check_circle_outline,
-            onPressed: canOperate
-                ? () => _queue(DriverEventType.tripComplete)
-                : null,
-          ),
-          _ActionButton(
-            label: 'KM READING',
-            icon: Icons.speed,
-            onPressed: canReadKm ? _showKmDialog : null,
-          ),
-          _ActionButton(
-            label: 'DIESEL',
-            icon: Icons.local_gas_station,
-            onPressed: canOperate ? _showDieselDialog : null,
-          ),
-          _ActionButton(
-            label: 'EMERGENCY',
-            icon: Icons.warning_amber,
-            danger: true,
-            onPressed: canCapture && !_busy ? _sendEmergency : null,
+          GridView.count(
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.42,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              _ActionButton(
+                label: 'TRIP COMPLETE',
+                icon: Icons.check_circle_outline,
+                onPressed: canOperate
+                    ? () => _queue(DriverEventType.tripComplete)
+                    : null,
+              ),
+              _ActionButton(
+                label: 'KM READING',
+                icon: Icons.speed,
+                onPressed: canReadKm ? _showKmDialog : null,
+              ),
+              _ActionButton(
+                label: 'DIESEL',
+                icon: Icons.local_gas_station,
+                onPressed: canOperate ? _showDieselDialog : null,
+              ),
+              _ActionButton(
+                label: 'EMERGENCY',
+                icon: Icons.warning_amber,
+                danger: true,
+                onPressed: canCapture && !_busy ? _sendEmergency : null,
+              ),
+            ],
           ),
           if (_message != null) ...[
             const SizedBox(height: 16),

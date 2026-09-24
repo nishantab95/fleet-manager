@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -188,6 +189,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
         )
         _auth(client, driver_token)
         created_at = datetime.now(UTC)
+        reporting_date = created_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
 
         def submit_with_evidence(event_type: str, **extra: object) -> str:
             event_id = str(uuid4())
@@ -262,7 +264,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             membership_id=str(owner_membership.id),
         )
         _auth(client, owner_token)
-        report_date = created_at.date().isoformat()
+        report_date = reporting_date.isoformat()
         dashboard = client.get(
             "/api/v1/reports/dashboard",
             params={"operational_date": report_date},

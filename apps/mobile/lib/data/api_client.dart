@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
 import '../domain/driver_models.dart';
+import '../domain/role_models.dart';
 
 abstract class DriverRemoteApi {
   Future<void> registerDevice({required String installationIdentifier});
@@ -46,7 +48,7 @@ class ApiClient implements DriverRemoteApi {
               .replaceFirst(RegExp(r'/$'), ''),
       _client = client ?? http.Client();
 
-  final String _baseUrl;
+  String _baseUrl;
   final http.Client _client;
   SessionTokens? _tokens;
 
@@ -54,10 +56,38 @@ class ApiClient implements DriverRemoteApi {
 
   SessionTokens? get session => _tokens;
 
+  String get baseUrl => _baseUrl;
+
+  void setBaseUrl(String value) {
+    final normalized = value.trim().replaceFirst(RegExp(r'/$'), '');
+    if (normalized.isEmpty) throw const FormatException('Server URL is empty');
+    final parsed = Uri.tryParse(normalized);
+    if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) {
+      throw const FormatException(
+        'Enter a full server URL, for example http://192.168.1.20:8000',
+      );
+    }
+    _baseUrl = normalized;
+  }
+
+  Future<bool> testConnection() async {
+    try {
+      final response = await _client.get(_uri('/health'));
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } on SocketException {
+      return false;
+    } on Object {
+      return false;
+    }
+  }
+
   void clearSession() => _tokens = null;
 
-  Future<String> requestOtp(String phone) async {
-    final body = await _post('/api/v1/auth/otp/request', {'phone': phone});
+  Future<String> requestOtp(String phone, {String? requestedRole}) async {
+    final body = await _post('/api/v1/auth/otp/request', {
+      'phone': phone,
+      if (requestedRole != null) 'requested_role': requestedRole,
+    });
     return body['challenge_id'] as String;
   }
 
@@ -113,6 +143,10 @@ class ApiClient implements DriverRemoteApi {
     clearSession();
   }
 
+  Future<void> validateSession() async {
+    await _request('GET', '/api/v1/auth/me', authenticated: true);
+  }
+
   Future<DriverAssignment?> currentAssignment() async {
     final response = await _request(
       'GET',
@@ -130,6 +164,158 @@ class ApiClient implements DriverRemoteApi {
       authenticated: true,
     );
     return DriverDutyState.fromJson(_json(response));
+  }
+
+  Future<List<SupervisorSite>> supervisorSites() async {
+    final response = await _request(
+      'GET',
+      '/api/v1/supervisor/sites',
+      authenticated: true,
+    );
+    return (_jsonList(response)).map(SupervisorSite.fromJson).toList();
+  }
+
+  Future<List<SupervisorEvent>> supervisorEvents(
+    String siteId, {
+    String? verificationStatus,
+    DateTime? reviewDate,
+  }) async {
+    final query = <String, String>{
+      if (verificationStatus != null) 'verification_status': verificationStatus,
+      if (reviewDate != null) 'review_date': _dateParam(reviewDate),
+      'limit': '200',
+    };
+    final suffix = query.isEmpty
+        ? ''
+        : '?${query.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&')}';
+    final response = await _request(
+      'GET',
+      '/api/v1/supervisor/sites/$siteId/events$suffix',
+      authenticated: true,
+    );
+    return _jsonList(response).map(SupervisorEvent.fromJson).toList();
+  }
+
+  Future<List<CompletenessItem>> supervisorCompleteness(
+    String siteId, {
+    DateTime? reviewDate,
+  }) async {
+    final date = _dateParam(reviewDate ?? DateTime.now());
+    final response = await _request(
+      'GET',
+      '/api/v1/supervisor/sites/$siteId/completeness?review_date=$date',
+      authenticated: true,
+    );
+    return _jsonList(response).map(CompletenessItem.fromJson).toList();
+  }
+
+  Future<SupervisorEvent> verifySupervisorEvent(
+    String eventId, {
+    required String decision,
+    String? reason,
+  }) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/supervisor/events/$eventId/verify',
+      authenticated: true,
+      body: {
+        'decision': decision,
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+        'expected_status': 'PENDING_VERIFICATION',
+      },
+    );
+    return SupervisorEvent.fromJson(_json(response));
+  }
+
+  Future<SupervisorEvent> acknowledgeEmergency(String eventId) async =>
+      _supervisorEmergencyAction(eventId, 'acknowledge');
+
+  Future<SupervisorEvent> resolveEmergency(String eventId) async =>
+      _supervisorEmergencyAction(eventId, 'resolve');
+
+  Future<SupervisorEvent> _supervisorEmergencyAction(
+    String eventId,
+    String action,
+  ) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/supervisor/events/$eventId/emergency/$action',
+      authenticated: true,
+    );
+    return SupervisorEvent.fromJson(_json(response));
+  }
+
+  Future<OwnerDashboard> ownerDashboard({DateTime? date}) async {
+    final suffix = date == null ? '' : '?operational_date=${_dateParam(date)}';
+    final response = await _request(
+      'GET',
+      '/api/v1/reports/dashboard$suffix',
+      authenticated: true,
+    );
+    return OwnerDashboard.fromJson(_json(response));
+  }
+
+  Future<List<OwnerDutyReport>> ownerDuty({DateTime? date}) async {
+    final suffix = date == null ? '' : '?operational_date=${_dateParam(date)}';
+    final response = await _request(
+      'GET',
+      '/api/v1/reports/duty$suffix',
+      authenticated: true,
+    );
+    return _jsonList(response).map(OwnerDutyReport.fromJson).toList();
+  }
+
+  Future<List<OwnerTipperReport>> ownerTipperDaily(
+    String tipperId, {
+    DateTime? date,
+  }) async {
+    final suffix = date == null ? '' : '?operational_date=${_dateParam(date)}';
+    final response = await _request(
+      'GET',
+      '/api/v1/reports/tippers/$tipperId/daily$suffix',
+      authenticated: true,
+    );
+    return _jsonList(response).map(OwnerTipperReport.fromJson).toList();
+  }
+
+  Future<List<OwnerTipperReport>> ownerSiteDaily(
+    String siteId, {
+    DateTime? date,
+  }) async {
+    final suffix = date == null ? '' : '?operational_date=${_dateParam(date)}';
+    final response = await _request(
+      'GET',
+      '/api/v1/reports/sites/$siteId/daily$suffix',
+      authenticated: true,
+    );
+    final body = _json(response);
+    final tippers = body['tippers'];
+    if (tippers is! List) return const [];
+    return tippers
+        .whereType<Map<String, dynamic>>()
+        .map(OwnerTipperReport.fromJson)
+        .toList();
+  }
+
+  Future<Uint8List> evidenceBytes(
+    String eventId, {
+    required String role,
+  }) async {
+    final path = role == 'SUPERVISOR'
+        ? '/api/v1/supervisor/events/$eventId/evidence'
+        : '/api/v1/reports/events/$eventId/evidence';
+    final response = await _request('GET', path, authenticated: true);
+    return response.bodyBytes;
+  }
+
+  Future<Uint8List> dailyExcel({DateTime? date}) async {
+    final suffix = date == null ? '' : '?operational_date=${_dateParam(date)}';
+    final response = await _request(
+      'GET',
+      '/api/v1/reports/daily.xlsx$suffix',
+      authenticated: true,
+    );
+    return response.bodyBytes;
   }
 
   @override
@@ -231,6 +417,16 @@ class ApiClient implements DriverRemoteApi {
     if (response.body.isEmpty) return <String, dynamic>{};
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
+
+  static List<Map<String, dynamic>> _jsonList(http.Response response) {
+    if (response.body.isEmpty) return const [];
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List) return const [];
+    return decoded.whereType<Map<String, dynamic>>().toList();
+  }
+
+  static String _dateParam(DateTime date) =>
+      date.toIso8601String().substring(0, 10);
 
   static void _check(http.Response response) {
     if (response.statusCode >= 200 && response.statusCode < 300) return;

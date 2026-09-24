@@ -27,6 +27,24 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["appLabel"] = "Fleet Manager"
+        manifestPlaceholders["usesCleartextTraffic"] = "false"
+    }
+
+    flavorDimensions += "environment"
+    productFlavors {
+        create("pilot") {
+            dimension = "environment"
+            applicationIdSuffix = ".pilot"
+            versionNameSuffix = "-pilot"
+            manifestPlaceholders["appLabel"] = "Fleet Manager Pilot"
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+        }
+        create("production") {
+            dimension = "environment"
+            manifestPlaceholders["appLabel"] = "Fleet Manager"
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
+        }
     }
 
     buildTypes {

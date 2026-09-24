@@ -10,6 +10,14 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final sessionStore = SecureSessionStore();
   final api = ApiClient();
+  final pilotBaseUrl = await sessionStore.readPilotBaseUrl();
+  if (pilotBaseUrl != null && pilotBaseUrl.isNotEmpty) {
+    try {
+      api.setBaseUrl(pilotBaseUrl);
+    } on FormatException {
+      // Ignore a stale/invalid local setting and keep the compile-time default.
+    }
+  }
   final tokens = await sessionStore.read();
   if (tokens != null) api.setSession(tokens);
   final installationIdentifier = await sessionStore.installationIdentifier();
