@@ -32,9 +32,9 @@ export function SupervisorShell(props: SupervisorShellProps) {
   const { accessToken, apiRequest, setError } = props;
   const call = useCallback(<T,>(path: string, options: RequestInit = {}) => apiRequest ? apiRequest<T>(path, options) : request<T>(path, options, accessToken), [accessToken, apiRequest]);
   const activeSiteId = props.sites.some((site) => site.id === selectedSiteId) ? selectedSiteId : props.sites[0]?.id ?? "";
-  const pendingTrips = completeness.filter((item) => item.pending_trip_verification).length;
-  const pendingKm = completeness.filter((item) => !item.has_start_reading || !item.has_end_reading).length;
-  const pendingDiesel = completeness.filter((item) => item.pending_diesel_verification).length;
+  const pendingTrips = events.filter((event) => event.event_type === "TRIP_COMPLETE" && event.verification_status === "PENDING_VERIFICATION").length;
+  const pendingKm = events.filter((event) => event.event_type === "KM_READING" && event.verification_status === "PENDING_VERIFICATION").length;
+  const pendingDiesel = events.filter((event) => event.event_type === "DIESEL" && event.verification_status === "PENDING_VERIFICATION").length;
   const emergencies = events.filter((event) => event.emergency_status === "OPEN" || event.emergency_status === "ACKNOWLEDGED").length;
 
   useEffect(() => {

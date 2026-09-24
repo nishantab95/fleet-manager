@@ -191,7 +191,7 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
             DAY_START + timedelta(hours=16),
             litres="5.000",
         )
-        create_event(
+        emergency = create_event(
             driver,
             storage,
             "EMERGENCY",
@@ -286,6 +286,30 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         assert workbook["Daily Summary"].auto_filter.ref
     finally:
         owner.close()
+
+    supervisor_resolver = supervisor_client(db_session, tenant_records)
+    try:
+        acknowledged = supervisor_resolver.post(
+            f"/api/v1/supervisor/events/{emergency}/emergency/acknowledge"
+        )
+        assert acknowledged.status_code == 200
+        resolved = supervisor_resolver.post(
+            f"/api/v1/supervisor/events/{emergency}/emergency/resolve"
+        )
+        assert resolved.status_code == 200
+    finally:
+        supervisor_resolver.close()
+
+    owner_after_resolution = owner_client(db_session, tenant_records, storage=storage)
+    try:
+        resolved_dashboard = owner_after_resolution.get(
+            "/api/v1/reports/dashboard", params={"operational_date": REPORT_DATE.isoformat()}
+        )
+        assert resolved_dashboard.status_code == 200
+        assert resolved_dashboard.json()["pending_verification_count"] == 2
+        assert resolved_dashboard.json()["unresolved_emergency_count"] == 0
+    finally:
+        owner_after_resolution.close()
 
     driver_again = create_driver_client(db_session, tenant_records, storage)
     try:

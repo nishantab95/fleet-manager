@@ -797,6 +797,10 @@ class ReportingService:
                     1
                     for event in row.events
                     if event.verification_status == VerificationStatus.PENDING_VERIFICATION
+                    and not (
+                        event.event_type == OperationalEventType.EMERGENCY
+                        and event.emergency_status in {"RESOLVED", "CLOSED"}
+                    )
                 )
                 for row in rows
             ),
