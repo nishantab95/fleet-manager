@@ -257,6 +257,8 @@ class SupervisorService:
             raise DomainError("a reason is required for rejection or dispute")
         row = self._event_row(event_id, lock=True)
         event = row[0]
+        if event.event_type == OperationalEventType.EMERGENCY:
+            raise DomainError("emergency uses acknowledge and resolve, not verification")
         if event.verification_status != expected_status:
             raise ConflictError("event verification changed; reload before deciding")
         record_verification(

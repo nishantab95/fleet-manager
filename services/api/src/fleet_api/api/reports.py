@@ -102,6 +102,7 @@ def _event_response(event: ReportEvent) -> ReportEventResponse:
         site_id=event.site_id,
         site_name=event.site_name,
         driver_name=event.driver_name,
+        driver_phone=event.driver_phone,
         supervisor_name=event.supervisor_name,
         device_created_at=event.device_created_at,
         server_received_at=event.server_received_at,

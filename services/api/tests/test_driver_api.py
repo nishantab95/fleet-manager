@@ -17,6 +17,7 @@ from fleet_api.db.models import (
     Assignment,
     Company,
     CompanyMembership,
+    EmergencyEvent,
     OperationalEvent,
     Site,
     Tipper,
@@ -357,5 +358,48 @@ def test_driver_qa_registers_web_device_and_submits_real_event(
         )
         assert event.status_code == 200
         assert event.json()["status"] == "accepted"
+    finally:
+        client.close()
+
+
+def test_one_tap_emergency_needs_no_category_or_evidence_and_deduplicates_rapid_repeat(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    add_assignment(db_session, tenant_records)
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+    )
+    timestamp = datetime.now(UTC)
+    first_uuid = str(uuid4())
+    second_uuid = str(uuid4())
+    try:
+        first = client.post(
+            "/api/v1/driver/events",
+            json={**event_payload(first_uuid, created_at=timestamp), "event_type": "EMERGENCY"},
+        )
+        assert first.status_code == 200
+        assert first.json()["status"] == "accepted"
+
+        repeat = client.post(
+            "/api/v1/driver/events",
+            json={**event_payload(second_uuid, created_at=timestamp), "event_type": "EMERGENCY"},
+        )
+        assert repeat.status_code == 200
+        assert repeat.json()["status"] == "already_accepted"
+        assert repeat.json()["event_id"] == first.json()["event_id"]
+        emergency = db_session.scalar(
+            select(EmergencyEvent).where(EmergencyEvent.event_id == first.json()["event_id"])
+        )
+        assert emergency is not None
+        assert emergency.category is None
+        assert emergency.description is None
+        assert len(db_session.scalars(select(EmergencyEvent)).all()) == 1
     finally:
         client.close()

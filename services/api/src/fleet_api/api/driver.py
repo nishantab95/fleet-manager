@@ -4,7 +4,6 @@ from typing import Annotated, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import (
@@ -22,7 +21,6 @@ from fleet_api.api.schemas import (
 )
 from fleet_api.auth.service import AuthContext
 from fleet_api.core.config import Settings
-from fleet_api.db.models import OperationalEvent
 from fleet_api.db.session import get_db
 from fleet_api.domain.driver import (
     create_driver_event,
@@ -125,12 +123,6 @@ def submit_driver_event(
             installation_identifier=payload.installation_identifier,
             platform=payload.platform,
         )
-        existing = db.scalar(
-            select(OperationalEvent).where(
-                OperationalEvent.company_id == context.company.id,
-                OperationalEvent.client_event_uuid == payload.client_event_uuid,
-            )
-        )
         result = create_driver_event(
             db,
             context,
@@ -150,7 +142,7 @@ def submit_driver_event(
         return DriverEventResponse(
             event_id=result.event.id,
             client_event_uuid=payload.client_event_uuid,
-            status="already_accepted" if existing is not None else "accepted",
+            status="already_accepted" if result.duplicate else "accepted",
             verification_status=result.event.verification_status.value,
         )
     except DomainError as exc:

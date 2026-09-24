@@ -16,6 +16,7 @@ from fleet_api.db.models import (
     Assignment,
     CompanyMembership,
     Device,
+    EmergencyEvent,
     EvidenceObject,
     OperationalEvent,
     Site,
@@ -27,6 +28,7 @@ from fleet_api.domain.enums import (
     DevicePlatform,
     DeviceStatus,
     EmergencyCategory,
+    EmergencyStatus,
     KmReadingType,
     MembershipRole,
     OperationalEventType,
@@ -248,6 +250,33 @@ def create_driver_event(
         ):
             raise TenantConsistencyError("client event UUID is not owned by this driver")
         return DriverEventResult(event=existing, duplicate=True)
+    if event_type == OperationalEventType.EMERGENCY:
+        # Emergency is a one-tap signal. A second client UUID inside the short
+        # retry window is treated as the same signal so rapid repeat taps do
+        # not create duplicate alerts. Deliberate later emergencies remain
+        # separate events, and the normal UUID idempotency boundary is kept.
+        duplicate_cutoff = device_created_at - timedelta(seconds=10)
+        recent_emergencies = session.scalars(
+            select(OperationalEvent)
+            .where(
+                OperationalEvent.company_id == context.company.id,
+                OperationalEvent.assignment_id == assignment.id,
+                OperationalEvent.event_type == OperationalEventType.EMERGENCY,
+            )
+            .order_by(OperationalEvent.device_created_at.desc(), OperationalEvent.id.desc())
+        ).all()
+        recent_emergency = next(
+            (
+                candidate
+                for candidate in recent_emergencies
+                if duplicate_cutoff <= candidate.device_created_at <= device_created_at
+                if (emergency := session.get(EmergencyEvent, candidate.id)) is not None
+                and emergency.status in {EmergencyStatus.OPEN, EmergencyStatus.ACKNOWLEDGED}
+            ),
+            None,
+        )
+        if recent_emergency is not None:
+            return DriverEventResult(event=recent_emergency, duplicate=True)
     _evidence_for_event(
         session,
         context=context,
@@ -292,8 +321,6 @@ def create_driver_event(
             device_id=device.id,
         )
     elif event_type == OperationalEventType.EMERGENCY:
-        if category is None:
-            raise DomainError("emergency category is required")
         create_emergency_event(
             session,
             company_id=context.company.id,

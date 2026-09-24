@@ -122,8 +122,8 @@ class EmergencyEvent(Base):
     event_id: Mapped[UUID] = mapped_column(
         ForeignKey("operational_events.id", ondelete="CASCADE"), primary_key=True
     )
-    category: Mapped[EmergencyCategory] = mapped_column(
-        SAEnum(EmergencyCategory, name="emergency_category_enum"), nullable=False
+    category: Mapped[EmergencyCategory | None] = mapped_column(
+        SAEnum(EmergencyCategory, name="emergency_category_enum"), nullable=True
     )
     status: Mapped[EmergencyStatus] = mapped_column(
         SAEnum(EmergencyStatus, name="emergency_status_enum"), nullable=False

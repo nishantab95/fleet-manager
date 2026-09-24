@@ -58,6 +58,7 @@ def _event_response(view: SupervisorEvent) -> SupervisorEventResponse:
         event_type=view.event.event_type,
         assignment_id=view.assignment.id,
         driver_name=view.driver.display_name,
+        driver_phone=(view.driver.phone_number if view.emergency is not None else None),
         tipper_registration_number=view.tipper.registration_number,
         site_id=view.site.id,
         site_name=view.site.name,

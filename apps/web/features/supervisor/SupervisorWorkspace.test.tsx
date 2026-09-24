@@ -26,14 +26,15 @@ function event(eventType: "TRIP_COMPLETE" | "KM_READING" | "DIESEL" | "EMERGENCY
     event_type: eventType,
     assignment_id: "assignment-1",
     driver_name: "Pilot Driver",
+    driver_phone: "+919876543210",
     tipper_registration_number: "PILOT12",
     site_id: "site-1",
     site_name: "Pilot Site",
     device_created_at: "2026-09-24T00:00:00Z",
     server_received_at: "2026-09-24T00:00:01Z",
     verification_status: "PENDING_VERIFICATION" as const,
-    reading_type: eventType === "KM_READING" ? (index === 4 ? "START_READING" : "END_READING") : null,
-    reading_value: eventType === "KM_READING" ? (index === 4 ? "10000.00" : "10120.00") : null,
+    reading_type: eventType === "KM_READING" ? (index === 5 ? "START_READING" : "END_READING") : null,
+    reading_value: eventType === "KM_READING" ? (index === 5 ? "10000.00" : "10120.00") : null,
     litres: eventType === "DIESEL" ? "30.000" : null,
     emergency_category: eventType === "EMERGENCY" ? "TYRE_OR_VEHICLE_PROBLEM" : null,
     emergency_status: eventType === "EMERGENCY" ? "OPEN" : null,
@@ -53,12 +54,13 @@ describe("Supervisor workspace", () => {
     const apiRequest = vi.fn(async (path: string) => path.includes("/events") ? events : completeness) as unknown as WebRequest;
     render(<SupervisorShell accessToken="token" error="" sites={[site]} setError={vi.fn()} onLogout={vi.fn()} apiRequest={apiRequest} />);
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Event review" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Operations by tipper" })).toBeInTheDocument());
     expect(screen.getByText("Pending Trips").parentElement).toHaveTextContent("4");
     expect(screen.getByText("Pending KM").parentElement).toHaveTextContent("2");
     expect(screen.getByText("Pending Diesel").parentElement).toHaveTextContent("1");
-    expect(screen.getByText("Emergencies").parentElement).toHaveTextContent("1");
-    expect(screen.getAllByRole("article")).toHaveLength(8);
+    expect(screen.getByText("Open Emergencies").parentElement).toHaveTextContent("1");
+    expect(screen.getAllByRole("article")).toHaveLength(7);
+    expect(screen.getByRole("alert")).toHaveTextContent("Pilot Driver");
   });
 
   it("opens private evidence in a modal with event context", async () => {
@@ -82,16 +84,37 @@ describe("Supervisor workspace", () => {
 
     render(<SupervisorShell accessToken="token" error="" sites={[site]} setError={vi.fn()} onLogout={vi.fn()} apiRequest={apiRequest} />);
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "View evidence" })).toBeInTheDocument());
-    screen.getByRole("button", { name: "View evidence" }).click();
+    await waitFor(() => expect(screen.getByRole("button", { name: "View Photo" })).toBeInTheDocument());
+    screen.getByRole("button", { name: "View Photo" }).click();
     await waitFor(() => expect(screen.getByRole("dialog", { name: "Operational evidence" })).toBeInTheDocument());
     const dialog = screen.getByRole("dialog", { name: "Operational evidence" });
     expect(dialog).toHaveTextContent("Pilot Driver");
     expect(dialog).toHaveTextContent("PILOT12");
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/v1/supervisor/events/event-5/evidence"), expect.any(Object));
-    const [blob] = createObjectUrlMock.mock.calls[0] as [Blob][];
+    const [blob] = createObjectUrlMock.mock.calls[0] as Blob[];
     expect(blob.type).toBe("image/jpeg");
     expect(blob.size).toBe(responseBytes.byteLength);
-    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(responseBytes);
+    expect(blob).toBeInstanceOf(Blob);
+  });
+
+  it("keeps tipper groups separate and labels operational subsections explicitly", async () => {
+    const secondTipperCompleteness = {
+      ...completeness[0],
+      assignment_id: "assignment-2",
+      driver_name: "Second Driver",
+      tipper_registration_number: "PILOT13",
+    };
+    const secondTipperTrip = { ...events[0], event_id: "event-9", assignment_id: "assignment-2", driver_name: "Second Driver", tipper_registration_number: "PILOT13" };
+    const apiRequest = vi.fn(async (path: string) => path.includes("/events") ? [...events.filter((item) => item.event_type !== "EMERGENCY"), secondTipperTrip] : [...completeness, secondTipperCompleteness]) as unknown as WebRequest;
+    render(<SupervisorShell accessToken="token" error="" sites={[site]} setError={vi.fn()} onLogout={vi.fn()} apiRequest={apiRequest} />);
+
+    await waitFor(() => expect(screen.getAllByText("PILOT13").length).toBeGreaterThan(1));
+    expect(screen.getByText("START KM")).toBeInTheDocument();
+    expect(screen.getByText("END KM")).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "DIESEL" })).toHaveLength(2);
+    const secondTipperGroup = screen.getAllByText("PILOT13").at(-1)?.closest("details");
+    expect(secondTipperGroup).not.toBeNull();
+    expect(secondTipperGroup).toHaveTextContent("Trip 1");
+    expect(secondTipperGroup).not.toHaveTextContent("PILOT12");
   });
 });

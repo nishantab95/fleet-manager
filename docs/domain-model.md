@@ -119,5 +119,16 @@ tipper, membership, assignment, or device belonging to another company.
     pair split across sites is not silently allocated and produces unavailable
     site KM.
 18. A closure cannot bypass missing/conflicting readings, invalid KM, pending
-    or disputed trips/diesel, or unresolved emergencies. Reopen history is
-    append-only and requires an owner reason.
+or disputed trips/diesel, or unresolved emergencies. Reopen history is
+append-only and requires an owner reason.
+
+## PC V1 emergency contract
+
+The PC V1 `EMERGENCY` action is a one-tap signal. New events do not require a
+category, description, or evidence upload; the backend captures the authenticated
+driver, current tipper/site/supervisor/company assignment, and timestamp. The
+legacy category field remains nullable for historical and compatible clients.
+Emergency records use `OPEN -> ACKNOWLEDGED -> RESOLVED` lifecycle actions and
+are not normal Trip/KM/Diesel verification items. Rapid repeat open signals in
+the short retry window resolve to the existing emergency event while client UUID
+idempotency remains the primary retry boundary.

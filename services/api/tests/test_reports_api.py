@@ -225,7 +225,7 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         assert dashboard_data["pending_trip_count"] == 1
         assert dashboard_data["total_km"] == "120.00"
         assert dashboard_data["verified_diesel_issued"] == "30.000"
-        assert dashboard_data["pending_verification_count"] == 3
+        assert dashboard_data["pending_verification_count"] == 2
         assert dashboard_data["unresolved_emergency_count"] == 1
         assert "fuel" not in dashboard.text.lower()
 

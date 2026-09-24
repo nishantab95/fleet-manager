@@ -72,6 +72,7 @@ class ReportEvent:
     site_id: UUID
     site_name: str
     driver_name: str
+    driver_phone: str | None
     supervisor_name: str
     device_created_at: datetime
     server_received_at: datetime
@@ -194,6 +195,7 @@ class _EventParts:
     tipper: Tipper
     site: Site
     driver_name: str
+    driver_phone: str
     supervisor_name: str
     km: KmReading | None
     diesel: DieselEvent | None
@@ -364,6 +366,7 @@ class ReportingService:
                 Tipper,
                 Site,
                 driver_user.display_name,
+                driver_user.phone_number,
                 supervisor_user.display_name,
             )
             .join(Assignment, Assignment.id == OperationalEvent.assignment_id)
@@ -441,7 +444,7 @@ class ReportingService:
                 )
             )
         result: dict[UUID, list[_EventParts]] = defaultdict(list)
-        for event, assignment, tipper, site, driver_name, supervisor_name in rows:
+        for event, assignment, tipper, site, driver_name, driver_phone, supervisor_name in rows:
             result[assignment.id].append(
                 _EventParts(
                     event=event,
@@ -449,6 +452,7 @@ class ReportingService:
                     tipper=tipper,
                     site=site,
                     driver_name=driver_name,
+                    driver_phone=driver_phone,
                     supervisor_name=supervisor_name,
                     km=km_by_event.get(event.id),
                     diesel=diesel_by_event.get(event.id),
@@ -470,6 +474,7 @@ class ReportingService:
             site_id=parts.site.id,
             site_name=parts.site.name,
             driver_name=parts.driver_name,
+            driver_phone=(parts.driver_phone if parts.emergency is not None else None),
             supervisor_name=parts.supervisor_name,
             device_created_at=parts.event.device_created_at,
             server_received_at=parts.event.server_received_at,
@@ -477,7 +482,11 @@ class ReportingService:
             reading_type=parts.km.reading_type.value if parts.km else None,
             reading_value=parts.km.reading_value if parts.km else None,
             litres=parts.diesel.litres if parts.diesel else None,
-            emergency_category=parts.emergency.category.value if parts.emergency else None,
+            emergency_category=(
+                parts.emergency.category.value
+                if parts.emergency is not None and parts.emergency.category is not None
+                else None
+            ),
             emergency_status=parts.emergency.status.value if parts.emergency else None,
             emergency_description=parts.emergency.description if parts.emergency else None,
             evidence_available=parts.evidence_available,
@@ -895,11 +904,8 @@ class ReportingService:
                 sum(
                     1
                     for event in row.events
-                    if event.verification_status == VerificationStatus.PENDING_VERIFICATION
-                    and not (
-                        event.event_type == OperationalEventType.EMERGENCY
-                        and event.emergency_status in {"RESOLVED", "CLOSED"}
-                    )
+                    if event.event_type != OperationalEventType.EMERGENCY
+                    and event.verification_status == VerificationStatus.PENDING_VERIFICATION
                 )
                 for row in rows
             ),

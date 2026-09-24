@@ -115,8 +115,9 @@ The supervisor web shell uses the existing authenticated web application. A
 `SUPERVISOR` membership can list and review only sites granted through its
 company-scoped `SupervisorSiteAccess` rows; owners and drivers are denied by the
 backend role dependency even if they call the routes directly. Site review is
-date-scoped and shows each captured trip, KM, diesel, and emergency event with
-driver/tipper identity, evidence availability, current decision, and append-only
+date-scoped, groups operational rows by tipper into Trips, KM Readings, and
+Diesel sections, and keeps emergencies in a separate prominent alert area with
+driver/tipper identity, contact action, lifecycle controls, and append-only
 history.
 
 Individual decisions use an expected current verification status and a row lock.
@@ -178,7 +179,9 @@ define the operational day. The service converts the local wall-clock range
 to UTC for event queries; timestamps remain timezone-aware UTC values in the
 database. Only effective `APPROVED` events contribute to official trip,
 diesel-issued, and KM values. Pending, disputed, and rejected records remain
-separate and produce explicit exceptions where appropriate.
+separate and produce explicit exceptions where appropriate. Emergency
+lifecycle rows are not normal verification items; only unresolved emergency
+status participates in closure blockers.
 
 `SiteDailyClosure` stores the company/site/operational-date closure snapshot;
 `SiteDailyClosureHistory` and `AuditLog` preserve every close and reopen

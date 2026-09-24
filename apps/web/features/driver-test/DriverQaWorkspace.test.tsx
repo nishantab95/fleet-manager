@@ -47,7 +47,7 @@ describe("Driver QA workspace", () => {
     expect(screen.getAllByText(/API: accepted/)).toHaveLength(2);
   });
 
-  it("requires KM evidence and validates diesel and emergency contracts", async () => {
+  it("requires KM evidence, validates diesel, and sends one-tap emergencies", async () => {
     render(<DriverQaWorkspace />);
     await screen.findByText(/Pilot Site/);
     fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
@@ -65,8 +65,11 @@ describe("Driver QA workspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "EMERGENCY" }));
-    fireEvent.change(screen.getByLabelText("Category"), { target: { value: "CONTACT_SUPERVISOR" } });
-    fireEvent.click(screen.getByRole("button", { name: "Submit emergency" }));
-    await waitFor(() => expect(requestMock.mock.calls.some(([path, options]) => path === "/api/v1/driver/events" && String(options?.body).includes('"category":"CONTACT_SUPERVISOR"'))).toBe(true));
+    await waitFor(() => expect(requestMock.mock.calls.some(([path, options]) => path === "/api/v1/driver/events" && String(options?.body).includes('"event_type":"EMERGENCY"'))).toBe(true));
+    expect(screen.queryByLabelText("Category")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Description (optional)")).not.toBeInTheDocument();
+    const emergencyCall = requestMock.mock.calls.find(([path, options]) => path === "/api/v1/driver/events" && String(options?.body).includes('"event_type":"EMERGENCY"'));
+    expect(String(emergencyCall?.[1]?.body)).not.toContain('"category"');
+    expect(String(emergencyCall?.[1]?.body)).not.toContain('"description"');
   });
 });

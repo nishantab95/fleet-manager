@@ -225,7 +225,7 @@ def create_emergency_event(
     assignment_id: UUID,
     client_event_uuid: UUID,
     device_created_at: datetime,
-    category: EmergencyCategory,
+    category: EmergencyCategory | None = None,
     description: str | None = None,
     device_id: UUID | None = None,
 ) -> EmergencyEvent:

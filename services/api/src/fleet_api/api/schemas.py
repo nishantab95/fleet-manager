@@ -275,6 +275,7 @@ class SupervisorEventResponse(BaseModel):
     event_type: OperationalEventType
     assignment_id: UUID
     driver_name: str
+    driver_phone: str | None
     tipper_registration_number: str
     site_id: UUID
     site_name: str
@@ -338,6 +339,7 @@ class ReportEventResponse(BaseModel):
     site_id: UUID
     site_name: str
     driver_name: str
+    driver_phone: str | None
     supervisor_name: str
     device_created_at: datetime
     server_received_at: datetime
