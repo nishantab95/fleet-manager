@@ -14,36 +14,39 @@ change backend authorization.
 
 ## Start the local role lab
 
-Normal PC acceptance uses the root launcher. From Windows:
+Normal daily use is one double-click. From Windows:
 
-1. Start Docker Desktop.
-2. Open the repository:
-
-   ```text
-   D:\Git\fleet maneger\fleet manager
-   ```
-
-3. Run the normal one-click launcher:
+1. Double-click the root-level file:
 
    ```text
-   python launch.py
+   Start Fleet Manager.bat
    ```
 
-   It starts or reuses the local services, ensures the pilot fixture, opens one
-   `PC TEST LAB` control window, and prints a ready summary. No menu choice is
-   required.
-4. Choose Driver, Supervisor, or Owner in the Lab. Each role route still
+   The wrapper finds `uv` without requiring Python on PATH, starts Docker
+   Desktop when needed, waits for the Docker engine, starts or reuses
+   PostgreSQL, MinIO, API, and Web, and opens exactly one normal Edge
+   `http://localhost:3000/lab` app window. No PowerShell command or menu choice
+   is required.
+2. Choose Driver, Supervisor, or Owner in the Lab. Each role route still
    requires its real backend authentication and authorization. If Edge is not
    available, open `http://localhost:3000/lab` manually.
+
+To stop only Fleet Manager-owned API/Web processes, double-click:
+
+```text
+Stop Fleet Manager.bat
+```
+
+Docker services and their volumes are left running and untouched.
 
 Advanced launcher operations are available without changing the normal flow:
 
 ```text
-python launch.py --fresh    # type RESET PILOT when prompted
-python launch.py --status
-python launch.py --stop
-python launch.py --menu
-python launch.py --help
+uv run --project services/api launch.py --fresh    # type RESET PILOT when prompted
+uv run --project services/api launch.py --status
+uv run --project services/api launch.py --stop
+uv run --project services/api launch.py --menu
+uv run --project services/api launch.py --help
 ```
 
 The launcher validates the local non-production configuration, starts and
@@ -52,23 +55,22 @@ idempotent pilot bootstrap, starts the API and web app on ports 8000 and 3000,
 and enables Driver QA only in the managed web process. It never resets data on
 normal start or status checks.
 
-The normal launcher uses one control profile under
-`%LOCALAPPDATA%\FleetManagerRoleLab\profiles\control` and does not open three
+The normal launcher uses the regular Edge profile and does not open three
 visible role windows. The Lab cards are navigation only: they do not
 impersonate a role or grant access. The existing isolated role-profile routine
 remains available for advanced/manual use under
 `%LOCALAPPDATA%\FleetManagerRoleLab\profiles\owner`, `supervisor`, and
 `driver-qa`; those profiles keep separate browser sessions. The launcher
-suppresses Edge first-run tabs, does not touch the normal Edge profile, and
-does not open a duplicate control window when one is active. Before
+suppresses Edge first-run tabs and does not open a duplicate control window
+when one is active. Before
 authentication, each role route carries its existing cosmetic login hint;
 backend membership authorization remains unchanged.
 
 The Lab `START FRESH TEST` button never resets data from the browser. It
-explains that you must rerun `python launch.py --fresh` and type `RESET PILOT`
+explains that you must run the advanced `--fresh` command and type `RESET PILOT`
 at the launcher prompt. System status checks API and database readiness
 directly; Object Store is marked `LAUNCHER` because MinIO readiness continues
-to be checked by `python launch.py --status` rather than by a new backend
+to be checked by the advanced `--status` command rather than by a new backend
 endpoint.
 
 ## Troubleshooting / Manual startup
@@ -153,8 +155,8 @@ source control or this document.
    - Diesel `30` litres with a local test image. The label is issued/recorded,
      never consumed, and no km/L is calculated.
    - KM `END_READING`, value `10120`, with a local test image.
-   - One Emergency using `BREAKDOWN`, `ACCIDENT`, `TYRE_OR_VEHICLE_PROBLEM`, or
-     `CONTACT_SUPERVISOR`.
+   - One one-tap `EMERGENCY` action using the current assignment context. No
+     category, description, or evidence is required.
 
    The QA diagnostics list should show a distinct client UUID for every event,
    the API acknowledgement, and the server verification state.

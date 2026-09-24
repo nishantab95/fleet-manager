@@ -353,6 +353,182 @@ def test_existing_fleet_manager_api_is_reused(tmp_path: Path) -> None:
     assert calls == []
 
 
+def test_existing_fleet_manager_web_is_reused_without_launcher_state(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    root = launch.LauncherPaths.from_root(tmp_path)
+    info = launch.ProcessInfo(
+        4321,
+        "node.exe",
+        r"C:\Program Files\nodejs\node.exe",
+        f'node.exe "{root.root}\\apps\\web\\node_modules\\next\\dist\\bin\\next" dev',
+    )
+    launcher = launch.RoleLabLauncher(
+        paths=root,
+        run=lambda args, **_: calls.append(args)
+        or launch.subprocess.CompletedProcess(args, 0, "", ""),
+        process_info=lambda _: info,
+        listener_pid=lambda port: 4321,
+    )
+    launcher._web_probe = lambda: launch.ServiceStatus("ready")
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+
+    assert launcher.ensure_web() == "reused"
+    assert calls == []
+
+
+def test_web_launch_is_reused_three_times_without_starting_duplicates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = launch.LauncherPaths.from_root(tmp_path)
+    starts: list[list[str]] = []
+    states = iter(["stopped", "ready", "ready"])
+    info = launch.ProcessInfo(
+        4321,
+        "node.exe",
+        r"C:\Program Files\nodejs\node.exe",
+        f'node.exe "{root.root}\\apps\\web\\node_modules\\next\\dist\\bin\\next" dev',
+    )
+    launcher = launch.RoleLabLauncher(
+        paths=root,
+        process_info=lambda _: info,
+        listener_pid=lambda port: 4321,
+        popen=lambda args, **_: starts.append(args),
+    )
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher._web_probe = lambda: launch.ServiceStatus(next(states))
+    monkeypatch.setattr(launcher, "_wait_for", lambda *args, **kwargs: None)
+    monkeypatch.setattr(launcher, "_start_process", lambda *args, **kwargs: {"pid": 4321})
+
+    assert launcher.ensure_web() == "started"
+    assert launcher.ensure_web() == "reused"
+    assert launcher.ensure_web() == "reused"
+    assert len(starts) == 0
+
+
+def test_stale_dead_and_reused_pids_are_not_treated_as_owned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    launcher = launch.RoleLabLauncher(paths=launch.LauncherPaths.from_root(tmp_path))
+    record = {"kind": "web", "pid": 1234, "owned": True}
+    monkeypatch.setattr(launch.os, "kill", lambda pid, signal: (_ for _ in ()).throw(ProcessLookupError()))
+    assert launcher._is_record_alive_and_owned(record) is False
+
+    monkeypatch.setattr(launch.os, "kill", lambda pid, signal: None)
+    launcher.process_command_line = lambda _: r"C:\Other\unrelated.exe"
+    assert launcher._is_record_alive_and_owned(record) is False
+
+
+def test_process_lookup_timeout_failure_access_denied_and_malformed_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(*args: object, **kwargs: object) -> None:
+        raise launch.subprocess.TimeoutExpired("powershell.exe", 2)
+
+    monkeypatch.setattr(launch.subprocess, "run", timeout)
+    assert launch.default_process_info(1234).command_line == ""
+
+    def access_denied(*args: object, **kwargs: object) -> None:
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(launch.subprocess, "run", access_denied)
+    assert launch.default_process_info(1234).command_line == ""
+
+    monkeypatch.setattr(
+        launch.subprocess,
+        "run",
+        lambda *args, **kwargs: launch.subprocess.CompletedProcess(
+            args, 0, "not-json", ""
+        ),
+    )
+    assert launch.default_process_info(1234).command_line == ""
+
+
+def test_find_listening_pid_is_bounded_and_ignores_malformed_response() -> None:
+    def timeout(*args: object, **kwargs: object) -> None:
+        raise launch.subprocess.TimeoutExpired("netstat", 2)
+
+    assert launch.find_listening_pid(3000, run=timeout) is None
+    result = launch.subprocess.CompletedProcess(
+        ["netstat"], 0, "TCP malformed\nTCP 127.0.0.1:3000 0.0.0.0:0 LISTENING nope", ""
+    )
+    assert launch.find_listening_pid(3000, run=lambda *args, **kwargs: result) is None
+
+
+def test_python_is_optional_when_uv_is_available() -> None:
+    resolved = {
+        "docker": "docker.exe",
+        "uv": "uv.exe",
+        "npm": "npm.cmd",
+        "pwsh": "pwsh.exe",
+    }
+    tools = launch.find_required_commands(lambda name: resolved.get(name))
+    assert tools.uv == "uv.exe"
+    assert tools.python == ""
+
+
+def test_docker_already_running_is_not_started_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    launcher = launch.RoleLabLauncher(paths=launch.LauncherPaths.from_root(tmp_path))
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    ready = iter([False, True])
+    monkeypatch.setattr(launcher, "_docker_engine_ready", lambda: next(ready))
+    monkeypatch.setattr(launcher, "_docker_desktop_running", lambda: True)
+    monkeypatch.setattr(launch, "locate_docker_desktop", lambda: Path("C:/Docker Desktop.exe"))
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for",
+        lambda label, predicate, timeout: predicate(),
+    )
+    starts: list[list[str]] = []
+    launcher.popen = lambda args, **kwargs: starts.append(args)
+
+    launcher.ensure_docker_engine()
+
+    assert starts == []
+
+
+def test_stopped_docker_desktop_is_started_and_waited_for(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    launcher = launch.RoleLabLauncher(paths=launch.LauncherPaths.from_root(tmp_path))
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    ready = iter([False, True])
+    monkeypatch.setattr(launcher, "_docker_engine_ready", lambda: next(ready))
+    monkeypatch.setattr(launcher, "_docker_desktop_running", lambda: False)
+    monkeypatch.setattr(launch, "locate_docker_desktop", lambda: Path("C:/Docker Desktop.exe"))
+    starts: list[list[str]] = []
+    launcher.popen = lambda args, **kwargs: starts.append(args)
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for",
+        lambda label, predicate, timeout: predicate(),
+    )
+
+    launcher.ensure_docker_engine()
+
+    assert starts == [[str(Path("C:/Docker Desktop.exe"))]]
+    output = capsys.readouterr().out
+    assert "Starting Docker Desktop" in output
+    assert "Docker READY" in output
+
+
+def test_docker_start_failure_is_actionable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    launcher = launch.RoleLabLauncher(paths=launch.LauncherPaths.from_root(tmp_path))
+    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    monkeypatch.setattr(launcher, "_docker_engine_ready", lambda: False)
+    monkeypatch.setattr(launcher, "_docker_desktop_running", lambda: False)
+    monkeypatch.setattr(launch, "locate_docker_desktop", lambda: Path("C:/Docker Desktop.exe"))
+    launcher.popen = lambda args, **kwargs: (_ for _ in ()).throw(OSError("blocked"))
+
+    with pytest.raises(launch.LauncherError, match="could not be started automatically"):
+        launcher.ensure_docker_engine()
+
+
 def test_empty_port_does_not_query_a_process_pid(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -481,9 +657,7 @@ def test_lab_launcher_opens_one_control_window(
 
     assert len(commands) == 1
     assert commands[0][1] == f"--app={launch.LAB_URL}"
-    assert any(
-        item.endswith("FleetManagerRoleLab\\profiles\\control") for item in commands[0]
-    )
+    assert not any(item.startswith("--user-data-dir=") for item in commands[0])
     assert launcher.lab_workspace_opened is True
 
 
@@ -491,22 +665,59 @@ def test_repeated_lab_launch_does_not_spawn_duplicate_window(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     commands: list[list[str]] = []
-    profile = (
-        tmp_path / "local-app-data" / "FleetManagerRoleLab" / "profiles" / "control"
+    root = launch.LauncherPaths.from_root(tmp_path)
+    info = launch.ProcessInfo(
+        4321,
+        "msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        f'msedge.exe --app={launch.LAB_URL}',
     )
-    profile.mkdir(parents=True)
-    (profile / "lockfile").write_text("active", encoding="utf-8")
     launcher = launch.RoleLabLauncher(
-        paths=launch.LauncherPaths.from_root(tmp_path),
+        paths=root,
         popen=lambda args, **_: commands.append(args),
+        process_info=lambda _: info,
     )
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    launcher._save_state(
+        {"browser": {"lab": {"opened": True, "url": launch.LAB_URL, "pid": 4321}}}
+    )
     monkeypatch.setattr(launch, "locate_edge", lambda: Path("C:/edge/msedge.exe"))
+    monkeypatch.setattr(launch.os, "kill", lambda pid, signal: None)
 
     launcher.open_lab_workspace()
 
     assert commands == []
     assert launcher.lab_workspace_opened is True
+
+
+def test_normal_lab_window_uses_default_edge_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(launch, "locate_edge", lambda: Path("C:/edge/msedge.exe"))
+    launcher = launch.RoleLabLauncher(
+        paths=launch.LauncherPaths.from_root(tmp_path),
+        popen=lambda args, **_: commands.append(args),
+    )
+
+    launcher.open_lab_workspace()
+
+    assert commands
+    assert f"--app={launch.LAB_URL}" in commands[0]
+    assert not any(item.startswith("--user-data-dir=") for item in commands[0])
+
+
+def test_windows_wrappers_use_uv_and_resolve_their_own_root() -> None:
+    start = Path("Start Fleet Manager.bat").read_text(encoding="utf-8")
+    stop = Path("Stop Fleet Manager.bat").read_text(encoding="utf-8")
+
+    assert "%~dp0" in start
+    assert "uv" in start.lower()
+    assert "launch.py" in start
+    assert "--project" in start
+    assert "powershell" not in start.lower()
+    assert "%~dp0" in stop
+    assert "--stop" in stop
+    assert "--project" in stop
 
 
 def test_start_calls_browser_launcher_once(

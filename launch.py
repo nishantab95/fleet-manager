@@ -124,6 +124,9 @@ SELECT CASE WHEN EXISTS (
 ) THEN 'READY' ELSE 'MISSING' END
 """.strip()
 
+PROCESS_INSPECTION_TIMEOUT_SECONDS = 2.0
+DOCKER_ENGINE_TIMEOUT_SECONDS = 120.0
+
 
 def resolve_repo_root(script_file: str | Path = __file__) -> Path:
     """Resolve the repository from launch.py, not from the caller's cwd."""
@@ -240,7 +243,10 @@ def find_required_commands(
         docker=require("docker", "docker"),
         uv=require("uv", "uv"),
         npm=require("npm", "npm.cmd", "npm"),
-        python=require("python", "python", "python.exe"),
+        # The launcher executes Python through uv. Keep this field for
+        # diagnostics/backwards-compatible test fixtures, but do not make a
+        # machine-wide python PATH entry a startup prerequisite.
+        python=which("python") or which("python.exe") or "",
         powershell=require("PowerShell", "pwsh", "powershell", "powershell.exe"),
     )
 
@@ -272,17 +278,21 @@ def build_web_environment(env: Mapping[str, str]) -> dict[str, str]:
     return web_env
 
 
-def build_edge_command(edge: Path, role_url: str, profile_dir: Path) -> list[str]:
-    """Build one isolated Edge app window without touching the default profile."""
+def build_edge_command(
+    edge: Path, role_url: str, profile_dir: Path | None = None
+) -> list[str]:
+    """Build an Edge app command, optionally using a dedicated QA profile."""
 
-    return [
+    command = [
         str(edge),
         f"--app={role_url}",
-        f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-features=msEdgeFirstRunExperience",
     ]
+    if profile_dir is not None:
+        command.insert(2, f"--user-data-dir={profile_dir}")
+    return command
 
 
 def is_expected_api_health(probe: HttpProbe | None) -> bool:
@@ -358,19 +368,23 @@ def default_process_info(pid: int) -> ProcessInfo:
         "ExecutablePath=$p.ExecutablePath; CommandLine=$p.CommandLine } "
         "| ConvertTo-Json -Compress }" % pid
     )
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            command,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ProcessInfo(pid, "", "", "")
     try:
         value = json.loads(result.stdout.strip())
     except (json.JSONDecodeError, TypeError):
@@ -424,13 +438,17 @@ def find_listening_pid(
 ) -> int | None:
     if os.name != "nt":
         return None
-    result = run(
-        ["netstat", "-ano", "-p", "tcp"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    for line in result.stdout.splitlines():
+    try:
+        result = run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in (result.stdout or "").splitlines():
         parts = line.split()
         if (
             len(parts) < 5
@@ -524,6 +542,12 @@ class RoleLabLauncher:
             )
         except FileNotFoundError as error:
             raise LauncherError(f"{label} could not start: {error}") from error
+        except subprocess.TimeoutExpired:
+            raise LauncherError(
+                f"{label} timed out after {int(timeout)} seconds."
+            )
+        except OSError as error:
+            raise LauncherError(f"{label} could not start: {error}") from error
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip().splitlines()
             tail = "\n".join(detail[-12:])
@@ -537,15 +561,22 @@ class RoleLabLauncher:
         cwd: Path | None = None,
         timeout: float = 30,
     ) -> subprocess.CompletedProcess[str]:
-        return self.run(
-            list(args),
-            cwd=str(cwd or self.paths.root),
-            env=dict(self.env),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        try:
+            return self.run(
+                list(args),
+                cwd=str(cwd or self.paths.root),
+                env=dict(self.env),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(
+                list(args), 124, "", f"Command timed out after {int(timeout)} seconds."
+            )
+        except OSError as error:
+            return subprocess.CompletedProcess(list(args), 127, "", str(error))
 
     def _load_state(self) -> dict[str, Any]:
         if not self.paths.state.is_file():
@@ -583,12 +614,96 @@ class RoleLabLauncher:
             os.kill(pid, 0)
         except (OSError, ProcessLookupError):
             return False
-        return command_line_matches(
-            self.paths.root, record, self.process_command_line(pid)
+        try:
+            command_line = self.process_command_line(pid)
+        except Exception:
+            return False
+        return command_line_matches(self.paths.root, record, command_line or "")
+
+    def _identified_process(self, kind: str, info: ProcessInfo | None) -> bool:
+        if info is None:
+            return False
+        command_line = info.command_line or info.executable_path
+        return command_line_matches(self.paths.root, {"kind": kind}, command_line)
+
+    def _safe_process_info(self, pid: int | None) -> ProcessInfo | None:
+        if pid is None or pid <= 0:
+            return None
+        try:
+            info = self.process_info(pid)
+        except Exception:
+            return None
+        return info if isinstance(info, ProcessInfo) else None
+
+    def _docker_engine_ready(self) -> bool:
+        tools = self._require_tools()
+        result = self._run_capture(
+            [tools.docker, "version", "--format", "{{.Server.Version}}"], timeout=15
         )
+        return result.returncode == 0 and bool((result.stdout or "").strip())
+
+    def _docker_desktop_running(self) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            result = self.run(
+                [
+                    "tasklist",
+                    "/FI",
+                    "IMAGENAME eq Docker Desktop.exe",
+                    "/FO",
+                    "CSV",
+                    "/NH",
+                ],
+                cwd=str(self.paths.root),
+                env=dict(self.env),
+                capture_output=True,
+                text=True,
+                timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return "docker desktop.exe" in (result.stdout or "").casefold()
+
+    def ensure_docker_engine(self) -> None:
+        if self._docker_engine_ready():
+            print("Docker READY")
+            return
+
+        desktop = locate_docker_desktop()
+        if desktop is None:
+            raise LauncherError(
+                "Docker engine is unavailable and Docker Desktop was not found. "
+                "Install Docker Desktop, then rerun Start Fleet Manager.bat."
+            )
+        if self._docker_desktop_running():
+            print("Docker Desktop is already starting; waiting for Docker engine...")
+        else:
+            print("Starting Docker Desktop...")
+            try:
+                self.popen(
+                    [str(desktop)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+                )
+            except OSError as error:
+                raise LauncherError(
+                    f"Docker Desktop could not be started automatically: {error}"
+                ) from error
+            print("Waiting for Docker engine...")
+
+        self._wait_for(
+            "Docker engine",
+            self._docker_engine_ready,
+            DOCKER_ENGINE_TIMEOUT_SECONDS,
+        )
+        print("Docker READY")
 
     def ensure_infrastructure(self) -> None:
         tools = self._require_tools()
+        self.ensure_docker_engine()
         try:
             self._run_checked(
                 [tools.docker, "compose", "up", "-d", "postgres", "minio"],
@@ -597,13 +712,9 @@ class RoleLabLauncher:
             )
         except LauncherError as error:
             message = str(error).lower()
-            if (
-                "cannot connect" in message
-                or "daemon" in message
-                or "docker" in message
-            ):
+            if "cannot connect" in message or "daemon" in message or "docker" in message:
                 raise LauncherError(
-                    "Docker Desktop is not running. Start Docker Desktop and try again."
+                    "Docker engine became unavailable while starting PostgreSQL and MinIO."
                 ) from error
             raise
 
@@ -740,7 +851,12 @@ class RoleLabLauncher:
         pid = record.get("pid")
         if not isinstance(pid, int):
             return
-        command_line = self.process_command_line(pid)
+        try:
+            command_line = self.process_command_line(pid)
+        except Exception as error:
+            raise LauncherError(
+                f"Refusing to stop PID {pid}: process inspection failed."
+            ) from error
         if not command_line_matches(self.paths.root, record, command_line):
             raise LauncherError(
                 f"Refusing to stop PID {pid}: process identity was not verified."
@@ -798,9 +914,7 @@ class RoleLabLauncher:
 
     def _port_process_info(self, port: int) -> ProcessInfo | None:
         pid = self.listener_pid(port)
-        if pid is None:
-            return None
-        return self.process_info(pid)
+        return self._safe_process_info(pid)
 
     def _unknown_port_error(
         self, port: int, owner: ProcessInfo | None
@@ -819,7 +933,7 @@ class RoleLabLauncher:
         )
 
     def _terminate_known_bookkeeper(self, owner: ProcessInfo) -> None:
-        current = self.process_info(owner.pid)
+        current = self._safe_process_info(owner.pid)
         if not is_known_bookkeeper_process(current):
             raise LauncherError(
                 f"Refusing to stop PID {owner.pid}: its process identity changed."
@@ -902,40 +1016,19 @@ class RoleLabLauncher:
         return "started"
 
     def ensure_web(self) -> str:
-        state = self._load_state()
-        existing = state.get("web") if isinstance(state.get("web"), dict) else None
         status = self._web_probe()
-        if status.state == "ready":
-            if (
-                existing
-                and existing.get("driver_qa")
-                and self._is_record_alive_and_owned(existing)
-            ):
+        if status.state in {"ready", "occupied"}:
+            owner = self._port_process_info(3000)
+            if self._identified_process("web", owner):
+                if status.state != "ready":
+                    self._wait_for(
+                        "Web http://localhost:3000",
+                        lambda: self._web_probe().state == "ready",
+                        90,
+                    )
                 print("Web 3000        READY (reused)")
                 return "reused"
-            pid = self.listener_pid(3000)
-            owner = self.process_info(pid) if pid is not None else None
-            record = existing if isinstance(existing, dict) else None
-            if (
-                pid
-                and record
-                and record.get("owned")
-                and record.get("pid") == pid
-                and command_line_matches(
-                    self.paths.root, record, self.process_command_line(pid)
-                )
-            ):
-                print(
-                    "Existing Fleet Manager web server found; restarting it with Driver QA enabled."
-                )
-                self._terminate_verified(record)
-                self._wait_for(
-                    "Web port 3000 to become free", lambda: not port_is_open(3000), 20
-                )
-            else:
-                raise self._unknown_port_error(3000, owner)
-        elif status.state == "occupied":
-            raise self._unknown_port_error(3000, self._port_process_info(3000))
+            raise self._unknown_port_error(3000, owner)
 
         tools = self._require_tools()
         command = [tools.npm, "run", "dev"]
@@ -949,9 +1042,12 @@ class RoleLabLauncher:
                 90,
             )
             for name, url in ROLE_URLS.items():
+                def role_url_ready(target_url: str = url) -> bool:
+                    return self._url_is_ready(target_url)
+
                 self._wait_for(
                     f"{name} role URL",
-                    lambda target=url: self._url_is_ready(target),
+                    role_url_ready,
                     30,
                 )
         except LauncherError as error:
@@ -1045,13 +1141,16 @@ class RoleLabLauncher:
     def open_lab_workspace(self) -> None:
         state = self._load_state()
         browser_state = state.get("browser")
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        profile = base / "FleetManagerRoleLab" / "profiles" / "control"
-        profile_in_use = any(
-            (profile / lock_name).exists()
-            for lock_name in ("SingletonLock", "lockfile")
-        )
-        if profile_in_use:
+        lab_state = browser_state.get("lab") if isinstance(browser_state, dict) else None
+        lab_pid = lab_state.get("pid") if isinstance(lab_state, dict) else None
+        lab_info = self._safe_process_info(lab_pid if isinstance(lab_pid, int) else None)
+        if (
+            isinstance(lab_state, dict)
+            and lab_state.get("opened")
+            and isinstance(lab_pid, int)
+            and lab_info is not None
+            and LAB_URL.casefold() in lab_info.command_line.casefold()
+        ):
             self.lab_workspace_opened = True
             print(
                 "[INFO] Existing PC Test Lab window left untouched; no duplicate window opened."
@@ -1064,10 +1163,9 @@ class RoleLabLauncher:
                 "[INFO] Microsoft Edge was not found; open the PC Test Lab URL manually."
             )
             return
-        profile.mkdir(parents=True, exist_ok=True)
         try:
-            self.popen(
-                build_edge_command(edge, LAB_URL, profile),
+            process = self.popen(
+                build_edge_command(edge, LAB_URL),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -1078,8 +1176,8 @@ class RoleLabLauncher:
         next_state = dict(browser_state) if isinstance(browser_state, dict) else {}
         next_state["lab"] = {
             "opened": True,
-            "profile": str(profile),
             "url": LAB_URL,
+            "pid": int(getattr(process, "pid", 0) or 0),
         }
         state["browser"] = next_state
         self._save_state(state)
@@ -1192,6 +1290,30 @@ class RoleLabLauncher:
         for key in ("docker", "postgres", "minio", "api", "web", "fixture"):
             if snapshot[key].detail:
                 print(f"  {key}: {snapshot[key].detail}")
+
+
+def locate_docker_desktop() -> Path | None:
+    candidates = [
+        shutil.which("Docker Desktop.exe"),
+        shutil.which("Docker Desktop"),
+    ]
+    roots = [
+        os.environ.get("PROGRAMFILES"),
+        os.environ.get("PROGRAMFILES(X86)"),
+        os.environ.get("LOCALAPPDATA"),
+    ]
+    for root in roots:
+        if root:
+            candidates.extend(
+                [
+                    str(Path(root) / "Docker" / "Docker" / "Docker Desktop.exe"),
+                    str(Path(root) / "Docker Desktop" / "Docker Desktop.exe"),
+                ]
+            )
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    return None
 
 
 def locate_edge() -> Path | None:

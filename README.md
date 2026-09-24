@@ -34,10 +34,20 @@ The verified workstation uses uv-managed CPython 3.12.14, Node.js 24.19.0/npm 11
 
 ## Quick start on Windows
 
+For normal daily use, copy `.env.example` to `.env` once during setup, then
+double-click `Start Fleet Manager.bat` in the repository root. It finds `uv`
+without requiring Python on PATH, starts Docker Desktop when needed, waits for
+the local services, reuses healthy Fleet Manager API/Web processes, and opens
+`http://localhost:3000/lab`. Double-click `Stop Fleet Manager.bat` to stop only
+Fleet Manager-owned API/Web processes; Docker services and volumes are left
+running.
+
+Developer/bootstrap commands remain available:
+
 ```powershell
 Copy-Item .env.example .env
 .\scripts\bootstrap.ps1
-.\scripts\dev.ps1
+uv run --project services/api launch.py --status
 ```
 
 The API is then available at `http://localhost:8000`, with `GET /health` and `GET /ready`. Local PostgreSQL and MinIO are started by Docker Compose. MinIO uses host ports `19000` (S3 API) and `19001` (console) by default so it does not collide with TallyPrime on port `9000`; change `MINIO_API_PORT`, `MINIO_CONSOLE_PORT`, and `FLEET_S3_ENDPOINT_URL` together when selecting other free host ports.
