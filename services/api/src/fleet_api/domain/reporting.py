@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -119,13 +119,22 @@ class TipperDailyReport:
     start_km: Decimal | None
     end_km: Decimal | None
     distance_km: Decimal | None
+    km_per_approved_trip: Decimal | None
     verified_diesel_issued: Decimal
+    diesel_issued_per_approved_trip: Decimal | None
+    first_trip_completed_at: datetime | None
+    last_trip_completed_at: datetime | None
+    recorded_activity_span: timedelta | None
+    avg_trip_completion_interval: timedelta | None
+    median_trip_completion_interval: timedelta | None
+    longest_trip_gap: timedelta | None
     pending_diesel_count: int
     disputed_diesel_count: int
     unresolved_emergency_count: int
     missing_start_reading: bool
     missing_end_reading: bool
     completeness_status: str
+    closure_status: SiteClosureStatus
     exceptions: list[ReportException]
     events: list[ReportEvent]
 
@@ -191,6 +200,44 @@ class _EventParts:
     emergency: EmergencyEvent | None
     evidence_available: bool
     history: list[ReportHistory]
+
+
+def _duration_microseconds(value: timedelta) -> int:
+    return (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds
+
+
+def _trip_timing_metrics(
+    timestamps: list[datetime],
+) -> tuple[
+    datetime | None,
+    datetime | None,
+    timedelta | None,
+    timedelta | None,
+    timedelta | None,
+    timedelta | None,
+]:
+    """Calculate timing metrics from approved completion timestamps only."""
+    ordered = sorted(timestamps)
+    if not ordered:
+        return None, None, None, None, None, None
+    if len(ordered) == 1:
+        return ordered[0], ordered[0], timedelta(0), None, None, None
+
+    intervals = [ordered[index] - ordered[index - 1] for index in range(1, len(ordered))]
+    interval_values = sorted(_duration_microseconds(interval) for interval in intervals)
+    middle = len(interval_values) // 2
+    if len(interval_values) % 2:
+        median_microseconds: float = float(interval_values[middle])
+    else:
+        median_microseconds = (interval_values[middle - 1] + interval_values[middle]) / 2
+    return (
+        ordered[0],
+        ordered[-1],
+        ordered[-1] - ordered[0],
+        timedelta(microseconds=sum(interval_values) / len(interval_values)),
+        timedelta(microseconds=median_microseconds),
+        max(intervals),
+    )
 
 
 class ReportingService:
@@ -493,6 +540,19 @@ class ReportingService:
             if parts.event.event_type == OperationalEventType.TRIP_COMPLETE
             and parts.event.verification_status == VerificationStatus.REJECTED
         ]
+        (
+            first_trip_completed_at,
+            last_trip_completed_at,
+            recorded_activity_span,
+            avg_trip_completion_interval,
+            median_trip_completion_interval,
+            longest_trip_gap,
+        ) = _trip_timing_metrics([parts.event.device_created_at for parts in approved_trips])
+        reporting_zone = self._zone()
+        if first_trip_completed_at is not None:
+            first_trip_completed_at = first_trip_completed_at.astimezone(reporting_zone)
+        if last_trip_completed_at is not None:
+            last_trip_completed_at = last_trip_completed_at.astimezone(reporting_zone)
         start_km, conflicting_start = self._reading_value(events, "START_READING")
         end_km, conflicting_end = self._reading_value(events, "END_READING")
         exceptions: list[ReportException] = []
@@ -536,6 +596,12 @@ class ReportingService:
             else:
                 distance_km = end_km - start_km
 
+        km_per_approved_trip = (
+            distance_km / Decimal(len(approved_trips))
+            if distance_km is not None and approved_trips
+            else None
+        )
+
         if pending_trips:
             add_exception("TRIP_PENDING", f"{len(pending_trips)} trip(s) pending verification")
         if disputed_trips:
@@ -563,6 +629,9 @@ class ReportingService:
             for parts in diesel_events
             if parts.event.verification_status == VerificationStatus.DISPUTED
         ]
+        diesel_issued_per_approved_trip = (
+            approved_diesel / Decimal(len(approved_trips)) if approved_trips else None
+        )
         if pending_diesel:
             add_exception(
                 "DIESEL_PENDING", f"{len(pending_diesel)} diesel record(s) pending verification"
@@ -609,13 +678,22 @@ class ReportingService:
             start_km=start_km,
             end_km=end_km,
             distance_km=distance_km,
+            km_per_approved_trip=km_per_approved_trip,
             verified_diesel_issued=approved_diesel,
+            diesel_issued_per_approved_trip=diesel_issued_per_approved_trip,
+            first_trip_completed_at=first_trip_completed_at,
+            last_trip_completed_at=last_trip_completed_at,
+            recorded_activity_span=recorded_activity_span,
+            avg_trip_completion_interval=avg_trip_completion_interval,
+            median_trip_completion_interval=median_trip_completion_interval,
+            longest_trip_gap=longest_trip_gap,
             pending_diesel_count=len(pending_diesel),
             disputed_diesel_count=len(disputed_diesel),
             unresolved_emergency_count=len(unresolved_emergencies),
             missing_start_reading=start_km is None and not conflicting_start,
             missing_end_reading=end_km is None and not conflicting_end,
             completeness_status=status,
+            closure_status=SiteClosureStatus.OPEN,
             exceptions=exceptions,
             events=[self._report_event(parts) for parts in events],
         )
@@ -699,6 +777,7 @@ class ReportingService:
         blockers = [item for row in rows for item in row.exceptions]
         distances = [row.distance_km for row in rows if row.distance_km is not None]
         closure = closure or self._closure_snapshot(site, day, blockers)
+        rows = [replace(row, closure_status=closure.status) for row in rows]
         return SiteDailyReport(
             site=site,
             operational_day=day,
@@ -737,11 +816,23 @@ class ReportingService:
         day = self.operational_day(requested_date)
         rows = self._assignment_rows(day, tipper_id=tipper.id)
         events = self._event_parts(day, [row[0].id for row in rows])
-        return [
+        reports = [
             self._tipper_report(
                 assignment, tipper_row, site, driver, supervisor, events.get(assignment.id, [])
             )
             for assignment, tipper_row, site, driver, supervisor in rows
+        ]
+        blockers_by_site: dict[UUID, list[ReportException]] = defaultdict(list)
+        for report in reports:
+            blockers_by_site[report.site.id].extend(report.exceptions)
+        closure_by_site = self._closure_snapshots(
+            day,
+            list(blockers_by_site),
+            blockers_by_site,
+        )
+        return [
+            replace(report, closure_status=closure_by_site[report.site.id].status)
+            for report in reports
         ]
 
     def dashboard(self, requested_date: date | None = None) -> DashboardReport:

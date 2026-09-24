@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from typing import NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from openpyxl import Workbook  # type: ignore[import-untyped]
+from openpyxl.cell.cell import MergedCell  # type: ignore[import-untyped]
 from openpyxl.styles import Font, PatternFill  # type: ignore[import-untyped]
+from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import (
@@ -127,6 +129,10 @@ def _exception_response(item: ReportException) -> ReportExceptionResponse:
     )
 
 
+def _duration_seconds(value: timedelta | None) -> float | None:
+    return value.total_seconds() if value is not None else None
+
+
 def _tipper_response(item: TipperDailyReport) -> TipperDailyReportResponse:
     return TipperDailyReportResponse(
         assignment_id=item.assignment.id,
@@ -146,13 +152,24 @@ def _tipper_response(item: TipperDailyReport) -> TipperDailyReportResponse:
         start_km=item.start_km,
         end_km=item.end_km,
         distance_km=item.distance_km,
+        km_per_approved_trip=item.km_per_approved_trip,
         verified_diesel_issued=item.verified_diesel_issued,
+        diesel_issued_per_approved_trip=item.diesel_issued_per_approved_trip,
+        first_trip_completed_at=item.first_trip_completed_at,
+        last_trip_completed_at=item.last_trip_completed_at,
+        recorded_activity_span_seconds=_duration_seconds(item.recorded_activity_span),
+        avg_trip_completion_interval_seconds=_duration_seconds(item.avg_trip_completion_interval),
+        median_trip_completion_interval_seconds=_duration_seconds(
+            item.median_trip_completion_interval
+        ),
+        longest_trip_gap_seconds=_duration_seconds(item.longest_trip_gap),
         pending_diesel_count=item.pending_diesel_count,
         disputed_diesel_count=item.disputed_diesel_count,
         unresolved_emergency_count=item.unresolved_emergency_count,
         missing_start_reading=item.missing_start_reading,
         missing_end_reading=item.missing_end_reading,
         completeness_status=item.completeness_status,
+        closure_status=item.closure_status,
         exceptions=[_exception_response(exception) for exception in item.exceptions],
         events=[_event_response(event) for event in item.events],
     )
@@ -362,6 +379,15 @@ def _excel_datetime(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
+def _excel_local_datetime(value: datetime) -> datetime:
+    """Keep a report-timezone timestamp readable in Excel's timezone-naive cells."""
+    return value.replace(tzinfo=None)
+
+
+def _excel_metric(value: object) -> object:
+    return value if value is not None else "Unavailable"
+
+
 def _evidence_application_url(base_url: str, event_id: UUID) -> str:
     return f"{base_url.rstrip('/')}/evidence/{event_id}"
 
@@ -395,8 +421,56 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
         "Emergency Status",
         "Completeness",
         "Closure Status",
+        "Rejected Trips",
+        "Disputed Trips",
+        "Supervisor",
+        "KM / Approved Trip",
+        "Diesel Issued / Approved Trip",
+        "First Trip",
+        "Last Trip",
+        "Recorded Activity Span",
+        "Avg Trip Completion Interval",
+        "Median Trip Completion Interval",
+        "Longest Trip Gap",
+        "Pending Diesel",
+        "Disputed Diesel",
+        "Missing START",
+        "Missing END",
+        "Exceptions",
+    ]
+    management_headers = [
+        "Site",
+        "Tipper",
+        "Driver",
+        "Supervisor",
+        "Approved Trips",
+        "Pending Trips",
+        "Rejected Trips",
+        "Disputed Trips",
+        "Start KM",
+        "End KM",
+        "Distance KM",
+        "KM / Approved Trip",
+        "Diesel Issued",
+        "Diesel Issued / Approved Trip",
+        "First Trip",
+        "Last Trip",
+        "Recorded Activity Span",
+        "Avg Trip Completion Interval",
+        "Median Trip Completion Interval",
+        "Longest Trip Gap",
+        "Pending Diesel",
+        "Disputed Diesel",
+        "Missing START",
+        "Missing END",
+        "Unresolved Emergencies",
+        "Completeness",
+        "Closure",
+        "Exceptions",
+        "Evidence / Details",
     ]
     summary_rows: list[list[object]] = []
+    management_rows: list[list[object]] = []
     trip_rows: list[list[object]] = []
     km_rows: list[list[object]] = []
     diesel_rows: list[list[object]] = []
@@ -404,6 +478,34 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
     for site in report.sites:
         for row in site.rows:
             emergency = "UNRESOLVED" if row.unresolved_emergency_count else "CLEAR"
+            exception_text = "; ".join(item.code for item in row.exceptions) or "None"
+            approved_trip_events = sorted(
+                (
+                    event
+                    for event in row.events
+                    if event.event_type.value == "TRIP_COMPLETE"
+                    and event.verification_status == VerificationStatus.APPROVED
+                ),
+                key=lambda event: event.device_created_at,
+            )
+            previous_approved_by_event: dict[UUID, tuple[datetime, timedelta]] = {}
+            previous: ReportEvent | None = None
+            for event in approved_trip_events:
+                if previous is not None:
+                    previous_approved_by_event[event.event_id] = (
+                        _excel_datetime(previous.device_created_at),
+                        event.device_created_at - previous.device_created_at,
+                    )
+                previous = event
+            first_evidence = next(
+                (event for event in row.events if event.evidence_available),
+                None,
+            )
+            evidence_or_details: object = (
+                _evidence_formula(web_public_base_url, first_evidence.event_id)
+                if first_evidence is not None
+                else "No evidence available"
+            )
             summary_rows.append(
                 [
                     report.operational_day.operational_date,
@@ -420,11 +522,77 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
                     emergency,
                     row.completeness_status,
                     site.closure.status.value,
+                    row.rejected_trip_count,
+                    row.disputed_trip_count,
+                    row.supervisor_name,
+                    _excel_metric(row.km_per_approved_trip),
+                    _excel_metric(row.diesel_issued_per_approved_trip),
+                    _excel_metric(
+                        _excel_local_datetime(row.first_trip_completed_at)
+                        if row.first_trip_completed_at is not None
+                        else None
+                    ),
+                    _excel_metric(
+                        _excel_local_datetime(row.last_trip_completed_at)
+                        if row.last_trip_completed_at is not None
+                        else None
+                    ),
+                    _excel_metric(row.recorded_activity_span),
+                    _excel_metric(row.avg_trip_completion_interval),
+                    _excel_metric(row.median_trip_completion_interval),
+                    _excel_metric(row.longest_trip_gap),
+                    row.pending_diesel_count,
+                    row.disputed_diesel_count,
+                    row.missing_start_reading,
+                    row.missing_end_reading,
+                    exception_text,
+                ]
+            )
+            management_rows.append(
+                [
+                    site.site.name,
+                    row.tipper.short_name or row.tipper.registration_number,
+                    row.driver_name,
+                    row.supervisor_name,
+                    row.approved_trip_count,
+                    row.pending_trip_count,
+                    row.rejected_trip_count,
+                    row.disputed_trip_count,
+                    row.start_km,
+                    row.end_km,
+                    row.distance_km,
+                    _excel_metric(row.km_per_approved_trip),
+                    row.verified_diesel_issued,
+                    _excel_metric(row.diesel_issued_per_approved_trip),
+                    _excel_metric(
+                        _excel_local_datetime(row.first_trip_completed_at)
+                        if row.first_trip_completed_at is not None
+                        else None
+                    ),
+                    _excel_metric(
+                        _excel_local_datetime(row.last_trip_completed_at)
+                        if row.last_trip_completed_at is not None
+                        else None
+                    ),
+                    _excel_metric(row.recorded_activity_span),
+                    _excel_metric(row.avg_trip_completion_interval),
+                    _excel_metric(row.median_trip_completion_interval),
+                    _excel_metric(row.longest_trip_gap),
+                    row.pending_diesel_count,
+                    row.disputed_diesel_count,
+                    row.missing_start_reading,
+                    row.missing_end_reading,
+                    row.unresolved_emergency_count,
+                    row.completeness_status,
+                    site.closure.status.value,
+                    exception_text,
+                    evidence_or_details,
                 ]
             )
             for event in row.events:
                 actor, verified_at = _event_actor_time(event)
                 if event.event_type.value == "TRIP_COMPLETE":
+                    previous_approved = previous_approved_by_event.get(event.event_id)
                     trip_rows.append(
                         [
                             report.operational_day.operational_date,
@@ -435,6 +603,8 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
                             event.verification_status.value,
                             actor,
                             verified_at,
+                            previous_approved[0] if previous_approved else None,
+                            previous_approved[1] if previous_approved else None,
                         ]
                     )
                 elif event.event_type.value == "KM_READING":
@@ -505,6 +675,8 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
             "Verification Status",
             "Verified By",
             "Verified At",
+            "Previous Approved Trip Time",
+            "Interval Since Previous Approved Trip",
         ],
         trip_rows,
     )
@@ -539,6 +711,77 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
         ["Date", "Site", "Tipper", "Exception Type", "Description", "Status"],
         exception_rows,
     )
+    dashboard = workbook.create_sheet("Management Dashboard")
+    dashboard["A1"] = "Management Dashboard"
+    dashboard["A1"].font = Font(bold=True, size=16, color="173C35")
+    dashboard["A2"] = "Operational Date"
+    dashboard["B2"] = report.operational_day.operational_date
+    dashboard["D2"] = "Reporting Timezone"
+    dashboard["E2"] = report.operational_day.reporting_timezone
+    dashboard_summary_headers = [
+        "Operational Date",
+        "Reporting Timezone",
+        "Assigned Tippers",
+        "Approved Trips",
+        "Total KM",
+        "Diesel Issued",
+        "Pending Verification",
+        "Missing Readings",
+        "Unresolved Emergencies",
+        "Sites Not Closed",
+    ]
+    dashboard_summary_values = [
+        report.operational_day.operational_date,
+        report.operational_day.reporting_timezone,
+        report.assigned_tippers_count,
+        report.approved_trip_count,
+        _excel_metric(report.total_km),
+        report.verified_diesel_issued,
+        report.pending_verification_count,
+        report.missing_reading_count,
+        report.unresolved_emergency_count,
+        report.sites_not_closed_count,
+    ]
+    for index, (label, value) in enumerate(
+        zip(dashboard_summary_headers, dashboard_summary_values, strict=True), start=1
+    ):
+        dashboard.cell(row=4, column=index, value=label)
+        dashboard.cell(row=5, column=index, value=_safe_excel_text(value))
+    dashboard["A7"] = "Tipper Performance"
+    dashboard["A7"].font = Font(bold=True, color="173C35")
+    group_definitions = [
+        (1, 4, "Context", "DDEBF7"),
+        (5, 8, "Trip Quality", "E2F0D9"),
+        (9, 14, "Distance & Diesel", "FCE4D6"),
+        (15, 20, "Trip Timing", "E4DFEC"),
+        (21, 29, "Attention & Closure", "FFF2CC"),
+    ]
+    for start_column, end_column, label, color in group_definitions:
+        dashboard.merge_cells(
+            start_row=7,
+            start_column=start_column,
+            end_row=7,
+            end_column=end_column,
+        )
+        cell = dashboard.cell(row=7, column=start_column, value=label)
+        cell.font = Font(bold=True, color="173C35")
+        cell.fill = PatternFill("solid", fgColor=color)
+        for column in range(start_column, end_column + 1):
+            dashboard.cell(row=8, column=column).fill = PatternFill("solid", fgColor=color)
+    for column, header in enumerate(management_headers, start=1):
+        dashboard.cell(row=8, column=column, value=header)
+    for row_values in management_rows:
+        dashboard.append(
+            [
+                value.value if isinstance(value, _ExcelFormula) else _safe_excel_text(value)
+                for value in row_values
+            ]
+        )
+    dashboard.freeze_panes = "A9"
+    dashboard.auto_filter.ref = (
+        f"A8:{get_column_letter(len(management_headers))}{max(8, len(management_rows) + 8)}"
+    )
+
     header_fill = PatternFill("solid", fgColor="1F4E78")
     for title, sheet_data in sheets.items():
         headers, sheet_rows = sheet_data
@@ -548,7 +791,9 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = header_fill
         worksheet.freeze_panes = "A2"
-        worksheet.auto_filter.ref = f"A1:{chr(64 + len(headers))}{max(1, len(sheet_rows) + 1)}"
+        worksheet.auto_filter.ref = (
+            f"A1:{get_column_letter(len(headers))}{max(1, len(sheet_rows) + 1)}"
+        )
         for sheet_row in sheet_rows:
             worksheet.append(
                 [
@@ -561,8 +806,42 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
             worksheet.column_dimensions[column[0].column_letter].width = width
         for row in worksheet.iter_rows():
             for cell in row:
-                if cell.is_date:
+                if isinstance(cell.value, timedelta):
+                    cell.number_format = '[h]"h "mm"m"'
+                elif cell.is_date:
                     cell.number_format = "yyyy-mm-dd hh:mm"
+    for row in dashboard.iter_rows():
+        for cell in row:
+            if isinstance(cell, MergedCell):
+                continue
+            if isinstance(cell.value, timedelta):
+                cell.number_format = '[h]"h "mm"m"'
+            elif cell.is_date:
+                cell.number_format = "yyyy-mm-dd hh:mm"
+    for worksheet, header_row in [(dashboard, 8), (workbook["Daily Summary"], 1)]:
+        for column in range(1, worksheet.max_column + 1):
+            header = worksheet.cell(row=header_row, column=column).value
+            if header in {
+                "Start KM",
+                "End KM",
+                "Distance KM",
+                "Total KM",
+                "KM / Approved Trip",
+                "Diesel Issued",
+                "Diesel Issued / Approved Trip",
+            }:
+                for row_number in range(header_row + 1, worksheet.max_row + 1):
+                    worksheet.cell(row=row_number, column=column).number_format = "0.00"
+    for column in range(1, dashboard.max_column + 1):
+        width = min(
+            max(
+                len(str(dashboard.cell(row=row_number, column=column).value or ""))
+                for row_number in range(1, dashboard.max_row + 1)
+            )
+            + 2,
+            32,
+        )
+        dashboard.column_dimensions[get_column_letter(column)].width = width
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()

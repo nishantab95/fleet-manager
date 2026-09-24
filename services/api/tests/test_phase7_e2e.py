@@ -293,6 +293,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
         assert workbook_response.status_code == 200
         workbook = load_workbook(BytesIO(workbook_response.content), read_only=True, data_only=True)
         assert workbook.sheetnames == [
+            "Management Dashboard",
             "Daily Summary",
             "Trip Register",
             "KM Register",

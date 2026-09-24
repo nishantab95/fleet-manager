@@ -32,13 +32,17 @@ from fleet_api.domain.enums import (
 
 @pytest.fixture(scope="session")
 def postgres_engine() -> Iterator[Engine]:
-    database_url = os.getenv("FLEET_TEST_DATABASE_URL")
-    if not database_url:
+    configured_url = os.getenv("FLEET_TEST_DATABASE_URL")
+    if configured_url:
+        database_url = make_url(configured_url)
+    else:
         application_url = make_url(Settings().database_url)
-        database_url = str(
-            application_url.set(database=f"{application_url.database or 'fleet'}_test")
-        )
-    database_name = make_url(database_url).database or ""
+        database_url = application_url.set(database=f"{application_url.database or 'fleet'}_test")
+    if database_url.host == "localhost":
+        # On Windows, localhost may resolve to another IPv6 PostgreSQL listener.
+        # Compose publishes the local test database on the IPv4 loopback address.
+        database_url = database_url.set(host="127.0.0.1")
+    database_name = database_url.database or ""
     if "test" not in database_name.lower():
         raise AssertionError("FLEET_TEST_DATABASE_URL must point to a database named for testing")
     engine = create_engine(database_url, pool_pre_ping=True)
@@ -49,8 +53,12 @@ def postgres_engine() -> Iterator[Engine]:
         engine.dispose()
         pytest.skip(f"PostgreSQL test database is unavailable: {exc}")
 
-    alembic_config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
-    alembic_config.set_main_option("sqlalchemy.url", database_url)
+    api_root = Path(__file__).parents[1]
+    alembic_config = Config(str(api_root / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(api_root / "migrations"))
+    alembic_config.set_main_option(
+        "sqlalchemy.url", database_url.render_as_string(hide_password=False)
+    )
     command.upgrade(alembic_config, "head")
     yield engine
     command.downgrade(alembic_config, "base")

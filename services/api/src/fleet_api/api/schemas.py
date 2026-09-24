@@ -380,13 +380,22 @@ class TipperDailyReportResponse(BaseModel):
     start_km: Decimal | None
     end_km: Decimal | None
     distance_km: Decimal | None
+    km_per_approved_trip: Decimal | None
     verified_diesel_issued: Decimal
+    diesel_issued_per_approved_trip: Decimal | None
+    first_trip_completed_at: datetime | None
+    last_trip_completed_at: datetime | None
+    recorded_activity_span_seconds: float | None
+    avg_trip_completion_interval_seconds: float | None
+    median_trip_completion_interval_seconds: float | None
+    longest_trip_gap_seconds: float | None
     pending_diesel_count: int
     disputed_diesel_count: int
     unresolved_emergency_count: int
     missing_start_reading: bool
     missing_end_reading: bool
     completeness_status: str
+    closure_status: SiteClosureStatus
     exceptions: list[ReportExceptionResponse]
     events: list[ReportEventResponse]
 

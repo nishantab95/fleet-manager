@@ -18,6 +18,12 @@ test.describe(
     await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible();
     await page.getByRole("button", { name: "Operations" }).click();
     await expect(page.getByRole("heading", { name: "Owner operations" })).toBeVisible();
+    await page.getByRole("button", { name: /Pilot Site/ }).first().click();
+    await expect(page.getByRole("heading", { name: /Pilot Site · daily detail/ })).toBeVisible();
+    await page.locator("#owner-closure").getByRole("button", { name: /PILOT12/ }).first().click();
+    await expect(page.getByText("KM / Approved Trip")).toBeVisible();
+    await expect(page.getByText("Avg Trip Completion Interval")).toBeVisible();
+    await expect(page.getByText("Longest Trip Gap")).toBeVisible();
 
     const refreshCookie = (await context.cookies()).find((cookie) => cookie.name === "fleet_web_refresh");
     expect(refreshCookie?.httpOnly).toBe(true);

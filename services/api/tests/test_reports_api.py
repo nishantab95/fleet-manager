@@ -240,9 +240,19 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
             params={"operational_date": REPORT_DATE.isoformat()},
         )
         assert tipper_report.status_code == 200
-        assert tipper_report.json()[0]["approved_trip_count"] == 8
-        assert tipper_report.json()[0]["disputed_trip_count"] == 1
-        assert tipper_report.json()[0]["rejected_trip_count"] == 1
+        tipper_data = tipper_report.json()[0]
+        assert tipper_data["approved_trip_count"] == 8
+        assert tipper_data["disputed_trip_count"] == 1
+        assert tipper_data["rejected_trip_count"] == 1
+        assert tipper_data["km_per_approved_trip"] == "15.00"
+        assert tipper_data["diesel_issued_per_approved_trip"] == "3.750"
+        assert tipper_data["recorded_activity_span_seconds"] == 25_200.0
+        assert tipper_data["avg_trip_completion_interval_seconds"] == 3_600.0
+        assert tipper_data["median_trip_completion_interval_seconds"] == 3_600.0
+        assert tipper_data["longest_trip_gap_seconds"] == 3_600.0
+        assert tipper_data["pending_diesel_count"] == 1
+        assert tipper_data["disputed_diesel_count"] == 0
+        assert tipper_data["closure_status"] == "OPEN"
         foreign_site = value(tenant_records, "site_b", Site)
         assert (
             owner.get(
@@ -272,6 +282,7 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         assert workbook_response.status_code == 200
         workbook = load_workbook(BytesIO(workbook_response.content), data_only=False)
         assert workbook.sheetnames == [
+            "Management Dashboard",
             "Daily Summary",
             "Trip Register",
             "KM Register",
@@ -280,6 +291,10 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         ]
         assert workbook["Daily Summary"]["B2"].value == "'=Unsafe Site"
         assert workbook["Daily Summary"]["J2"].value == 120
+        assert workbook["Management Dashboard"]["A8"].value == "Site"
+        assert workbook["Management Dashboard"]["L9"].value == 15
+        assert workbook["Management Dashboard"]["N9"].value == 3.75
+        assert workbook["Management Dashboard"].freeze_panes == "A9"
         trip_rows = list(workbook["Trip Register"].iter_rows(min_row=2, values_only=True))
         assert len(trip_rows) == 11
         assert (
