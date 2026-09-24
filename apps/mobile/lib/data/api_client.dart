@@ -20,10 +20,12 @@ abstract class DriverRemoteApi {
 }
 
 class ApiException implements Exception {
-  const ApiException(this.statusCode, this.message);
+  const ApiException(this.statusCode, this.message, {this.code, this.context});
 
   final int statusCode;
   final String message;
+  final String? code;
+  final Map<String, dynamic>? context;
 
   bool get isUnauthorized => statusCode == 401;
   bool get isRetryable =>
@@ -233,10 +235,12 @@ class ApiClient implements DriverRemoteApi {
   static void _check(http.Response response) {
     if (response.statusCode >= 200 && response.statusCode < 300) return;
     var message = 'Request failed';
+    Map<String, dynamic>? structured;
     try {
       final body = _json(response);
       final detail = body['detail'];
       if (detail is Map<String, dynamic> && detail['message'] is String) {
+        structured = detail;
         message = detail['message'] as String;
       } else if (detail is String) {
         message = detail;
@@ -244,6 +248,11 @@ class ApiClient implements DriverRemoteApi {
     } on Object {
       message = 'Request failed';
     }
-    throw ApiException(response.statusCode, message);
+    throw ApiException(
+      response.statusCode,
+      message,
+      code: structured?['code'] as String?,
+      context: structured,
+    );
   }
 }

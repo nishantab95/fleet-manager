@@ -49,7 +49,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('TRIP COMPLETE'), findsOneWidget);
-    expect(find.text('KM READING'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'KM READING'), findsOneWidget);
     expect(find.text('DIESEL'), findsOneWidget);
     expect(find.text('EMERGENCY'), findsOneWidget);
     expect(find.textContaining('Phase 0'), findsNothing);
@@ -125,6 +125,59 @@ void main() {
       expect(enabled('KM READING'), isTrue);
       expect(enabled('DIESEL'), isFalse);
       expect(enabled('EMERGENCY'), isTrue);
+      await database.close();
+    },
+  );
+
+  testWidgets(
+    'rejects an absurd KM value before it can enter the offline queue',
+    (tester) async {
+      final database = LocalDatabase(NativeDatabase.memory());
+      final dependencies = DriverAppDependencies(
+        api: ApiClient(),
+        sessionStore: SecureSessionStore(),
+        sync: SyncEngine(
+          database: database,
+          remote: _FakeRemote(),
+          installationIdentifier: 'test-device',
+        ),
+        installationIdentifier: 'test-device',
+      );
+      const assignment = DriverAssignment(
+        assignmentId: 'assignment',
+        tipperId: 'tipper',
+        tipperRegistrationNumber: 'KA01AB1234',
+        tipperShortName: 'Alpha One',
+        siteId: 'site',
+        siteName: 'Alpha Site',
+        supervisorName: 'Supervisor A',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DriverHomeScreen(
+            dependencies: dependencies,
+            assignment: assignment,
+            duty: const DriverDutyState.none(),
+            onSignOut: () async {},
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('KM READING'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, '5676543455.81');
+      await tester.tap(find.text('CONTINUE'));
+      await tester.pump();
+
+      expect(
+        find.text(
+          'KM reading looks invalid. Please check the odometer and enter the correct value.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(FilledButton, 'KM READING'), findsOneWidget);
+      expect(await database.pendingForSync(), isEmpty);
       await database.close();
     },
   );

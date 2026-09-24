@@ -1,3 +1,6 @@
+from decimal import Decimal
+
+
 class DomainError(ValueError):
     """Base class for expected domain invariant failures."""
 
@@ -109,4 +112,10 @@ class DutyKmValidationError(DomainError):
 
 
 class DutyOdometerContinuityError(DomainError):
+    def __init__(self, message: str, *, previous_end_km: Decimal) -> None:
+        super().__init__(message)
+        self.previous_end_km = previous_end_km
+
+
+class DutyOdometerOutOfRangeError(DomainError):
     pass

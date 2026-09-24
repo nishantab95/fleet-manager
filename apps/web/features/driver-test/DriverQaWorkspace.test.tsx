@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../lib/api/client";
 import type { DriverDutyState } from "../../lib/types";
 
 const makeDutyState = (status: DriverDutyState["status"]): DriverDutyState => ({
@@ -63,6 +64,7 @@ const expectFourButtons = () => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   dutyState.current = makeDutyState("NONE");
   vi.clearAllMocks();
 });
@@ -107,6 +109,33 @@ describe("Driver QA workspace", () => {
     expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeEnabled();
     expect(screen.getByRole("status")).toHaveTextContent("Previous duty completed");
     fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
+    expect(screen.getByRole("heading", { name: "START KM" })).toBeInTheDocument();
+  });
+
+  it("rejects an absurd KM value before submit and retains the input", async () => {
+    await renderWorkspace();
+    fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
+    const input = screen.getByLabelText("KM value") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "5676543455.81" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit START KM" }));
+
+    expect(await screen.findByText("KM reading looks invalid. Please check the odometer and enter the correct value.")).toBeInTheDocument();
+    expect(input).toHaveValue(5676543455.81);
+    expect(requestMock.mock.calls.some(([path]) => path === "/api/v1/driver/events")).toBe(false);
+  });
+
+  it("renders structured continuity errors and retains the failed reading", async () => {
+    await renderWorkspace();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ object_reference: "evidence/start.jpg" }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    requestMock.mockRejectedValueOnce(new ApiError(422, "continuity rejected", "ODOMETER_CONTINUITY", { previous_end_km: "10120.00" }));
+    fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
+    const input = screen.getByLabelText("KM value") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "10000" } });
+    fireEvent.change(screen.getByLabelText("Required dashboard/odometer image"), { target: { files: [new File(["image"], "start.jpg", { type: "image/jpeg" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit START KM" }));
+
+    expect(await screen.findByText("START KM cannot be lower than the previous END KM (10120). Please check the odometer.")).toBeInTheDocument();
+    expect(input).toHaveValue(10000);
     expect(screen.getByRole("heading", { name: "START KM" })).toBeInTheDocument();
   });
 

@@ -1,7 +1,11 @@
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_MAX_ODOMETER_KM = Decimal("10000000")
+MAX_STORABLE_ODOMETER_KM = Decimal("9999999999.99")
 
 
 class Settings(BaseSettings):
@@ -29,6 +33,9 @@ class Settings(BaseSettings):
     evidence_max_bytes: int = 5_000_000
     evidence_allowed_mime_types: str = "image/jpeg,image/png,image/webp"
     event_future_skew_seconds: int = 300
+    # Realistic configurable ceiling for driver odometer readings. Keep this
+    # at or below the existing Numeric(12, 2) storage capacity.
+    max_odometer_km: Decimal = DEFAULT_MAX_ODOMETER_KM
     phone_default_region: str | None = None
     otp_provider: str = "unavailable"
     enable_development_otp: bool = False
@@ -61,6 +68,15 @@ class Settings(BaseSettings):
             raise ValueError("evidence_max_bytes must be positive")
         if self.event_future_skew_seconds < 0:
             raise ValueError("event_future_skew_seconds cannot be negative")
+        if (
+            not self.max_odometer_km.is_finite()
+            or self.max_odometer_km <= 0
+            or self.max_odometer_km > MAX_STORABLE_ODOMETER_KM
+        ):
+            raise ValueError("max_odometer_km must be finite, positive, and fit Numeric(12, 2)")
+        exponent = self.max_odometer_km.as_tuple().exponent
+        if isinstance(exponent, int) and exponent < -2:
+            raise ValueError("max_odometer_km cannot have more than two decimal places")
 
         environment = self.environment.lower()
         otp_provider = self.otp_provider.lower()

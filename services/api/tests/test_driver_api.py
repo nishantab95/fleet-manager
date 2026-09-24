@@ -27,7 +27,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.session import get_db as session_get_db
-from fleet_api.domain.enums import TipperStatus
+from fleet_api.domain.enums import TipperStatus, VerificationStatus
 from fleet_api.main import create_app
 
 pytestmark = pytest.mark.postgres
@@ -179,7 +179,7 @@ def submit_km(
     client: TestClient,
     *,
     reading_type: str,
-    reading_value: int,
+    reading_value: int | str,
     created_at: datetime,
     installation_identifier: str = "duty-test-device",
 ) -> Response:
@@ -378,6 +378,10 @@ def test_start_requires_tipper_odometer_continuity(
         )
         assert rejected.status_code == 422
         assert rejected.json()["detail"]["code"] == "ODOMETER_CONTINUITY"
+        assert rejected.json()["detail"]["previous_end_km"] == "10120.00"
+        assert rejected.json()["detail"]["message"] == (
+            "START KM cannot be lower than the previous END KM (10120). Please check the odometer."
+        )
         accepted = submit_km(
             client,
             reading_type="START_READING",
@@ -385,6 +389,158 @@ def test_start_requires_tipper_odometer_continuity(
             created_at=started_at + timedelta(hours=2, minutes=1),
         )
         assert accepted.status_code == 200
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("invalid_value", ["-1", "NaN", "Infinity", "5676543455.81"])
+def test_invalid_odometer_values_are_structured_and_transaction_safe(
+    db_session: Session,
+    tenant_records: dict[str, object],
+    invalid_value: str,
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(hours=4)
+    add_assignment(db_session, tenant_records, starts_at=started_at - timedelta(hours=1))
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    try:
+        rejected = submit_km(
+            client,
+            reading_type="START_READING",
+            reading_value=invalid_value,
+            created_at=started_at,
+        )
+        assert rejected.status_code == 422, rejected.text
+        assert rejected.json()["detail"]["code"] == "ODOMETER_OUT_OF_RANGE"
+        assert (
+            rejected.json()["detail"]["message"]
+            == "KM reading looks invalid. Please check the odometer and enter the correct value."
+        )
+        assert client.get("/api/v1/driver/duty/current").json()["status"] == "NONE"
+        assert db_session.scalars(select(DutySession)).all() == []
+        assert db_session.scalars(select(OperationalEvent)).all() == []
+    finally:
+        client.close()
+
+
+def test_invalid_end_does_not_close_duty_and_next_session_keeps_continuity(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(hours=4)
+    assignment = add_assignment(
+        db_session, tenant_records, starts_at=started_at - timedelta(hours=1)
+    )
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    try:
+        assert (
+            submit_km(
+                client, reading_type="START_READING", reading_value=10000, created_at=started_at
+            ).status_code
+            == 200
+        )
+        invalid_end = submit_km(
+            client,
+            reading_type="END_READING",
+            reading_value="5676543455.81",
+            created_at=started_at + timedelta(hours=1),
+        )
+        assert invalid_end.status_code == 422
+        assert invalid_end.json()["detail"]["code"] == "ODOMETER_OUT_OF_RANGE"
+        state = client.get("/api/v1/driver/duty/current").json()
+        assert state["status"] == "ACTIVE"
+        stored_session = db_session.scalar(
+            select(DutySession).where(DutySession.assignment_id == assignment.id)
+        )
+        assert stored_session is not None
+        assert stored_session.status.value == "ACTIVE"
+        assert stored_session.end_km is None
+        assert stored_session.end_event_id is None
+        assert db_session.query(OperationalEvent).count() == 1
+
+        assert (
+            submit_km(
+                client,
+                reading_type="END_READING",
+                reading_value=10220,
+                created_at=started_at + timedelta(hours=2),
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client,
+                reading_type="START_READING",
+                reading_value=10220,
+                created_at=started_at + timedelta(hours=3),
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/v1/driver/duty/current").json()["status"] == "ACTIVE"
+    finally:
+        client.close()
+
+
+def test_rejected_end_does_not_poison_next_start_continuity(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(hours=5)
+    add_assignment(db_session, tenant_records, starts_at=started_at - timedelta(hours=1))
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    try:
+        assert (
+            submit_km(
+                client, reading_type="START_READING", reading_value=10000, created_at=started_at
+            ).status_code
+            == 200
+        )
+        ended = submit_km(
+            client,
+            reading_type="END_READING",
+            reading_value=10120,
+            created_at=started_at + timedelta(hours=1),
+        )
+        assert ended.status_code == 200
+        end_event = db_session.get(OperationalEvent, ended.json()["event_id"])
+        assert end_event is not None
+        end_event.verification_status = VerificationStatus.REJECTED
+        db_session.flush()
+        assert (
+            submit_km(
+                client,
+                reading_type="START_READING",
+                reading_value=10000,
+                created_at=started_at + timedelta(hours=2),
+            ).status_code
+            == 200
+        )
     finally:
         client.close()
 

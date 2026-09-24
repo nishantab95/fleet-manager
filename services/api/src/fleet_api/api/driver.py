@@ -39,6 +39,7 @@ from fleet_api.domain.errors import (
     DutyKmValidationError,
     DutyNotStartedError,
     DutyOdometerContinuityError,
+    DutyOdometerOutOfRangeError,
     EvidenceValidationError,
     ObjectStorageUnavailableError,
     RoleViolationError,
@@ -80,12 +81,18 @@ def _fail(exc: DomainError) -> NoReturn:
     elif isinstance(exc, DutyOdometerContinuityError):
         http_status = 422
         code = "ODOMETER_CONTINUITY"
+    elif isinstance(exc, DutyOdometerOutOfRangeError):
+        http_status = 422
+        code = "ODOMETER_OUT_OF_RANGE"
     else:
         http_status = 422
         code = "VALIDATION_ERROR"
+    detail: dict[str, object] = {"code": code, "message": str(exc)}
+    if isinstance(exc, DutyOdometerContinuityError):
+        detail["previous_end_km"] = str(exc.previous_end_km)
     raise HTTPException(
         status_code=http_status,
-        detail={"code": code, "message": str(exc)},
+        detail=detail,
     ) from exc
 
 

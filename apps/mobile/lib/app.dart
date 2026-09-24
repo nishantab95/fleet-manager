@@ -16,6 +16,9 @@ const appBuild = String.fromEnvironment(
   'FLUTTER_BUILD_NUMBER',
   defaultValue: '1',
 );
+const maxOdometerKm = 10000000.0;
+const invalidOdometerMessage =
+    'KM reading looks invalid. Please check the odometer and enter the correct value.';
 
 class DriverAppDependencies {
   const DriverAppDependencies({
@@ -362,7 +365,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       await widget.dependencies.sync.syncPending();
       await _refreshQueue();
       await _refreshDuty();
-      if (mounted) setState(() => _message = 'Sync complete');
+      final syncError = await widget.dependencies.sync.lastSyncErrorMessage();
+      if (mounted) setState(() => _message = syncError ?? 'Sync complete');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -558,6 +562,7 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
   int _pendingCount = 0;
   DateTime? _lastSuccessfulSync;
   String? _lastSyncError;
+  String? _lastSyncErrorMessage;
 
   @override
   void initState() {
@@ -570,11 +575,13 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
     final pendingCount = await sync.pendingCount();
     final lastSuccessfulSync = await sync.lastSuccessfulSync();
     final lastSyncError = await sync.lastSyncErrorCategory();
+    final lastSyncErrorMessage = await sync.lastSyncErrorMessage();
     if (!mounted) return;
     setState(() {
       _pendingCount = pendingCount;
       _lastSuccessfulSync = lastSuccessfulSync;
       _lastSyncError = lastSyncError;
+      _lastSyncErrorMessage = lastSyncErrorMessage;
     });
   }
 
@@ -613,6 +620,11 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
             title: const Text('Last sync error category'),
             subtitle: Text(_lastSyncError ?? 'None recorded'),
           ),
+          if (_lastSyncErrorMessage != null)
+            ListTile(
+              title: const Text('Last sync error'),
+              subtitle: Text(_lastSyncErrorMessage!),
+            ),
           const SizedBox(height: 12),
           const Text(
             'This screen contains no trip totals, credentials, or auth tokens.',
@@ -723,6 +735,22 @@ class _KmDialog extends StatefulWidget {
 
 class _KmDialogState extends State<_KmDialog> {
   final _value = TextEditingController();
+  String? _error;
+
+  String? _validateOdometer(String raw) {
+    final value = raw.trim();
+    if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(value)) {
+      return invalidOdometerMessage;
+    }
+    final parsed = double.tryParse(value);
+    if (parsed == null ||
+        !parsed.isFinite ||
+        parsed < 0 ||
+        parsed > maxOdometerKm) {
+      return invalidOdometerMessage;
+    }
+    return null;
+  }
 
   @override
   void dispose() {
@@ -744,8 +772,18 @@ class _KmDialogState extends State<_KmDialog> {
           TextField(
             controller: _value,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) {
+              if (_error != null) setState(() => _error = null);
+            },
             decoration: const InputDecoration(labelText: 'Kilometres'),
           ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
         ],
       ),
       actions: [
@@ -755,7 +793,11 @@ class _KmDialogState extends State<_KmDialog> {
         ),
         FilledButton(
           onPressed: () {
-            if (double.tryParse(_value.text.trim()) == null) return;
+            final error = _validateOdometer(_value.text);
+            if (error != null) {
+              setState(() => _error = error);
+              return;
+            }
             Navigator.pop(context, _KmCapture(widget.type, _value.text.trim()));
           },
           child: const Text('CONTINUE'),

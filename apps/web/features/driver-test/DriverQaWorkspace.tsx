@@ -9,6 +9,29 @@ import { useAuth } from "../auth/AuthProvider";
 type QaEventLog = { uuid: string; type: string; timestamp: string; status: string; verificationStatus: string };
 type PrimaryAction = "TRIP_COMPLETE" | "KM_READING" | "DIESEL" | "EMERGENCY";
 
+// Mirrors the backend default for immediate QA feedback. The API remains
+// authoritative and can reject a value if its configured ceiling differs.
+const MAX_ODOMETER_KM = 10_000_000;
+const INVALID_ODOMETER_MESSAGE = "KM reading looks invalid. Please check the odometer and enter the correct value.";
+
+function parseOdometer(raw: string): number | null {
+  const value = raw.trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= MAX_ODOMETER_KM ? parsed : null;
+}
+
+function driverErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === "ODOMETER_CONTINUITY") {
+    const previous = error.context?.previous_end_km;
+    if (typeof previous === "string" || typeof previous === "number") {
+      const formatted = Number(previous).toString();
+      return `START KM cannot be lower than the previous END KM (${formatted}). Please check the odometer.`;
+    }
+  }
+  return error instanceof Error ? error.message : "The real Driver API request failed.";
+}
+
 function qaInstallationIdentifier() {
   if (typeof window !== "undefined") {
     const stored = window.sessionStorage.getItem("fleet-qa-installation-id");
@@ -70,11 +93,11 @@ export function DriverQaWorkspace() {
       setEventLog((current) => [{ uuid: response.client_event_uuid, type: eventType, timestamp: new Date().toISOString(), status: response.status, verificationStatus: response.verification_status }, ...current]);
       setDuty(await request<DriverDutyState>("/api/v1/driver/duty/current"));
       setActiveAction(null); setReadingValue(""); setDieselLitres(""); setEvidenceFile(null);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "The real Driver API request failed."); }
+    } catch (caught) { setError(driverErrorMessage(caught)); }
     finally { setBusy(false); if (eventType === "EMERGENCY") emergencySubmitLock.current = false; }
   };
 
-  const submitKm = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const value = Number(readingValue); if (!Number.isFinite(value) || value < 0) { setError("KM value must be a non-negative number."); return; } if (!evidenceFile) { setError("A local test image is required for a KM reading."); return; } await submitEvent("KM_READING", { reading_type: readingType, reading_value: value }, evidenceFile); };
+  const submitKm = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const value = parseOdometer(readingValue); if (value === null) { setError(INVALID_ODOMETER_MESSAGE); return; } if (!evidenceFile) { setError("A local test image is required for a KM reading."); return; } await submitEvent("KM_READING", { reading_type: readingType, reading_value: value }, evidenceFile); };
   const submitDiesel = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const litres = Number(dieselLitres); if (!Number.isFinite(litres) || litres <= 0) { setError("Diesel litres must be greater than zero."); return; } await submitEvent("DIESEL", { litres }, evidenceFile); };
   const dutyStatus = duty?.status ?? "LOADING";
   const openKmReading = () => {
@@ -95,7 +118,7 @@ export function DriverQaWorkspace() {
       <section className="table-card"><h2>Current assignment</h2>{assignment ? <div className="table-row"><strong>{assignment.tipper_short_name ?? assignment.tipper_registration_number}</strong><span>{assignment.tipper_registration_number}</span><span>Site: {assignment.site_name}</span><span>Supervisor: {assignment.supervisor_name}</span><span>Configured duty: {assignment.regular_duty_minutes / 60}h</span></div> : <div className="notice">Loading the current assignment…</div>}</section>
       <section className="table-card" aria-label="Current duty state"><strong>Duty state: {dutyStatus}</strong>{duty?.started_at && <span> · Started {new Date(duty.started_at).toLocaleString()} at START KM {duty.start_km}</span>}{duty?.ended_at && <span> · Ended {new Date(duty.ended_at).toLocaleString()} at END KM {duty.end_km}</span>}<p className="muted">This state is loaded from the server and resumes after browser restart. Overtime is not shown to drivers.</p></section>
       <section className="stack"><h2>Driver operational actions</h2><div className="metric-grid qa-actions"><button disabled={!canOperate} onClick={() => void submitEvent("TRIP_COMPLETE")} title={canOperate ? undefined : disabledActionHint} type="button">TRIP COMPLETE</button><button disabled={!canStartOrEndDuty} onClick={openKmReading} title={canStartOrEndDuty ? undefined : disabledActionHint} type="button">KM READING</button><button disabled={!canOperate} onClick={() => { setError(""); setActiveAction("DIESEL"); }} title={canOperate ? undefined : disabledActionHint} type="button">DIESEL</button><button className="danger-action" disabled={!assignment || busy} onClick={() => void submitEvent("EMERGENCY")} type="button">EMERGENCY</button></div><p className="muted" role="status">{dutyStatus === "CLOSED" ? "Previous duty completed. Record START KM to begin the next duty session." : dutyStatus === "NONE" ? "Record START KM first." : dutyStatus === "ACTIVE" ? "Duty active" : "Loading duty state…"}</p><p className="muted">Emergency sends one alert using the current driver, tipper, site, supervisor, company, and timestamp context. No category, description, or evidence is required.</p></section>
-      {activeAction === "KM_READING" && <form className="table-card stack" onSubmit={(event) => void submitKm(event)}><h3>{readingType === "START_READING" ? "START KM" : "END KM"}</h3><input type="hidden" value={readingType} readOnly /><label>KM value<input aria-label="KM value" type="number" min="0" step="0.01" value={readingValue} onChange={(event) => setReadingValue(event.target.value)} required /></label><label>Required dashboard/odometer image<input aria-label="Required dashboard/odometer image" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setEvidenceFile(event.target.files?.[0] ?? null)} required /></label><div className="inline-form"><button disabled={busy} type="submit">Submit {readingType === "START_READING" ? "START KM" : "END KM"}</button><button className="secondary" type="button" onClick={() => setActiveAction(null)}>Cancel</button></div></form>}
+      {activeAction === "KM_READING" && <form className="table-card stack" noValidate onSubmit={(event) => void submitKm(event)}><h3>{readingType === "START_READING" ? "START KM" : "END KM"}</h3><input type="hidden" value={readingType} readOnly /><label>KM value<input aria-label="KM value" type="number" min="0" max={MAX_ODOMETER_KM} step="0.01" value={readingValue} onChange={(event) => setReadingValue(event.target.value)} required /></label><label>Required dashboard/odometer image<input aria-label="Required dashboard/odometer image" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setEvidenceFile(event.target.files?.[0] ?? null)} required /></label><div className="inline-form"><button disabled={busy} type="submit">Submit {readingType === "START_READING" ? "START KM" : "END KM"}</button><button className="secondary" type="button" onClick={() => setActiveAction(null)}>Cancel</button></div></form>}
       {activeAction === "DIESEL" && <form className="table-card stack" onSubmit={(event) => void submitDiesel(event)}><h3>DIESEL ISSUED / RECORDED</h3><label>Litres<input type="number" min="0.01" step="0.01" value={dieselLitres} onChange={(event) => setDieselLitres(event.target.value)} required /></label><label>Optional fuel image<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setEvidenceFile(event.target.files?.[0] ?? null)} /></label><div className="inline-form"><button disabled={busy} type="submit">Submit diesel issued / recorded</button><button className="secondary" type="button" onClick={() => setActiveAction(null)}>Cancel</button></div></form>}
       <QaNotice><strong>QA diagnostics</strong> · not Driver product UI. Each accepted event below has its own client UUID and server verification state.</QaNotice>
       <div className="table-card">{eventLog.length ? eventLog.map((item) => <div className="table-row" key={item.uuid}><strong>{item.type}</strong><span>{item.uuid}</span><span>{new Date(item.timestamp).toLocaleString()}</span><span>API: {item.status}</span><span>Verification: {item.verificationStatus}</span></div>) : <div className="table-row"><span>No QA events submitted in this browser session.</span></div>}</div>

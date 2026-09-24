@@ -379,6 +379,26 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
             reading_type="START_READING",
             reading_value="100.00",
         )
+        absurd_end_uuid = str(uuid4())
+        absurd_upload = driver.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": absurd_end_uuid},
+            files={"file": ("evidence.jpg", b"\xff\xd8\xffphase6-evidence", "image/jpeg")},
+        )
+        assert absurd_upload.status_code == 200
+        absurd_end = driver.post(
+            "/api/v1/driver/events",
+            json=driver_event_payload(
+                "KM_READING",
+                client_event_uuid=absurd_end_uuid,
+                created_at=DAY_START + timedelta(hours=2),
+                reading_type="END_READING",
+                reading_value="5676543455.81",
+                object_reference=absurd_upload.json()["object_reference"],
+            ),
+        )
+        assert absurd_end.status_code == 422
+        assert absurd_end.json()["detail"]["code"] == "ODOMETER_OUT_OF_RANGE"
         invalid_end_uuid = str(uuid4())
         invalid_upload = driver.post(
             "/api/v1/driver/evidence",
@@ -415,6 +435,7 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
         assert report.status_code == 200
         data = report.json()
         assert data["total_km"] is None
+        assert "5676543455" not in report.text
         assert "MISSING_END_READING" in {item["code"] for item in data["tippers"][0]["exceptions"]}
         close = owner.post(
             f"/api/v1/reports/sites/{site.id}/closure/close",
@@ -427,6 +448,17 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
             blocker["code"] == "MISSING_END_READING"
             for blocker in close.json()["detail"]["blockers"]
         )
+        workbook = load_workbook(
+            BytesIO(
+                owner.get(
+                    "/api/v1/reports/daily.xlsx",
+                    params={"operational_date": REPORT_DATE.isoformat()},
+                ).content
+            ),
+            data_only=False,
+        )
+        km_rows = list(workbook["KM Register"].iter_rows(min_row=2, values_only=True))
+        assert all("5676543455" not in str(row) for row in km_rows)
     finally:
         owner.close()
 

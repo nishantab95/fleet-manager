@@ -28,3 +28,15 @@ def test_allowed_hosts_are_parsed_and_secure_cookies_follow_profile() -> None:
 
     assert settings.allowed_host_values == ["pilot.example", "api.pilot.example"]
     assert settings.secure_cookies is True
+
+
+def test_odometer_ceiling_defaults_to_realistic_value_and_is_configurable() -> None:
+    assert str(_settings().max_odometer_km) == "10000000"
+    assert str(_settings(max_odometer_km="2500000.50").max_odometer_km) == "2500000.50"
+
+
+def test_odometer_ceiling_rejects_non_finite_or_unstorable_values() -> None:
+    with pytest.raises(ValueError, match="max_odometer_km"):
+        _settings(max_odometer_km="Infinity")
+    with pytest.raises(ValueError, match="max_odometer_km"):
+        _settings(max_odometer_km="10000000000")

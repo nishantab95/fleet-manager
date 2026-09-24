@@ -3,8 +3,14 @@ import type { Tokens } from "../types";
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly code?: string,
+    public readonly context?: Record<string, unknown>,
+  ) {
     super(message);
+    this.name = "ApiError";
   }
 }
 
@@ -30,8 +36,14 @@ export async function request<T>(path: string, options: RequestInit = {}, access
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const detail = body?.detail;
-    const message = typeof detail === "object" ? detail.message : detail;
-    throw new ApiError(response.status, message ?? "The request could not be completed.");
+    const structured = detail && typeof detail === "object" ? detail as Record<string, unknown> : undefined;
+    const message = structured ? structured.message : detail;
+    throw new ApiError(
+      response.status,
+      typeof message === "string" ? message : "The request could not be completed.",
+      typeof structured?.code === "string" ? structured.code : undefined,
+      structured,
+    );
   }
   return body as T;
 }
@@ -53,8 +65,14 @@ export async function fetchPrivateEvidence(path: string, accessToken: string): P
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     const detail = body?.detail;
-    const message = typeof detail === "object" ? detail.message : detail;
-    throw new ApiError(response.status, message ?? "Evidence could not be loaded.");
+    const structured = detail && typeof detail === "object" ? detail as Record<string, unknown> : undefined;
+    const message = structured ? structured.message : detail;
+    throw new ApiError(
+      response.status,
+      typeof message === "string" ? message : "Evidence could not be loaded.",
+      typeof structured?.code === "string" ? structured.code : undefined,
+      structured,
+    );
   }
   return {
     url: URL.createObjectURL(await response.blob()),

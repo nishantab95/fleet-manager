@@ -252,7 +252,9 @@ class DriverEventRequest(BaseModel):
     installation_identifier: str = Field(min_length=1, max_length=200)
     platform: DevicePlatform
     reading_type: KmReadingType | None = None
-    reading_value: Decimal | None = Field(default=None, ge=0)
+    # KM bounds and finiteness are validated in the domain so every malformed,
+    # negative, or excessive reading gets the same structured API error.
+    reading_value: Decimal | str | None = Field(default=None)
     litres: Decimal | None = Field(default=None, gt=0)
     category: EmergencyCategory | None = None
     description: str | None = Field(default=None, max_length=500)

@@ -26,6 +26,7 @@ class SyncEngine {
 
   static const lastSuccessfulSyncKey = 'last_successful_sync_at';
   static const lastSyncErrorKey = 'last_sync_error_category';
+  static const lastSyncErrorMessageKey = 'last_sync_error_message';
 
   Future<String> enqueue({
     required DriverAssignment assignment,
@@ -65,9 +66,11 @@ class SyncEngine {
       } on ApiException catch (error) {
         await database.markFailed(event.clientEventUuid, error.message);
         await database.setMetadata(lastSyncErrorKey, _errorCategory(error));
+        await database.setMetadata(lastSyncErrorMessageKey, error.message);
       } on Object catch (error) {
         await database.markFailed(event.clientEventUuid, error.toString());
         await database.setMetadata(lastSyncErrorKey, 'LOCAL_OR_NETWORK_ERROR');
+        await database.setMetadata(lastSyncErrorMessageKey, error.toString());
       }
     }
     if (rows.isEmpty || synced == rows.length) {
@@ -78,6 +81,7 @@ class SyncEngine {
     }
     if (rows.isNotEmpty && synced == rows.length) {
       await database.setMetadata(lastSyncErrorKey, '');
+      await database.setMetadata(lastSyncErrorMessageKey, '');
     }
     return synced;
   }
@@ -94,7 +98,14 @@ class SyncEngine {
     return value == null || value.isEmpty ? null : value;
   }
 
+  Future<String?> lastSyncErrorMessage() async {
+    final value = await database.metadata(lastSyncErrorMessageKey);
+    return value == null || value.isEmpty ? null : value;
+  }
+
   static String _errorCategory(ApiException error) {
+    if (error.code == 'ODOMETER_CONTINUITY') return 'ODOMETER_CONTINUITY';
+    if (error.code == 'ODOMETER_OUT_OF_RANGE') return 'ODOMETER_OUT_OF_RANGE';
     if (error.statusCode == 401) return 'AUTH_REQUIRED';
     if (error.statusCode == 403) return 'ACCESS_REVOKED_OR_DENIED';
     if (error.statusCode >= 500 || error.statusCode == 0) {

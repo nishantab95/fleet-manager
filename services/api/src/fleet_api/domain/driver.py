@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -48,6 +48,7 @@ from fleet_api.domain.errors import (
     DutyKmValidationError,
     DutyNotStartedError,
     DutyOdometerContinuityError,
+    DutyOdometerOutOfRangeError,
     EvidenceValidationError,
     ObjectStorageUnavailableError,
     RoleViolationError,
@@ -185,7 +186,13 @@ def _previous_valid_end_km(
     tipper_id: UUID,
     before: datetime,
 ) -> Decimal | None:
-    """Return the latest non-rejected END KM for this tipper before START."""
+    """Return the latest non-rejected END KM for this tipper before START.
+
+    Pending verification is intentionally continuity-valid: the driver must
+    not be able to roll the physical odometer backward while review is still
+    outstanding. Rejected readings are excluded; approved and amended
+    readings remain valid history.
+    """
 
     valid_statuses = {
         VerificationStatus.PENDING_VERIFICATION,
@@ -205,6 +212,37 @@ def _previous_valid_end_km(
         .order_by(DutySession.ended_at.desc(), DutySession.id.desc())
         .limit(1)
     )
+
+
+def _format_odometer_km(value: Decimal) -> str:
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def _validate_odometer_reading(settings: Settings, reading_value: Decimal | str) -> Decimal:
+    """Validate a KM value before any event or duty-session mutation."""
+    try:
+        value = reading_value if isinstance(reading_value, Decimal) else Decimal(reading_value)
+    except (InvalidOperation, ValueError):
+        raise DutyOdometerOutOfRangeError(
+            "KM reading looks invalid. Please check the odometer and enter the correct value."
+        ) from None
+    if not value.is_finite():
+        raise DutyOdometerOutOfRangeError(
+            "KM reading looks invalid. Please check the odometer and enter the correct value."
+        )
+    if value < 0 or value > settings.max_odometer_km:
+        raise DutyOdometerOutOfRangeError(
+            "KM reading looks invalid. Please check the odometer and enter the correct value."
+        )
+    exponent = value.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -2:
+        raise DutyOdometerOutOfRangeError(
+            "KM reading looks invalid. Please check the odometer and enter the correct value."
+        )
+    return value
 
 
 def _require_active_duty(
@@ -338,7 +376,7 @@ def create_driver_event(
     device_created_at: datetime,
     device: Device,
     reading_type: KmReadingType | None = None,
-    reading_value: Decimal | None = None,
+    reading_value: Decimal | str | None = None,
     litres: Decimal | None = None,
     category: EmergencyCategory | None = None,
     description: str | None = None,
@@ -368,6 +406,11 @@ def create_driver_event(
         ):
             raise TenantConsistencyError("client event UUID is not owned by this driver")
         return DriverEventResult(event=existing, duplicate=True)
+    km_reading_value: Decimal | None = None
+    if event_type == OperationalEventType.KM_READING:
+        if reading_type is None or reading_value is None:
+            raise DomainError("reading_type and reading_value are required")
+        km_reading_value = _validate_odometer_reading(settings, reading_value)
     if event_type == OperationalEventType.EMERGENCY:
         # Emergency is a one-tap signal. A second client UUID inside the short
         # retry window is treated as the same signal so rapid repeat taps do
@@ -411,8 +454,6 @@ def create_driver_event(
             device_created_at=device_created_at,
         )
     elif event_type == OperationalEventType.KM_READING:
-        if reading_type is None or reading_value is None:
-            raise DomainError("reading_type and reading_value are required")
         if reading_type == KmReadingType.START_READING:
             active_duty = _active_duty_session(session, context=context, lock=True)
             if active_duty is not None:
@@ -423,10 +464,12 @@ def create_driver_event(
                 tipper_id=assignment.tipper_id,
                 before=device_created_at,
             )
-            if previous_end_km is not None and reading_value < previous_end_km:
+            assert km_reading_value is not None
+            if previous_end_km is not None and km_reading_value < previous_end_km:
                 raise DutyOdometerContinuityError(
-                    f"START KM {reading_value} is below the previous valid END KM "
-                    f"{previous_end_km} for this tipper"
+                    "START KM cannot be lower than the previous END KM "
+                    f"({_format_odometer_km(previous_end_km)}). Please check the odometer.",
+                    previous_end_km=previous_end_km,
                 )
         elif reading_type == KmReadingType.END_READING:
             active_duty = _require_active_duty(
@@ -435,7 +478,8 @@ def create_driver_event(
                 assignment=assignment,
                 device_created_at=device_created_at,
             )
-            if reading_value < active_duty.start_km:
+            assert km_reading_value is not None
+            if km_reading_value < active_duty.start_km:
                 raise DutyKmValidationError(
                     "END_READING must be greater than or equal to START_READING"
                 )
@@ -452,7 +496,7 @@ def create_driver_event(
             device_id=device.id,
         )
     elif event_type == OperationalEventType.KM_READING:
-        assert reading_type is not None and reading_value is not None
+        assert reading_type is not None and km_reading_value is not None
         km_reading = create_km_reading(
             session,
             company_id=context.company.id,
@@ -460,7 +504,7 @@ def create_driver_event(
             client_event_uuid=client_event_uuid,
             device_created_at=device_created_at,
             reading_type=reading_type,
-            reading_value=reading_value,
+            reading_value=km_reading_value,
             object_reference=object_reference,
             device_id=device.id,
         )
@@ -474,7 +518,7 @@ def create_driver_event(
                 site_id=assignment.site_id,
                 operational_date=_operational_date(context, device_created_at),
                 start_event_id=km_reading.event_id,
-                start_km=reading_value,
+                start_km=km_reading_value,
                 started_at=device_created_at,
                 configured_regular_duty_minutes=regular_minutes,
                 regular_duty_ends_at=device_created_at + timedelta(minutes=regular_minutes),
@@ -492,7 +536,7 @@ def create_driver_event(
             session.flush()
         elif active_duty is not None and reading_type == KmReadingType.END_READING:
             active_duty.end_event_id = km_reading.event_id
-            active_duty.end_km = reading_value
+            active_duty.end_km = km_reading_value
             active_duty.ended_at = device_created_at
             active_duty.status = DutySessionStatus.CLOSED
             active_duty.final_overtime_minutes = max(
