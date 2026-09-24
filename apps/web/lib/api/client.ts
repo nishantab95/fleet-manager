@@ -10,6 +10,13 @@ export class ApiError extends Error {
 
 export type WebRequest = <T>(path: string, options?: RequestInit) => Promise<T>;
 
+export type EvidenceMetadata = {
+  eventType: string;
+  driverName: string;
+  tipperRegistrationNumber: string;
+  deviceCreatedAt: string;
+};
+
 export async function request<T>(path: string, options: RequestInit = {}, accessToken?: string): Promise<T> {
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
@@ -31,6 +38,33 @@ export async function request<T>(path: string, options: RequestInit = {}, access
 
 export async function refreshWebSession(): Promise<Tokens> {
   return request<Tokens>("/api/v1/auth/web-refresh", { method: "POST" });
+}
+
+export async function fetchPrivateEvidence(path: string, accessToken: string): Promise<{ url: string; metadata: EvidenceMetadata }> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      credentials: "include",
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+    });
+  } catch {
+    throw new ApiError(0, "Evidence could not be loaded because the API is unavailable.");
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail = body?.detail;
+    const message = typeof detail === "object" ? detail.message : detail;
+    throw new ApiError(response.status, message ?? "Evidence could not be loaded.");
+  }
+  return {
+    url: URL.createObjectURL(await response.blob()),
+    metadata: {
+      eventType: response.headers.get("X-Fleet-Evidence-Event-Type") ?? "Evidence",
+      driverName: response.headers.get("X-Fleet-Evidence-Driver") ?? "Unknown driver",
+      tipperRegistrationNumber: response.headers.get("X-Fleet-Evidence-Tipper") ?? "Unknown tipper",
+      deviceCreatedAt: response.headers.get("X-Fleet-Evidence-Timestamp") ?? "",
+    },
+  };
 }
 
 export async function uploadDriverEvidence(accessToken: string, clientEventUuid: string, file: File): Promise<{ object_reference: string; content_type: string; size_bytes: number }> {

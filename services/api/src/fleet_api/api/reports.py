@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from io import BytesIO
 from typing import NoReturn
@@ -11,6 +12,7 @@ from openpyxl.styles import Font, PatternFill  # type: ignore[import-untyped]
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import (
+    get_app_settings,
     get_current_session,
     get_object_storage,
     require_owner_admin,
@@ -27,6 +29,7 @@ from fleet_api.api.schemas import (
     TipperDailyReportResponse,
 )
 from fleet_api.auth.service import AuthContext
+from fleet_api.core.config import Settings
 from fleet_api.db.models import Site
 from fleet_api.db.session import get_db
 from fleet_api.domain.enums import SiteClosureStatus, VerificationStatus
@@ -44,6 +47,7 @@ from fleet_api.domain.reporting import (
     DashboardReport,
     OperationalDay,
     ReportEvent,
+    ReportEvidenceContext,
     ReportException,
     ReportHistory,
     ReportingService,
@@ -218,6 +222,17 @@ def _service(db: Session, context: AuthContext) -> ReportingService:
     return ReportingService(db, context)
 
 
+def _evidence_headers(view: ReportEvidenceContext) -> dict[str, str]:
+    return {
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": "inline",
+        "X-Fleet-Evidence-Event-Type": view.event.event_type.value,
+        "X-Fleet-Evidence-Driver": view.driver_name,
+        "X-Fleet-Evidence-Tipper": view.tipper.registration_number,
+        "X-Fleet-Evidence-Timestamp": view.event.device_created_at.isoformat(),
+    }
+
+
 @router.get("/dashboard", response_model=DashboardResponse)
 def dashboard(
     operational_date: date | None = Query(default=None),
@@ -347,7 +362,21 @@ def _excel_datetime(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
-def _build_workbook(report: DashboardReport) -> bytes:
+def _evidence_application_url(base_url: str, event_id: UUID) -> str:
+    return f"{base_url.rstrip('/')}/evidence/{event_id}"
+
+
+@dataclass(frozen=True)
+class _ExcelFormula:
+    value: str
+
+
+def _evidence_formula(base_url: str, event_id: UUID) -> _ExcelFormula:
+    url = _evidence_application_url(base_url, event_id)
+    return _ExcelFormula(f'=HYPERLINK("{url}","Open Evidence")')
+
+
+def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> bytes:
     workbook = Workbook()
     workbook.remove(workbook.active)
     sheets: dict[str, tuple[list[str], list[list[object]]]] = {}
@@ -419,7 +448,11 @@ def _build_workbook(report: DashboardReport) -> bytes:
                             event.reading_value,
                             _excel_datetime(event.device_created_at),
                             event.verification_status.value,
-                            "Available" if event.evidence_available else "Not available",
+                            (
+                                _evidence_formula(web_public_base_url, event.event_id)
+                                if event.evidence_available
+                                else "Not available"
+                            ),
                         ]
                     )
                 elif event.event_type.value == "DIESEL":
@@ -432,7 +465,11 @@ def _build_workbook(report: DashboardReport) -> bytes:
                             event.litres,
                             _excel_datetime(event.device_created_at),
                             event.verification_status.value,
-                            "Available" if event.evidence_available else "Not available",
+                            (
+                                _evidence_formula(web_public_base_url, event.event_id)
+                                if event.evidence_available
+                                else "Not available"
+                            ),
                         ]
                     )
             for exception in row.exceptions:
@@ -513,7 +550,12 @@ def _build_workbook(report: DashboardReport) -> bytes:
         worksheet.freeze_panes = "A2"
         worksheet.auto_filter.ref = f"A1:{chr(64 + len(headers))}{max(1, len(sheet_rows) + 1)}"
         for sheet_row in sheet_rows:
-            worksheet.append([_safe_excel_text(value) for value in sheet_row])
+            worksheet.append(
+                [
+                    value.value if isinstance(value, _ExcelFormula) else _safe_excel_text(value)
+                    for value in sheet_row
+                ]
+            )
         for column in worksheet.columns:
             width = min(max(len(str(cell.value or "")) for cell in column) + 2, 32)
             worksheet.column_dimensions[column[0].column_letter].width = width
@@ -530,11 +572,12 @@ def _build_workbook(report: DashboardReport) -> bytes:
 def daily_excel(
     operational_date: date | None = Query(default=None),
     context: AuthContext = Depends(require_owner_admin),
+    settings: Settings = Depends(get_app_settings),
     db: Session = Depends(get_db),
 ) -> Response:
     try:
         report = _service(db, context).dashboard(operational_date)
-        content = _build_workbook(report)
+        content = _build_workbook(report, web_public_base_url=settings.web_public_base_url)
         filename = f"fleet-report-{report.operational_day.operational_date.isoformat()}.xlsx"
         return Response(
             content=content,
@@ -553,8 +596,12 @@ def report_evidence(
     db: Session = Depends(get_db),
 ) -> Response:
     try:
-        evidence = _service(db, context).evidence_for_event(event_id)
-        content, content_type = storage.read_private(object_key=evidence.object_key)
-        return Response(content=content, media_type=content_type)
+        view = _service(db, context).evidence_context_for_event(event_id)
+        content, content_type = storage.read_private(object_key=view.evidence.object_key)
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers=_evidence_headers(view),
+        )
     except DomainError as exc:
         _fail(exc)

@@ -332,10 +332,16 @@ class SupervisorService:
         return self._event_view(row)
 
     def evidence_for_event(self, event_id: UUID) -> EvidenceObject:
-        view = self._event_view(self._event_row(event_id))
+        view = self.evidence_view_for_event(event_id)
         if view.evidence is None:
             raise NotFoundError("event evidence was not found")
         return view.evidence
+
+    def evidence_view_for_event(self, event_id: UUID) -> SupervisorEvent:
+        view = self._event_view(self._event_row(event_id))
+        if view.evidence is None:
+            raise NotFoundError("event evidence was not found")
+        return view
 
     def completeness(self, site_id: UUID, review_date: date) -> list[SiteCompleteness]:
         site = self._site(site_id)

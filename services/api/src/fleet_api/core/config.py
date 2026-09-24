@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://fleet:fleet@localhost:5432/fleet"
     cors_allowed_origins: str = "http://localhost:3000"
     allowed_hosts: str = "*"
+    web_public_base_url: str = "http://localhost:3000"
     s3_endpoint_url: str = "http://localhost:19000"
     s3_region: str = "us-east-1"
     s3_bucket: str = "fleet-local"
@@ -72,6 +73,8 @@ class Settings(BaseSettings):
             raise ValueError("pilot OTP provider requires FLEET_PILOT_OTP")
 
         if environment in {"production", "prod"}:
+            if not self.web_public_base_url.strip():
+                raise ValueError("production requires a web public base URL")
             if not self.jwt_signing_key or len(self.jwt_signing_key) < 32:
                 raise ValueError("production requires a JWT signing key of at least 32 characters")
             if self.enable_development_otp or otp_provider in {"development", "fake", "pilot"}:
@@ -96,6 +99,8 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "production object-storage credentials must not use local defaults"
                 )
+            if not self.web_public_base_url.lower().startswith("https://"):
+                raise ValueError("production requires an HTTPS web public base URL")
         return self
 
     @property

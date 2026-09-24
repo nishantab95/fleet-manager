@@ -254,6 +254,10 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         evidence = owner.get(f"/api/v1/reports/events/{start}/evidence")
         assert evidence.status_code == 200
         assert evidence.content == b"\xff\xd8\xffphase6-evidence"
+        assert evidence.headers["content-type"] == "image/jpeg"
+        assert evidence.headers["cache-control"] == "private, no-store"
+        assert evidence.headers["x-fleet-evidence-event-type"] == "KM_READING"
+        assert evidence.headers["x-fleet-evidence-driver"] == "Driver A"
         exceptions = owner.get(
             "/api/v1/reports/exceptions", params={"operational_date": REPORT_DATE.isoformat()}
         )
@@ -284,6 +288,24 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         )
         assert workbook["Daily Summary"].freeze_panes == "A2"
         assert workbook["Daily Summary"].auto_filter.ref
+        km_rows = list(workbook["KM Register"].iter_rows(min_row=2, values_only=True))
+        diesel_rows = list(workbook["Diesel Register"].iter_rows(min_row=2, values_only=True))
+        assert any(
+            isinstance(row[8], str)
+            and row[8].startswith('=HYPERLINK("http://localhost:3000/evidence/')
+            and str(start) in row[8]
+            and "Open Evidence" in row[8]
+            and "Authorization" not in row[8]
+            for row in km_rows
+        )
+        assert any(
+            isinstance(row[7], str)
+            and row[7].startswith('=HYPERLINK("http://localhost:3000/evidence/')
+            and str(diesel) in row[7]
+            and "Open Evidence" in row[7]
+            and "object" not in row[7].lower()
+            for row in diesel_rows
+        )
     finally:
         owner.close()
 

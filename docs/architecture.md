@@ -128,6 +128,10 @@ acknowledgement is a separate audited lifecycle action. Completeness is derived
 per assigned tipper and UTC review date, reporting missing start/end readings,
 pending trip/diesel decisions, and unresolved emergencies. Private evidence is
 read through an authorization-checked API response rather than a public URL.
+Supervisor and Owner web workspaces render those bytes in a modal, while the stable
+`/evidence/{event_id}` route authenticates the current session and chooses the
+role-scoped evidence endpoint. Report workbooks link to that application route
+with `FLEET_WEB_PUBLIC_BASE_URL`; they never embed images or object-storage keys.
 
 ## Tenant boundary
 

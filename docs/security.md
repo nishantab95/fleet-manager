@@ -101,6 +101,10 @@ controls.
   authorization succeeds; no public object URL is exposed. Daily completeness
   is scoped to assigned tippers and reports missing readings, pending decisions,
   and unresolved emergencies without introducing financial or operational totals.
+- Web evidence uses short-lived authenticated requests and private, no-store image
+  responses. Application evidence links contain only an event UUID; response
+  headers carry display metadata, and no JWT, refresh token, signed URL, or object
+  key is placed in the route or Excel formula.
 
 ## Phase 6 reporting and closure controls
 

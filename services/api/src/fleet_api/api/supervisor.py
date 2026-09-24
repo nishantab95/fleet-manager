@@ -88,6 +88,17 @@ def _service(db: Session, context: AuthContext) -> SupervisorService:
     return SupervisorService(db, context)
 
 
+def _evidence_headers(view: SupervisorEvent) -> dict[str, str]:
+    return {
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": "inline",
+        "X-Fleet-Evidence-Event-Type": view.event.event_type.value,
+        "X-Fleet-Evidence-Driver": view.driver.display_name,
+        "X-Fleet-Evidence-Tipper": view.tipper.registration_number,
+        "X-Fleet-Evidence-Timestamp": view.event.device_created_at.isoformat(),
+    }
+
+
 @router.get("/sites", response_model=list[SupervisorSiteResponse])
 def list_supervisor_sites(
     context: Annotated[AuthContext, Depends(require_supervisor)],
@@ -245,8 +256,13 @@ def read_supervisor_evidence(
 ) -> Response:
     del settings
     try:
-        evidence = _service(db, context).evidence_for_event(event_id)
-        content, content_type = storage.read_private(object_key=evidence.object_key)
-        return Response(content=content, media_type=content_type)
+        view = _service(db, context).evidence_view_for_event(event_id)
+        assert view.evidence is not None
+        content, content_type = storage.read_private(object_key=view.evidence.object_key)
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers=_evidence_headers(view),
+        )
     except DomainError as exc:
         _fail(exc)

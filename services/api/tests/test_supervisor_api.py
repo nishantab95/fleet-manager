@@ -405,11 +405,17 @@ def test_km_evidence_is_available_only_to_authorized_supervisor_and_completeness
         evidence = supervisor_client.get(f"/api/v1/supervisor/events/{km_event_id}/evidence")
         assert evidence.status_code == 200
         assert evidence.content == b"\xff\xd8\xffmeter-photo"
+        assert evidence.headers["content-type"] == "image/jpeg"
+        assert evidence.headers["cache-control"] == "private, no-store"
+        assert evidence.headers["x-fleet-evidence-event-type"] == "KM_READING"
+        assert evidence.headers["x-fleet-evidence-driver"] == "Driver A"
+        assert evidence.headers["x-fleet-evidence-tipper"] == "KA01AB1234"
         diesel_evidence = supervisor_client.get(
             f"/api/v1/supervisor/events/{diesel_event_id}/evidence"
         )
         assert diesel_evidence.status_code == 200
         assert diesel_evidence.content == b"\xff\xd8\xffdiesel-photo"
+        assert diesel_evidence.headers["content-type"] == "image/jpeg"
 
         approved_km = supervisor_client.post(
             f"/api/v1/supervisor/events/{km_event_id}/verify",
@@ -461,6 +467,7 @@ def test_km_evidence_is_available_only_to_authorized_supervisor_and_completeness
         assert (
             driver_again.get(f"/api/v1/supervisor/events/{km_event_id}/evidence").status_code == 403
         )
+        assert driver_again.get(f"/api/v1/supervisor/events/{uuid4()}/evidence").status_code == 403
     finally:
         driver_again.close()
 

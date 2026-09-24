@@ -87,6 +87,14 @@ class ReportEvent:
 
 
 @dataclass(frozen=True)
+class ReportEvidenceContext:
+    event: OperationalEvent
+    tipper: Tipper
+    driver_name: str
+    evidence: EvidenceObject
+
+
+@dataclass(frozen=True)
 class ReportException:
     code: str
     description: str
@@ -953,6 +961,9 @@ class ReportingService:
         return self.closure(site.id, day.operational_date)
 
     def evidence_for_event(self, event_id: UUID) -> EvidenceObject:
+        return self.evidence_context_for_event(event_id).evidence
+
+    def evidence_context_for_event(self, event_id: UUID) -> ReportEvidenceContext:
         event = self.session.scalar(
             select(OperationalEvent).where(
                 OperationalEvent.id == event_id,
@@ -969,4 +980,23 @@ class ReportingService:
         )
         if evidence is None:
             raise NotFoundError("event evidence was not found")
-        return evidence
+        row = self.session.execute(
+            select(OperationalEvent, Tipper, User.display_name)
+            .join(Assignment, Assignment.id == OperationalEvent.assignment_id)
+            .join(Tipper, Tipper.id == Assignment.tipper_id)
+            .join(CompanyMembership, CompanyMembership.id == Assignment.driver_membership_id)
+            .join(User, User.id == CompanyMembership.user_id)
+            .where(
+                OperationalEvent.id == event_id,
+                OperationalEvent.company_id == self.company_id,
+            )
+        ).first()
+        if row is None:
+            raise NotFoundError("event was not found")
+        _event, tipper, driver_name = row._tuple()
+        return ReportEvidenceContext(
+            event=event,
+            tipper=tipper,
+            driver_name=driver_name,
+            evidence=evidence,
+        )

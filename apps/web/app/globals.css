@@ -82,7 +82,17 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .table-row span { color: #65747a; font-size: 0.9rem; }
 .table-row strong { overflow-wrap: anywhere; }
 .table-card textarea { width: 100%; min-height: 90px; padding: 9px 11px; border: 1px solid #ccd8d4; border-radius: 9px; resize: vertical; }
+.evidence-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: #17202ab8; }
+.evidence-modal { width: min(100%, 820px); max-height: 92vh; overflow: auto; padding: 24px; border: 1px solid #dce5e2; border-radius: 16px; background: #fff; box-shadow: 0 24px 80px #17202a55; }
+.evidence-modal .content-heading { margin-top: 0; }
+.evidence-details { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+.evidence-details div { min-width: 0; padding: 12px; border-radius: 9px; background: #f4f6f8; }
+.evidence-details dt { color: #68777d; font-size: 0.76rem; font-weight: 800; text-transform: uppercase; }
+.evidence-details dd { margin: 5px 0 0; overflow-wrap: anywhere; }
+.evidence-image { display: block; width: 100%; max-height: 62vh; object-fit: contain; border-radius: 10px; background: #17202a; }
+.evidence-full-size { display: inline-block; margin-top: 14px; color: #1b6b5a; font-weight: 800; }
+.evidence-route { min-height: 100vh; background: #17202a; }
 .badge { justify-self: start; padding: 4px 8px; border-radius: 999px; background: #fff0ef; color: #9d3227; font-size: 0.72rem; font-weight: 800; }
 .badge.active { background: #e0f4e9; color: #1e704e; }
-@media (max-width: 800px) { .auth-card { padding: 28px; } .admin-layout { display: block; } .sidebar { display: flex; overflow-x: auto; } .nav-item { min-width: max-content; } .metric-grid, .form-grid, .lab-status, .lab-role-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .table-row { grid-template-columns: 1fr 1fr; } .lab-header, .lab-section-heading { align-items: flex-start; flex-direction: column; } .lab-section-heading .muted { text-align: left; } }
+@media (max-width: 800px) { .auth-card { padding: 28px; } .admin-layout { display: block; } .sidebar { display: flex; overflow-x: auto; } .nav-item { min-width: max-content; } .metric-grid, .form-grid, .lab-status, .lab-role-grid, .evidence-details { grid-template-columns: repeat(2, minmax(0, 1fr)); } .table-row { grid-template-columns: 1fr 1fr; } .lab-header, .lab-section-heading { align-items: flex-start; flex-direction: column; } .lab-section-heading .muted { text-align: left; } }
 @media (max-width: 520px) { .topbar { align-items: flex-start; gap: 16px; } .metric-grid, .form-grid, .lab-status, .lab-role-grid { grid-template-columns: 1fr; } .table-row { grid-template-columns: 1fr; } .lab-panel { padding: 24px; } .lab-actions { align-items: stretch; flex-direction: column; } .lab-action-link { justify-content: center; } }

@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { API_BASE, ApiError, request, type WebRequest } from "../../lib/api/client";
+import { fetchPrivateEvidence, request, type WebRequest } from "../../lib/api/client";
 import type { Site, SiteCompleteness, SupervisorEvent } from "../../lib/types";
 import { Metric, WorkspaceHeader } from "../shared/Ui";
+import { EvidenceModal, type EvidenceDetails } from "../shared/EvidenceViewer";
 import { useAuth } from "../auth/AuthProvider";
 import { pcRoleLabEnabled } from "../../lib/auth/config";
 
@@ -27,7 +28,7 @@ export function SupervisorShell(props: SupervisorShellProps) {
   const [loading, setLoading] = useState(false);
   const [busyEventId, setBusyEventId] = useState<string | null>(null);
   const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null);
-  const [evidenceEventId, setEvidenceEventId] = useState<string | null>(null);
+  const [evidenceDetails, setEvidenceDetails] = useState<EvidenceDetails | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const { accessToken, apiRequest, setError } = props;
   const call = useCallback(<T,>(path: string, options: RequestInit = {}) => apiRequest ? apiRequest<T>(path, options) : request<T>(path, options, accessToken), [accessToken, apiRequest]);
@@ -91,10 +92,17 @@ export function SupervisorShell(props: SupervisorShellProps) {
   const viewEvidence = async (event: SupervisorEvent) => {
     props.setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/v1/supervisor/events/${event.event_id}/evidence`, { credentials: "include", headers: props.accessToken ? { Authorization: `Bearer ${props.accessToken}` } : undefined });
-      if (!response.ok) throw new ApiError(response.status, "Evidence could not be loaded.");
-      const nextUrl = URL.createObjectURL(await response.blob()); if (evidenceUrl) URL.revokeObjectURL(evidenceUrl); setEvidenceUrl(nextUrl); setEvidenceEventId(event.event_id);
+      const result = await fetchPrivateEvidence(`/api/v1/supervisor/events/${event.event_id}/evidence`, props.accessToken);
+      if (evidenceUrl) URL.revokeObjectURL(evidenceUrl);
+      setEvidenceUrl(result.url);
+      setEvidenceDetails({ ...result.metadata, eventId: event.event_id });
     } catch (caught) { props.setError(caught instanceof Error ? caught.message : "Evidence could not be loaded."); }
+  };
+
+  const closeEvidence = () => {
+    if (evidenceUrl) URL.revokeObjectURL(evidenceUrl);
+    setEvidenceUrl(null);
+    setEvidenceDetails(null);
   };
 
   const selectedSite = props.sites.find((site) => site.id === activeSiteId);
@@ -108,7 +116,7 @@ export function SupervisorShell(props: SupervisorShellProps) {
       {selectedSite && <><h2>{selectedSite.name} · daily completeness</h2><p className="muted">INTERNAL / QA REFERENCE. Review only the assigned site and date. Verification history is append-only.</p><div className="table-card">{completeness.length ? completeness.map((item) => <div className="table-row" key={item.assignment_id}><strong>{item.tipper_registration_number}</strong><span>{item.driver_name}</span><span>{item.has_start_reading ? `START ${item.start_reading_value ?? "✓"}` : "No START"}</span><span>{item.has_end_reading ? `END ${item.end_reading_value ?? "✓"}` : "No END"}</span>{item.odometer_regression && <span>KM exception: END &lt; START</span>}<span>{item.pending_trip_verification ? "Pending trip" : "Trip clear"}</span><span>{item.pending_diesel_verification ? "Pending diesel" : "Diesel clear"}</span><span>{item.unresolved_emergency ? "Emergency review" : "No unresolved emergency"}</span></div>) : <div className="table-row"><span>No assignments found for this date.</span></div>}</div>
       <div className="content-heading"><div><h2>Event review</h2><p className="muted">{events.length} event{events.length === 1 ? "" : "s"} · {events.filter((event) => event.verification_status === "PENDING_VERIFICATION").length} pending</p></div><button disabled={!selectedEventIds.length || busyEventId !== null} onClick={() => void approveSelected()} type="button">Approve selected ({selectedEventIds.length})</button></div>
       <div className="stack">{events.length ? events.map((event) => <article className="table-card" key={event.event_id}><div className="table-row"><div><strong>{event.event_type.replaceAll("_", " ")}</strong><span>{event.driver_name} · {event.tipper_registration_number}</span></div><span>{event.verification_status}</span>{event.verification_status === "PENDING_VERIFICATION" && <label><input checked={selectedEventIds.includes(event.event_id)} onChange={() => setSelectedEventIds((current) => current.includes(event.event_id) ? current.filter((id) => id !== event.event_id) : [...current, event.event_id])} type="checkbox" /> Select</label>}</div><div className="table-row"><span>Device {new Date(event.device_created_at).toLocaleString()}</span>{event.reading_type && <span>{event.reading_type.replaceAll("_", " ")}: {event.reading_value}</span>}{event.litres && <span>Diesel: {event.litres} L</span>}{event.emergency_category && <span>{event.emergency_category}: {event.emergency_description}</span>}{event.evidence_available && <button className="secondary" onClick={() => void viewEvidence(event)} type="button">View evidence</button>}</div>{event.emergency_status && <div className="table-row"><span>Emergency status: {event.emergency_status}</span>{event.emergency_status === "OPEN" && <button className="secondary" disabled={busyEventId !== null} onClick={() => void acknowledgeEmergency(event)} type="button">Acknowledge</button>}{event.emergency_status === "ACKNOWLEDGED" && <button className="secondary" disabled={busyEventId !== null} onClick={() => void resolveEmergency(event)} type="button">Resolve</button>}</div>}{event.verification_status === "PENDING_VERIFICATION" && <div className="stack"><label>Rejection/dispute reason<textarea value={reasons[event.event_id] ?? ""} onChange={(change) => setReasons((current) => ({ ...current, [event.event_id]: change.target.value }))} placeholder="Required for reject or dispute" /></label><div className="inline-form"><button disabled={busyEventId !== null} onClick={() => void runVerification(event, "APPROVED")} type="button">Approve</button><button className="secondary" disabled={busyEventId !== null} onClick={() => void runVerification(event, "REJECTED")} type="button">Reject</button><button className="secondary" disabled={busyEventId !== null} onClick={() => void runVerification(event, "DISPUTED")} type="button">Dispute</button></div></div>}<details><summary>Verification history ({event.verification_history.length})</summary>{event.verification_history.map((item, index) => <div className="table-row" key={`${event.event_id}-${index}`}><span>{item.status}</span><span>{item.actor_name ?? "System"}</span><span>{item.reason ?? "No reason"}</span><span>{new Date(item.created_at).toLocaleString()}</span></div>)}</details></article>) : <div className="notice">No operational events were captured for this site and date.</div>}</div>
-      {evidenceUrl && <div className="notice"><a href={evidenceUrl} target="_blank" rel="noreferrer">Open evidence for {evidenceEventId}</a></div>}
+      {evidenceUrl && evidenceDetails && <EvidenceModal details={evidenceDetails} onClose={closeEvidence} url={evidenceUrl} />}
       </>}
     </section></div>
   </main>;
