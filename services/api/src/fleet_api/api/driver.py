@@ -103,7 +103,9 @@ def current_assignment(
         tipper_short_name=current.tipper.short_name,
         site_id=current.site.id,
         site_name=current.site.name,
-        supervisor_name=current.supervisor.display_name,
+        supervisor_name=(
+            current.supervisor_membership.display_name or current.supervisor.display_name
+        ),
         regular_duty_minutes=current.assignment.regular_duty_minutes,
     )
 

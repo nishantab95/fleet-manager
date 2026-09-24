@@ -7,7 +7,8 @@ from decimal import Decimal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, select
+from sqlalchemy import String, and_, func, select
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.orm import Session, aliased
 
 from fleet_api.auth.service import AuthContext, ensure_supervisor_site_access
@@ -323,8 +324,14 @@ class ReportingService:
                 Assignment,
                 Tipper,
                 Site,
-                driver_user.display_name,
-                supervisor_user.display_name,
+                sql_cast(
+                    func.coalesce(driver_membership.display_name, driver_user.display_name),
+                    String,
+                ),
+                sql_cast(
+                    func.coalesce(supervisor_membership.display_name, supervisor_user.display_name),
+                    String,
+                ),
             )
             .join(Tipper, Tipper.id == Assignment.tipper_id)
             .join(Site, Site.id == Assignment.site_id)
@@ -365,9 +372,15 @@ class ReportingService:
                 Assignment,
                 Tipper,
                 Site,
-                driver_user.display_name,
+                sql_cast(
+                    func.coalesce(driver_membership.display_name, driver_user.display_name),
+                    String,
+                ),
                 driver_user.phone_number,
-                supervisor_user.display_name,
+                sql_cast(
+                    func.coalesce(supervisor_membership.display_name, supervisor_user.display_name),
+                    String,
+                ),
             )
             .join(Assignment, Assignment.id == OperationalEvent.assignment_id)
             .join(Tipper, Tipper.id == Assignment.tipper_id)

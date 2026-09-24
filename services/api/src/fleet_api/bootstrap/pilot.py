@@ -108,6 +108,7 @@ def _membership(
     user_id: UUID,
     role: MembershipRole,
     label: str,
+    display_name: str,
 ) -> CompanyMembership:
     membership = _single(
         session,
@@ -123,6 +124,7 @@ def _membership(
             company_id=company_id,
             user_id=user_id,
             role=role,
+            display_name=display_name,
             status=MembershipStatus.ACTIVE,
         )
         session.add(membership)
@@ -130,6 +132,7 @@ def _membership(
     else:
         if membership.role != role:
             raise RuntimeError(f"existing {label} membership has role {membership.role.value}")
+        membership.display_name = display_name
         membership.status = MembershipStatus.ACTIVE
     return membership
 
@@ -388,6 +391,7 @@ def bootstrap_pilot(session: Session) -> dict[str, UUID]:
         user_id=pilot_user.id,
         role=MembershipRole.OWNER_ADMIN,
         label="owner",
+        display_name=OWNER_NAME,
     )
     supervisor_membership = _membership(
         session,
@@ -395,6 +399,7 @@ def bootstrap_pilot(session: Session) -> dict[str, UUID]:
         user_id=pilot_user.id,
         role=MembershipRole.SUPERVISOR,
         label="supervisor",
+        display_name=SUPERVISOR_NAME,
     )
     driver_membership = _membership(
         session,
@@ -402,6 +407,7 @@ def bootstrap_pilot(session: Session) -> dict[str, UUID]:
         user_id=pilot_user.id,
         role=MembershipRole.DRIVER,
         label="driver",
+        display_name=DRIVER_NAME,
     )
     site = _site(session, company_id=company.id)
     tipper = _tipper(session, company_id=company.id)

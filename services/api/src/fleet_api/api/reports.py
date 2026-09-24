@@ -11,7 +11,8 @@ from openpyxl import Workbook  # type: ignore[import-untyped]
 from openpyxl.cell.cell import MergedCell  # type: ignore[import-untyped]
 from openpyxl.styles import Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
-from sqlalchemy import select
+from sqlalchemy import String, func, select
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import (
@@ -226,7 +227,13 @@ def _duty_reports(
     service = _service(db, context)
     day = service.operational_day(requested_date)
     rows = db.execute(
-        select(DutySession, Assignment, Tipper, Site, User.display_name)
+        select(
+            DutySession,
+            Assignment,
+            Tipper,
+            Site,
+            sql_cast(func.coalesce(CompanyMembership.display_name, User.display_name), String),
+        )
         .join(Assignment, Assignment.id == DutySession.assignment_id)
         .join(Tipper, Tipper.id == DutySession.tipper_id)
         .join(Site, Site.id == DutySession.site_id)

@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
@@ -111,5 +112,12 @@ class DutySession(UpdatedTimestampModel):
             "company_id",
             "assignment_id",
             "status",
+        ),
+        Index(
+            "uq_duty_sessions_active_driver",
+            "company_id",
+            "driver_membership_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
         ),
     )

@@ -121,6 +121,15 @@ class ApiClient implements DriverRemoteApi {
     return DriverAssignment.fromJson(_json(response));
   }
 
+  Future<DriverDutyState> currentDuty() async {
+    final response = await _request(
+      'GET',
+      '/api/v1/driver/duty/current',
+      authenticated: true,
+    );
+    return DriverDutyState.fromJson(_json(response));
+  }
+
   @override
   Future<void> registerDevice({required String installationIdentifier}) async {
     await _request(

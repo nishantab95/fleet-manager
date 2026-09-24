@@ -62,6 +62,7 @@ class DriverSessionScreen extends StatefulWidget {
 
 class _DriverSessionScreenState extends State<DriverSessionScreen> {
   DriverAssignment? _assignment;
+  DriverDutyState _duty = const DriverDutyState.none();
   bool _loading = true;
   String? _error;
 
@@ -82,7 +83,13 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
         installationIdentifier: widget.dependencies.installationIdentifier,
       );
       final assignment = await api.currentAssignment();
-      if (mounted) setState(() => _assignment = assignment);
+      final duty = await api.currentDuty();
+      if (mounted) {
+        setState(() {
+          _assignment = assignment;
+          _duty = duty;
+        });
+      }
     } on ApiException catch (error) {
       api.clearSession();
       await widget.dependencies.sessionStore.clear();
@@ -92,9 +99,12 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
     }
   }
 
-  void _signedIn(DriverAssignment? assignment) {
+  Future<void> _signedIn(DriverAssignment? assignment) async {
+    final duty = await widget.dependencies.api.currentDuty();
+    if (!mounted) return;
     setState(() {
       _assignment = assignment;
+      _duty = duty;
       _error = null;
     });
   }
@@ -126,6 +136,7 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
     return DriverHomeScreen(
       dependencies: widget.dependencies,
       assignment: _assignment,
+      duty: _duty,
       onSignOut: _signOut,
     );
   }
@@ -140,7 +151,7 @@ class LoginScreen extends StatefulWidget {
   });
 
   final DriverAppDependencies dependencies;
-  final ValueChanged<DriverAssignment?> onSignedIn;
+  final Future<void> Function(DriverAssignment?) onSignedIn;
   final String? initialError;
 
   @override
@@ -208,7 +219,7 @@ class _LoginScreenState extends State<LoginScreen> {
       installationIdentifier: widget.dependencies.installationIdentifier,
     );
     final assignment = await widget.dependencies.api.currentAssignment();
-    widget.onSignedIn(assignment);
+    await widget.onSignedIn(assignment);
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -291,12 +302,14 @@ class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({
     required this.dependencies,
     required this.assignment,
+    this.duty = const DriverDutyState.none(),
     required this.onSignOut,
     super.key,
   });
 
   final DriverAppDependencies dependencies;
   final DriverAssignment? assignment;
+  final DriverDutyState duty;
   final Future<void> Function() onSignOut;
 
   @override
@@ -306,6 +319,7 @@ class DriverHomeScreen extends StatefulWidget {
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final _picker = ImagePicker();
   int _pendingCount = 0;
+  late DriverDutyState _duty;
   String? _message;
   bool _busy = false;
   DateTime? _lastQueuedAt;
@@ -314,7 +328,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   void initState() {
     super.initState();
+    _duty = widget.duty;
     unawaited(_refreshQueue());
+    unawaited(_refreshDuty());
+  }
+
+  @override
+  void didUpdateWidget(covariant DriverHomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.duty.status != widget.duty.status ||
+        oldWidget.duty.sessionId != widget.duty.sessionId) {
+      _duty = widget.duty;
+    }
+  }
+
+  Future<void> _refreshDuty() async {
+    try {
+      final duty = await widget.dependencies.api.currentDuty();
+      if (mounted) setState(() => _duty = duty);
+    } on ApiException {
+      // Offline mode keeps the last server-confirmed duty state.
+    }
   }
 
   Future<void> _refreshQueue() async {
@@ -327,6 +361,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       await widget.dependencies.sync.syncPending();
       await _refreshQueue();
+      await _refreshDuty();
       if (mounted) setState(() => _message = 'Sync complete');
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -358,6 +393,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         evidencePath: evidencePath,
       );
       await _refreshQueue();
+      if (eventType == DriverEventType.kmReading) await _refreshDuty();
       if (mounted) {
         setState(
           () => _message = 'Saved on this device. It will sync when connected.',
@@ -371,7 +407,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _showKmDialog() async {
     final result = await showDialog<_KmCapture>(
       context: context,
-      builder: (context) => const _KmDialog(),
+      builder: (context) => _KmDialog(
+        type: _duty.isActive
+            ? KmReadingType.endReading
+            : KmReadingType.startReading,
+      ),
     );
     if (result == null) {
       return;
@@ -405,38 +445,29 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       source: ImageSource.camera,
       imageQuality: 85,
     );
-    if (photo == null) {
-      return;
-    }
     await _queue(
       DriverEventType.diesel,
       payload: {'litres': litres},
-      evidencePath: photo.path,
+      evidencePath: photo?.path,
     );
   }
 
-  Future<void> _showEmergencyDialog() async {
-    final result = await showDialog<_EmergencyCapture>(
-      context: context,
-      builder: (context) => const _EmergencyDialog(),
-    );
-    if (result == null) {
-      return;
-    }
-    await _queue(
-      DriverEventType.emergency,
-      payload: {
-        'category': result.category.wireName,
-        if (result.description.trim().isNotEmpty)
-          'description': result.description.trim(),
-      },
-    );
-  }
+  Future<void> _sendEmergency() => _queue(DriverEventType.emergency);
 
   @override
   Widget build(BuildContext context) {
     final assignment = widget.assignment;
     final canCapture = assignment != null;
+    final canOperate = canCapture && !_busy && _duty.isActive;
+    final canReadKm =
+        canCapture &&
+        !_busy &&
+        (_duty.status == DriverDutyStatus.none || _duty.isActive);
+    final dutyLabel = switch (_duty.status) {
+      DriverDutyStatus.none => 'Before START KM',
+      DriverDutyStatus.active => 'Duty active',
+      DriverDutyStatus.closed => 'Duty completed',
+    };
     return Scaffold(
       appBar: AppBar(
         title: const Text('Driver operations'),
@@ -474,29 +505,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 : '$_pendingCount event(s) waiting to sync',
             style: Theme.of(context).textTheme.titleMedium,
           ),
+          const SizedBox(height: 8),
+          Text(dutyLabel, textAlign: TextAlign.center),
           const SizedBox(height: 16),
           _ActionButton(
             label: 'TRIP COMPLETE',
             icon: Icons.check_circle_outline,
-            onPressed: canCapture && !_busy
+            onPressed: canOperate
                 ? () => _queue(DriverEventType.tripComplete)
                 : null,
           ),
           _ActionButton(
             label: 'KM READING',
             icon: Icons.speed,
-            onPressed: canCapture && !_busy ? _showKmDialog : null,
+            onPressed: canReadKm ? _showKmDialog : null,
           ),
           _ActionButton(
             label: 'DIESEL',
             icon: Icons.local_gas_station,
-            onPressed: canCapture && !_busy ? _showDieselDialog : null,
+            onPressed: canOperate ? _showDieselDialog : null,
           ),
           _ActionButton(
             label: 'EMERGENCY',
             icon: Icons.warning_amber,
             danger: true,
-            onPressed: canCapture && !_busy ? _showEmergencyDialog : null,
+            onPressed: canCapture && !_busy ? _sendEmergency : null,
           ),
           if (_message != null) ...[
             const SizedBox(height: 16),
@@ -677,7 +710,9 @@ class _KmCapture {
 }
 
 class _KmDialog extends StatefulWidget {
-  const _KmDialog();
+  const _KmDialog({required this.type});
+
+  final KmReadingType type;
 
   @override
   State<_KmDialog> createState() => _KmDialogState();
@@ -685,7 +720,6 @@ class _KmDialog extends StatefulWidget {
 
 class _KmDialogState extends State<_KmDialog> {
   final _value = TextEditingController();
-  KmReadingType _type = KmReadingType.startReading;
 
   @override
   void dispose() {
@@ -700,19 +734,9 @@ class _KmDialogState extends State<_KmDialog> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          DropdownButtonFormField<KmReadingType>(
-            initialValue: _type,
-            items: const [
-              DropdownMenuItem(
-                value: KmReadingType.startReading,
-                child: Text('Start reading'),
-              ),
-              DropdownMenuItem(
-                value: KmReadingType.endReading,
-                child: Text('End reading'),
-              ),
-            ],
-            onChanged: (value) => setState(() => _type = value ?? _type),
+          Text(
+            widget.type == KmReadingType.startReading ? 'START KM' : 'END KM',
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           TextField(
             controller: _value,
@@ -729,7 +753,7 @@ class _KmDialogState extends State<_KmDialog> {
         FilledButton(
           onPressed: () {
             if (double.tryParse(_value.text.trim()) == null) return;
-            Navigator.pop(context, _KmCapture(_type, _value.text.trim()));
+            Navigator.pop(context, _KmCapture(widget.type, _value.text.trim()));
           },
           child: const Text('CONTINUE'),
         ),
@@ -775,75 +799,6 @@ class _DieselDialogState extends State<_DieselDialog> {
             Navigator.pop(context, _litres.text.trim());
           },
           child: const Text('CONTINUE'),
-        ),
-      ],
-    );
-  }
-}
-
-class _EmergencyCapture {
-  const _EmergencyCapture(this.category, this.description);
-
-  final EmergencyCategory category;
-  final String description;
-}
-
-class _EmergencyDialog extends StatefulWidget {
-  const _EmergencyDialog();
-
-  @override
-  State<_EmergencyDialog> createState() => _EmergencyDialogState();
-}
-
-class _EmergencyDialogState extends State<_EmergencyDialog> {
-  EmergencyCategory _category = EmergencyCategory.breakdown;
-  final _description = TextEditingController();
-
-  @override
-  void dispose() {
-    _description.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('EMERGENCY'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          DropdownButtonFormField<EmergencyCategory>(
-            initialValue: _category,
-            items: EmergencyCategory.values
-                .map(
-                  (value) =>
-                      DropdownMenuItem(value: value, child: Text(value.label)),
-                )
-                .toList(),
-            onChanged: (value) =>
-                setState(() => _category = value ?? _category),
-          ),
-          TextField(
-            controller: _description,
-            maxLines: 3,
-            maxLength: 500,
-            decoration: const InputDecoration(
-              labelText: 'Description (optional)',
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('CANCEL'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(
-            context,
-            _EmergencyCapture(_category, _description.text),
-          ),
-          child: const Text('SAVE EMERGENCY'),
         ),
       ],
     );

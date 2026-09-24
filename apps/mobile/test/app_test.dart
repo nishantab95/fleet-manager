@@ -41,6 +41,7 @@ void main() {
         home: DriverHomeScreen(
           dependencies: dependencies,
           assignment: assignment,
+          duty: const DriverDutyState(status: DriverDutyStatus.active),
           onSignOut: () async {},
         ),
       ),
@@ -65,6 +66,68 @@ void main() {
     expect(synced?.syncState, 'synced');
     await database.close();
   });
+
+  testWidgets(
+    'driver home keeps four actions while gating NONE and CLOSED duty',
+    (tester) async {
+      final database = LocalDatabase(NativeDatabase.memory());
+      final dependencies = DriverAppDependencies(
+        api: ApiClient(),
+        sessionStore: SecureSessionStore(),
+        sync: SyncEngine(
+          database: database,
+          remote: _FakeRemote(),
+          installationIdentifier: 'test-device',
+        ),
+        installationIdentifier: 'test-device',
+      );
+      const assignment = DriverAssignment(
+        assignmentId: 'assignment',
+        tipperId: 'tipper',
+        tipperRegistrationNumber: 'KA01AB1234',
+        tipperShortName: 'Alpha One',
+        siteId: 'site',
+        siteName: 'Alpha Site',
+        supervisorName: 'Supervisor A',
+      );
+
+      Widget home(DriverDutyState duty) => MaterialApp(
+        home: DriverHomeScreen(
+          dependencies: dependencies,
+          assignment: assignment,
+          duty: duty,
+          onSignOut: () async {},
+        ),
+      );
+
+      bool enabled(String label) =>
+          tester
+              .widget<FilledButton>(find.widgetWithText(FilledButton, label))
+              .onPressed !=
+          null;
+
+      await tester.pumpWidget(home(const DriverDutyState.none()));
+      await tester.pump();
+      expect(find.text('TRIP COMPLETE'), findsOneWidget);
+      expect(find.text('KM READING'), findsOneWidget);
+      expect(find.text('DIESEL'), findsOneWidget);
+      expect(find.text('EMERGENCY'), findsOneWidget);
+      expect(enabled('TRIP COMPLETE'), isFalse);
+      expect(enabled('KM READING'), isTrue);
+      expect(enabled('DIESEL'), isFalse);
+      expect(enabled('EMERGENCY'), isTrue);
+
+      await tester.pumpWidget(
+        home(const DriverDutyState(status: DriverDutyStatus.closed)),
+      );
+      await tester.pump();
+      expect(enabled('TRIP COMPLETE'), isFalse);
+      expect(enabled('KM READING'), isFalse);
+      expect(enabled('DIESEL'), isFalse);
+      expect(enabled('EMERGENCY'), isTrue);
+      await database.close();
+    },
+  );
 }
 
 class _FakeRemote implements DriverRemoteApi {

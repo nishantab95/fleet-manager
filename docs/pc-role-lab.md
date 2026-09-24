@@ -155,29 +155,33 @@ copy a real OTP into source control or this document.
    KM, diesel, emergency acknowledgement, individual decisions, batch approval,
    rejection/dispute reasons, and stale-decision behavior.
 3. In Profile C, sign in as Driver QA and confirm the current assignment shows
-   `Tipper 12`, `Pilot Site`, and the pilot supervisor. Before duty starts, only
-   `START DUTY` and `EMERGENCY` are available. Overtime and owner reporting are
-   never shown in the driver workspace.
+   `Tipper 12`, `Pilot Site`, and the actual assigned supervisor. The primary
+   action shell always keeps exactly four buttons visible: `TRIP COMPLETE`,
+   `KM READING`, `DIESEL`, and `EMERGENCY`. Before duty starts, only `KM
+   READING` and `EMERGENCY` are enabled. Overtime and owner reporting are never
+   shown in the driver workspace.
 
    The browser must register a generated installation identifier with platform
    `WEB`. It must not use `ANDROID` and must not display operational totals.
 
 4. In Profile C, perform these real API actions:
 
-   - `START DUTY`: KM `START_READING`, value `10000`, with a required local
-     JPEG/PNG/WebP dashboard/odometer image.
+   - `KM READING` opens `START KM`: submit KM `START_READING`, value `10000`,
+     with a required local JPEG/PNG/WebP dashboard/odometer image. The four
+     buttons remain visible and all four become enabled.
    - Four separate `TRIP COMPLETE` actions.
    - Diesel `30` litres. Evidence is optional; the label is issued/recorded,
      never consumed, and no km/L is calculated.
-   - `END DUTY`: KM `END_READING`, value `10120`, with a required local
-     dashboard/odometer image. The backend closes the duty session and computes
-     owner-only overtime after the configured regular duty duration.
+   - `KM READING` opens `END KM`: submit KM `END_READING`, value `10120`, with
+     a required local dashboard/odometer image. The backend closes the duty
+     session and computes owner-only overtime after the configured regular duty
+     duration. All four buttons remain visible; only `EMERGENCY` remains enabled.
    - One one-tap `EMERGENCY` action using the current assignment context. No
      category, description, or evidence is required.
 
-   Trips and diesel must be rejected with `DUTY_NOT_STARTED` before `START
-   DUTY`. Refreshing the browser or restarting the web app while duty is active
-   must preserve the active session and must not create a duplicate start.
+   Trips and diesel must be rejected with `DUTY_NOT_STARTED` before the first
+   `KM READING`. Refreshing the browser or restarting the web app while duty is
+   active must preserve the active session and must not create a duplicate start.
 
    The QA diagnostics list should show a distinct client UUID for every event,
    the API acknowledgement, and the server verification state.

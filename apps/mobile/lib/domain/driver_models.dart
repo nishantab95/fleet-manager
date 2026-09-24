@@ -138,6 +138,69 @@ class DriverAssignment {
   }
 }
 
+enum DriverDutyStatus { none, active, closed }
+
+class DriverDutyState {
+  const DriverDutyState({
+    required this.status,
+    this.sessionId,
+    this.assignmentId,
+    this.tipperId,
+    this.siteId,
+    this.startedAt,
+    this.startKm,
+    this.endedAt,
+    this.endKm,
+    this.regularDutyMinutes,
+  });
+
+  const DriverDutyState.none() : this(status: DriverDutyStatus.none);
+
+  final DriverDutyStatus status;
+  final String? sessionId;
+  final String? assignmentId;
+  final String? tipperId;
+  final String? siteId;
+  final DateTime? startedAt;
+  final double? startKm;
+  final DateTime? endedAt;
+  final double? endKm;
+  final int? regularDutyMinutes;
+
+  bool get isActive => status == DriverDutyStatus.active;
+  bool get canStart => status == DriverDutyStatus.none;
+  bool get canEnd => status == DriverDutyStatus.active;
+
+  factory DriverDutyState.fromJson(Map<String, dynamic> json) {
+    final status = switch (json['status'] as String? ?? 'NONE') {
+      'ACTIVE' => DriverDutyStatus.active,
+      'CLOSED' => DriverDutyStatus.closed,
+      _ => DriverDutyStatus.none,
+    };
+    return DriverDutyState(
+      status: status,
+      sessionId: json['session_id'] as String?,
+      assignmentId: json['assignment_id'] as String?,
+      tipperId: json['tipper_id'] as String?,
+      siteId: json['site_id'] as String?,
+      startedAt: _parseDateTime(json['started_at']),
+      startKm: _parseDouble(json['start_km']),
+      endedAt: _parseDateTime(json['ended_at']),
+      endKm: _parseDouble(json['end_km']),
+      regularDutyMinutes: json['regular_duty_minutes'] as int?,
+    );
+  }
+}
+
+DateTime? _parseDateTime(Object? value) =>
+    value is String ? DateTime.tryParse(value) : null;
+
+double? _parseDouble(Object? value) => switch (value) {
+  num number => number.toDouble(),
+  String text => double.tryParse(text),
+  _ => null,
+};
+
 class PendingEvent {
   const PendingEvent({
     required this.clientEventUuid,

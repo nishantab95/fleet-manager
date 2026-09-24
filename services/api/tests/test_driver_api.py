@@ -180,6 +180,9 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
     assignment = add_assignment(db_session, tenant_records)
     driver = user_by_name(db_session, "Driver A")
     driver_membership = value(tenant_records, "driver_a", CompanyMembership)
+    supervisor_membership = value(tenant_records, "supervisor_a", CompanyMembership)
+    supervisor_membership.display_name = "Assigned Supervisor"
+    db_session.flush()
     driver_token = session_for_user(db_session, driver, driver_membership)
     client = driver_app(db_session, driver_token, storage=InMemoryStorage())
     try:
@@ -187,6 +190,7 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
         assert current.status_code == 200
         assert current.json()["assignment_id"] == str(assignment.id)
         assert current.json()["site_name"] == "Alpha Site"
+        assert current.json()["supervisor_name"] == "Assigned Supervisor"
 
         event_id = str(uuid4())
         start_duty(client)

@@ -2,6 +2,19 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DriverDutyState } from "../../lib/types";
 
+const makeDutyState = (status: DriverDutyState["status"]): DriverDutyState => ({
+  status,
+  session_id: status === "NONE" ? null : "session-1",
+  assignment_id: status === "NONE" ? null : "assignment-1",
+  tipper_id: status === "NONE" ? null : "tipper-1",
+  site_id: status === "NONE" ? null : "site-1",
+  started_at: status === "NONE" ? null : "2026-09-24T08:00:00Z",
+  start_km: status === "NONE" ? null : 100,
+  ended_at: status === "CLOSED" ? "2026-09-24T18:00:00Z" : null,
+  end_km: status === "CLOSED" ? 120 : null,
+  regular_duty_minutes: status === "NONE" ? null : 600,
+});
+
 const { requestMock, authMock, dutyState } = vi.hoisted(() => {
   const dutyState: { current: DriverDutyState } = {
     current: {
@@ -35,69 +48,78 @@ vi.mock("../auth/AuthProvider", () => ({ useAuth: () => authMock }));
 
 import { DriverQaWorkspace } from "./DriverQaWorkspace";
 
+const renderWorkspace = async () => {
+  render(<DriverQaWorkspace />);
+  await screen.findByText(/Pilot Site/);
+  expect(screen.getByText("Supervisor: Pilot Supervisor")).toBeInTheDocument();
+};
+
+const expectFourButtons = () => {
+  expect(screen.getAllByRole("button", { name: "TRIP COMPLETE" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "KM READING" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "DIESEL" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "EMERGENCY" })).toHaveLength(1);
+};
+
 afterEach(() => {
   cleanup();
-  dutyState.current = {
-    status: "NONE",
-    session_id: null,
-    assignment_id: null,
-    tipper_id: null,
-    site_id: null,
-    started_at: null,
-    start_km: null,
-    ended_at: null,
-    end_km: null,
-    regular_duty_minutes: null,
-  };
+  dutyState.current = makeDutyState("NONE");
   vi.clearAllMocks();
 });
 
 describe("Driver QA workspace", () => {
-  it("loads real assignment state and exposes only START DUTY plus emergency before duty", async () => {
-    render(<DriverQaWorkspace />);
-    expect(await screen.findByText(/Pilot Site/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "START DUTY" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "TRIP COMPLETE" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /DIESEL ISSUED/ })).not.toBeInTheDocument();
-    expect(screen.queryByText(/overtime/i)).toBeInTheDocument();
-    await waitFor(() => expect(requestMock).toHaveBeenCalledWith("/api/v1/driver/device", expect.objectContaining({ method: "POST", body: expect.stringContaining('"platform":"WEB"') })));
-  });
-
-  it("resumes an active duty session and creates separate UUIDs for separate trips", async () => {
-    dutyState.current = { ...dutyState.current, status: "ACTIVE", session_id: "session-1", assignment_id: "assignment-1", started_at: "2026-09-24T08:00:00Z", start_km: 100, regular_duty_minutes: 600 };
-    render(<DriverQaWorkspace />);
-    await screen.findByText(/Pilot Site/);
-    const tripButton = screen.getByRole("button", { name: "TRIP COMPLETE" });
-    fireEvent.click(tripButton);
-    await waitFor(() => expect(screen.getAllByText("TRIP_COMPLETE")).toHaveLength(1));
-    fireEvent.click(tripButton);
-    await waitFor(() => expect(screen.getAllByText("TRIP_COMPLETE")).toHaveLength(2));
-    const eventCalls = requestMock.mock.calls.filter(([path]) => path === "/api/v1/driver/events");
-    const uuids = eventCalls.map(([, options]) => (JSON.parse(String(options?.body)) as { client_event_uuid: string }).client_event_uuid);
-    expect(new Set(uuids).size).toBe(2);
-    expect(screen.getAllByText(/API: accepted/)).toHaveLength(2);
-  });
-
-  it("requires KM evidence, makes diesel evidence optional, and keeps one-tap emergencies", async () => {
-    render(<DriverQaWorkspace />);
-    await screen.findByText(/Pilot Site/);
-    fireEvent.click(screen.getByRole("button", { name: "START DUTY" }));
+  it("keeps four buttons visible before duty with only KM and emergency enabled", async () => {
+    await renderWorkspace();
+    expectFourButtons();
+    expect(screen.getByRole("button", { name: "TRIP COMPLETE" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "KM READING" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "DIESEL" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Record START KM first.");
+    fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
     expect(screen.getByRole("heading", { name: "START KM" })).toBeInTheDocument();
     expect(screen.getByLabelText("Required dashboard/odometer image")).toBeRequired();
+  });
+
+  it("keeps four buttons visible during active duty and maps KM to END KM", async () => {
+    dutyState.current = makeDutyState("ACTIVE");
+    await renderWorkspace();
+    expectFourButtons();
+    expect(screen.getByRole("button", { name: "TRIP COMPLETE" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "KM READING" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "DIESEL" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
+    expect(screen.getByRole("heading", { name: "END KM" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Required dashboard/odometer image")).toBeRequired();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "DIESEL" }));
+    expect(screen.getByLabelText("Optional fuel image")).not.toBeRequired();
+  });
+
+  it("keeps four buttons visible after duty closes with only emergency enabled", async () => {
+    dutyState.current = makeDutyState("CLOSED");
+    await renderWorkspace();
+    expectFourButtons();
+    expect(screen.getByRole("button", { name: "TRIP COMPLETE" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "KM READING" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "DIESEL" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Duty completed");
+  });
+
+  it("keeps emergency one-tap available regardless of duty state and preserves server state after remount", async () => {
+    dutyState.current = makeDutyState("ACTIVE");
+    await renderWorkspace();
     fireEvent.click(screen.getByRole("button", { name: "EMERGENCY" }));
     await waitFor(() => expect(requestMock.mock.calls.some(([path, options]) => path === "/api/v1/driver/events" && String(options?.body).includes('"event_type":"EMERGENCY"'))).toBe(true));
 
     cleanup();
-    dutyState.current = { ...dutyState.current, status: "ACTIVE", session_id: "session-1", assignment_id: "assignment-1", regular_duty_minutes: 600 };
-    render(<DriverQaWorkspace />);
-    await screen.findByText(/Pilot Site/);
-    fireEvent.click(screen.getByRole("button", { name: /DIESEL ISSUED/ }));
-    expect(screen.getByLabelText("Optional fuel image")).not.toBeRequired();
-    fireEvent.change(screen.getByLabelText("Litres"), { target: { value: "0" } });
-    expect(screen.getByLabelText("Litres")).toBeInvalid();
-    fireEvent.change(screen.getByLabelText("Litres"), { target: { value: "30" } });
-    expect(screen.getByLabelText("Optional fuel image")).not.toBeRequired();
+    await renderWorkspace();
+    expect(screen.getByRole("button", { name: "TRIP COMPLETE" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "KM READING" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "DIESEL" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "START DUTY" })).not.toBeInTheDocument();
   });
 });

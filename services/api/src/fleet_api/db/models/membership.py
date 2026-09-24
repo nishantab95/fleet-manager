@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, ForeignKeyConstraint, UniqueConstraint
+from sqlalchemy import ForeignKey, ForeignKeyConstraint, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from fleet_api.db.models.common import UpdatedTimestampModel
@@ -22,6 +22,7 @@ class CompanyMembership(UpdatedTimestampModel):
     role: Mapped[MembershipRole] = mapped_column(
         SAEnum(MembershipRole, name="membership_role_enum"), nullable=False
     )
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[MembershipStatus] = mapped_column(
         SAEnum(MembershipStatus, name="membership_status_enum"), nullable=False
     )

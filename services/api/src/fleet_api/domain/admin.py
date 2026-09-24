@@ -5,7 +5,8 @@ from datetime import datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import String, func, select
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -380,7 +381,14 @@ class AdminService:
         return [
             row._tuple()
             for row in self.session.execute(
-                select(SupervisorSiteAccess, User.display_name, Site.name)
+                select(
+                    SupervisorSiteAccess,
+                    sql_cast(
+                        func.coalesce(CompanyMembership.display_name, User.display_name),
+                        String,
+                    ),
+                    Site.name,
+                )
                 .join(
                     CompanyMembership,
                     CompanyMembership.id == SupervisorSiteAccess.supervisor_membership_id,
@@ -388,7 +396,14 @@ class AdminService:
                 .join(User, User.id == CompanyMembership.user_id)
                 .join(Site, Site.id == SupervisorSiteAccess.site_id)
                 .where(SupervisorSiteAccess.company_id == self.company_id)
-                .order_by(User.display_name, Site.name, SupervisorSiteAccess.id)
+                .order_by(
+                    sql_cast(
+                        func.coalesce(CompanyMembership.display_name, User.display_name),
+                        String,
+                    ),
+                    Site.name,
+                    SupervisorSiteAccess.id,
+                )
             ).all()
         ]
 
@@ -451,8 +466,17 @@ class AdminService:
                     Assignment,
                     Tipper.registration_number,
                     Site.name,
-                    driver_user.display_name,
-                    supervisor_user.display_name,
+                    sql_cast(
+                        func.coalesce(driver_membership.display_name, driver_user.display_name),
+                        String,
+                    ),
+                    sql_cast(
+                        func.coalesce(
+                            supervisor_membership.display_name,
+                            supervisor_user.display_name,
+                        ),
+                        String,
+                    ),
                 )
                 .join(Tipper, Tipper.id == Assignment.tipper_id)
                 .join(Site, Site.id == Assignment.site_id)
