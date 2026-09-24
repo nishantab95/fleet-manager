@@ -150,9 +150,29 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     await expect(driverPage.getByText("KM_READING").first()).toBeVisible();
     await expect(driverPage.getByText(/Duty state: CLOSED/)).toBeVisible();
     await expect(driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeDisabled();
-    await expect(driverPage.getByRole("button", { name: "KM READING", exact: true })).toBeDisabled();
+    await expect(driverPage.getByRole("button", { name: "KM READING", exact: true })).toBeEnabled();
     await expect(driverPage.getByRole("button", { name: "DIESEL", exact: true })).toBeDisabled();
     await expect(driverPage.getByRole("button", { name: "EMERGENCY", exact: true })).toBeEnabled();
+
+    await driverPage.getByRole("button", { name: "KM READING", exact: true }).click();
+    await expect(driverPage.getByRole("heading", { name: "START KM" })).toBeVisible();
+    await driverPage.getByLabel("KM value").fill("10120");
+    await driverPage.getByLabel("Required dashboard/odometer image").setInputFiles(image);
+    await driverPage.getByRole("button", { name: "Submit START KM" }).click();
+    await expect(driverPage.getByText(/Duty state: ACTIVE/)).toBeVisible();
+    await driverPage.reload();
+    await expect(driverPage.getByText(/Duty state: ACTIVE/)).toBeVisible();
+    await expect(driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeEnabled();
+    await expect(driverPage.getByRole("button", { name: "DIESEL", exact: true })).toBeEnabled();
+
+    await driverPage.getByRole("button", { name: "KM READING", exact: true }).click();
+    await driverPage.getByLabel("KM value").fill("10140");
+    await driverPage.getByLabel("Required dashboard/odometer image").setInputFiles(image);
+    await driverPage.getByRole("button", { name: "Submit END KM" }).click();
+    await expect(driverPage.getByText(/Duty state: CLOSED/)).toBeVisible();
+    await expect(driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeDisabled();
+    await expect(driverPage.getByRole("button", { name: "KM READING", exact: true })).toBeEnabled();
+    await expect(driverPage.getByRole("button", { name: "DIESEL", exact: true })).toBeDisabled();
 
     await driverPage.getByRole("button", { name: "EMERGENCY", exact: true }).click();
     await expect(driverPage.getByText("EMERGENCY").first()).toBeVisible();
@@ -185,8 +205,9 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     await expect(ownerPage.getByRole("heading", { name: "Owner operations" })).toBeVisible();
     await ownerPage.getByRole("button", { name: "Refresh" }).click();
     await expect(ownerPage.getByText("Approved trips").locator(".." ).getByText("4")).toBeVisible();
-    await expect(ownerPage.getByText(/120/).first()).toBeVisible();
+    await expect(ownerPage.getByText(/140/).first()).toBeVisible();
     await expect(ownerPage.getByText(/30/).first()).toBeVisible();
+    await expect(ownerPage.locator("#owner-driver-duty .table-row")).toHaveCount(3);
     await ownerPage.getByRole("button", { name: /Pilot Site/ }).first().click();
     await expect(ownerPage.getByRole("heading", { name: /Pilot Site · daily detail/ })).toBeVisible();
     const siteDetail = ownerPage.locator("section.stack").filter({ has: ownerPage.getByRole("heading", { name: /Pilot Site · daily detail/ }) });

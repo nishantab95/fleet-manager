@@ -37,6 +37,7 @@ from fleet_api.domain.enums import (
     OperationalEventType,
     SiteStatus,
     TipperStatus,
+    VerificationStatus,
 )
 from fleet_api.domain.errors import (
     AssignmentNotEffectiveError,
@@ -46,6 +47,7 @@ from fleet_api.domain.errors import (
     DutyEventOutsideSessionError,
     DutyKmValidationError,
     DutyNotStartedError,
+    DutyOdometerContinuityError,
     EvidenceValidationError,
     ObjectStorageUnavailableError,
     RoleViolationError,
@@ -128,11 +130,15 @@ def _active_duty_session(
     context: AuthContext,
     lock: bool = False,
 ) -> DutySession | None:
-    statement = select(DutySession).where(
-        DutySession.company_id == context.company.id,
-        DutySession.driver_membership_id == context.membership.id,
-        DutySession.status == DutySessionStatus.ACTIVE,
-    ).order_by(DutySession.started_at.desc(), DutySession.id.desc())
+    statement = (
+        select(DutySession)
+        .where(
+            DutySession.company_id == context.company.id,
+            DutySession.driver_membership_id == context.membership.id,
+            DutySession.status == DutySessionStatus.ACTIVE,
+        )
+        .order_by(DutySession.started_at.desc(), DutySession.id.desc())
+    )
     if lock:
         statement = statement.with_for_update()
     return session.scalars(statement).first()
@@ -160,11 +166,45 @@ def get_current_duty_state(session: Session, context: AuthContext) -> DriverDuty
 
 
 def _operational_date(context: AuthContext, timestamp: datetime) -> date:
+    """Label a session by the operational date at its START timestamp.
+
+    The label is for reporting/grouping only. A session remains one lifecycle
+    record when its END timestamp crosses midnight.
+    """
     try:
         local = timestamp.astimezone(ZoneInfo(context.company.reporting_timezone))
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise DomainError("company reporting timezone is invalid") from exc
     return (local - timedelta(minutes=context.company.operational_day_start_minutes)).date()
+
+
+def _previous_valid_end_km(
+    session: Session,
+    *,
+    company_id: UUID,
+    tipper_id: UUID,
+    before: datetime,
+) -> Decimal | None:
+    """Return the latest non-rejected END KM for this tipper before START."""
+
+    valid_statuses = {
+        VerificationStatus.PENDING_VERIFICATION,
+        VerificationStatus.APPROVED,
+        VerificationStatus.AMENDED,
+    }
+    return session.scalar(
+        select(DutySession.end_km)
+        .join(OperationalEvent, OperationalEvent.id == DutySession.end_event_id)
+        .where(
+            DutySession.company_id == company_id,
+            DutySession.tipper_id == tipper_id,
+            DutySession.status == DutySessionStatus.CLOSED,
+            DutySession.ended_at < before,
+            OperationalEvent.verification_status.in_(valid_statuses),
+        )
+        .order_by(DutySession.ended_at.desc(), DutySession.id.desc())
+        .limit(1)
+    )
 
 
 def _require_active_duty(
@@ -355,6 +395,7 @@ def create_driver_event(
         )
         if recent_emergency is not None:
             return DriverEventResult(event=recent_emergency, duplicate=True)
+    active_duty: DutySession | None = None
     _evidence_for_event(
         session,
         context=context,
@@ -362,7 +403,6 @@ def create_driver_event(
         object_reference=object_reference,
         required=event_type == OperationalEventType.KM_READING,
     )
-    active_duty: DutySession | None = None
     if event_type in {OperationalEventType.TRIP_COMPLETE, OperationalEventType.DIESEL}:
         active_duty = _require_active_duty(
             session,
@@ -374,8 +414,20 @@ def create_driver_event(
         if reading_type is None or reading_value is None:
             raise DomainError("reading_type and reading_value are required")
         if reading_type == KmReadingType.START_READING:
-            if _active_duty_session(session, context=context, lock=True) is not None:
+            active_duty = _active_duty_session(session, context=context, lock=True)
+            if active_duty is not None:
                 raise DutyAlreadyStartedError("an active duty session already exists")
+            previous_end_km = _previous_valid_end_km(
+                session,
+                company_id=context.company.id,
+                tipper_id=assignment.tipper_id,
+                before=device_created_at,
+            )
+            if previous_end_km is not None and reading_value < previous_end_km:
+                raise DutyOdometerContinuityError(
+                    f"START KM {reading_value} is below the previous valid END KM "
+                    f"{previous_end_km} for this tipper"
+                )
         elif reading_type == KmReadingType.END_READING:
             active_duty = _require_active_duty(
                 session,
@@ -387,6 +439,9 @@ def create_driver_event(
                 raise DutyKmValidationError(
                     "END_READING must be greater than or equal to START_READING"
                 )
+    elif event_type == OperationalEventType.EMERGENCY:
+        active_duty = _active_duty_session(session, context=context)
+    new_duty: DutySession | None = None
     if event_type == OperationalEventType.TRIP_COMPLETE:
         create_trip_event(
             session,
@@ -411,27 +466,30 @@ def create_driver_event(
         )
         if reading_type == KmReadingType.START_READING:
             regular_minutes = assignment.regular_duty_minutes
-            session.add(
-                DutySession(
-                    company_id=context.company.id,
-                    assignment_id=assignment.id,
-                    driver_membership_id=context.membership.id,
-                    tipper_id=assignment.tipper_id,
-                    site_id=assignment.site_id,
-                    operational_date=_operational_date(context, device_created_at),
-                    start_event_id=km_reading.event_id,
-                    start_km=reading_value,
-                    started_at=device_created_at,
-                    configured_regular_duty_minutes=regular_minutes,
-                    regular_duty_ends_at=device_created_at + timedelta(minutes=regular_minutes),
-                    status=DutySessionStatus.ACTIVE,
-                )
+            new_duty = DutySession(
+                company_id=context.company.id,
+                assignment_id=assignment.id,
+                driver_membership_id=context.membership.id,
+                tipper_id=assignment.tipper_id,
+                site_id=assignment.site_id,
+                operational_date=_operational_date(context, device_created_at),
+                start_event_id=km_reading.event_id,
+                start_km=reading_value,
+                started_at=device_created_at,
+                configured_regular_duty_minutes=regular_minutes,
+                regular_duty_ends_at=device_created_at + timedelta(minutes=regular_minutes),
+                status=DutySessionStatus.ACTIVE,
             )
+            session.add(new_duty)
             try:
                 with session.begin_nested():
                     session.flush()
             except IntegrityError as exc:
                 raise DutyAlreadyStartedError("an active duty session already exists") from exc
+            km_reading_event = session.get(OperationalEvent, km_reading.event_id)
+            if km_reading_event is not None:
+                km_reading_event.duty_session_id = new_duty.id
+            session.flush()
         elif active_duty is not None and reading_type == KmReadingType.END_READING:
             active_duty.end_event_id = km_reading.event_id
             active_duty.end_km = reading_value
@@ -476,6 +534,9 @@ def create_driver_event(
     )
     if event is None:
         raise DomainError("event was not persisted")
+    if active_duty is not None and event.duty_session_id is None:
+        event.duty_session_id = active_duty.id
+        session.flush()
     return DriverEventResult(event=event, duplicate=False)
 
 

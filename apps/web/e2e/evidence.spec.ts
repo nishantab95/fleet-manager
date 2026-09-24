@@ -1,21 +1,21 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const ownerPhone = process.env.PLAYWRIGHT_OWNER_PHONE;
+const ownerOtp = process.env.PLAYWRIGHT_OWNER_OTP;
 const supervisorPhone = process.env.PLAYWRIGHT_SUPERVISOR_PHONE;
-const pilotOtp = process.env.PLAYWRIGHT_OWNER_OTP ?? process.env.PLAYWRIGHT_SUPERVISOR_OTP;
+const supervisorOtp = process.env.PLAYWRIGHT_SUPERVISOR_OTP;
 const evidenceEventId = process.env.PLAYWRIGHT_EVIDENCE_EVENT_ID;
 
-async function authenticate(page: Page, phone: string, role: string) {
-  await page.goto("/");
+async function authenticate(page: Page, phone: string, otp: string, workspace: string) {
+  await page.goto(`/login?workspace=${workspace}`);
   await page.getByLabel("Phone number").fill(phone);
   await page.getByRole("button", { name: "Send OTP" }).click();
-  await page.getByLabel("One-time code").fill(pilotOtp!);
+  await page.getByLabel("One-time code").fill(otp);
   await page.getByRole("button", { name: "Verify and continue" }).click();
-  await page.getByRole("button", { name: new RegExp(role) }).first().click();
 }
 
 async function inspectEvidenceButtons(page: Page) {
-  const buttons = page.getByRole("button", { name: "View evidence" });
+  const buttons = page.getByRole("button", { name: /View (evidence|Photo)/ });
   await expect(buttons.first()).toBeVisible();
   const count = await buttons.count();
   for (let index = 0; index < Math.min(count, 3); index += 1) {
@@ -28,12 +28,12 @@ async function inspectEvidenceButtons(page: Page) {
 }
 
 test.describe("private evidence browser acceptance", () => {
-  test.skip(!ownerPhone || !supervisorPhone || !pilotOtp, "Set pilot Owner/Supervisor phone and OTP variables for the real evidence flow.");
+  test.skip(!ownerPhone || !ownerOtp || !supervisorPhone || !supervisorOtp, "Set pilot Owner/Supervisor phone and OTP variables for the real evidence flow.");
 
   test("Supervisor, Owner, and stable evidence route display private photos", async ({ browser }) => {
     const supervisorContext = await browser.newContext();
     const supervisorPage = await supervisorContext.newPage();
-    await authenticate(supervisorPage, supervisorPhone!, "SUPERVISOR");
+    await authenticate(supervisorPage, supervisorPhone!, supervisorOtp!, "supervisor");
     await expect(supervisorPage.getByRole("heading", { name: "Site operations verification" })).toBeVisible();
     await inspectEvidenceButtons(supervisorPage);
 
@@ -45,7 +45,7 @@ test.describe("private evidence browser acceptance", () => {
 
     const ownerContext = await browser.newContext();
     const ownerPage = await ownerContext.newPage();
-    await authenticate(ownerPage, ownerPhone!, "OWNER_ADMIN");
+    await authenticate(ownerPage, ownerPhone!, ownerOtp!, "owner");
     await ownerPage.getByRole("button", { name: "Operations" }).click();
     await expect(ownerPage.getByRole("heading", { name: "Owner operations" })).toBeVisible();
     await ownerPage.getByRole("button", { name: /Pilot Site/ }).first().click();

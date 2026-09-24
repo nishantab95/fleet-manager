@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -171,6 +173,415 @@ def start_duty(client: TestClient, *, installation_identifier: str = "android-te
         },
     )
     assert started.status_code == 200
+
+
+def submit_km(
+    client: TestClient,
+    *,
+    reading_type: str,
+    reading_value: int,
+    created_at: datetime,
+    installation_identifier: str = "duty-test-device",
+) -> Response:
+    client_event_uuid = str(uuid4())
+    uploaded = client.post(
+        "/api/v1/driver/evidence",
+        params={"client_event_uuid": client_event_uuid},
+        files={"file": ("km.jpg", b"\xff\xd8\xffkm", "image/jpeg")},
+    )
+    assert uploaded.status_code == 200
+    response = client.post(
+        "/api/v1/driver/events",
+        json={
+            "client_event_uuid": client_event_uuid,
+            "event_type": "KM_READING",
+            "device_created_at": created_at.isoformat(),
+            "installation_identifier": installation_identifier,
+            "platform": "ANDROID",
+            "reading_type": reading_type,
+            "reading_value": str(reading_value),
+            "object_reference": uploaded.json()["object_reference"],
+        },
+    )
+    return response
+
+
+def test_sequential_same_day_sessions_are_distinct_and_reportable(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(hours=8)
+    assignment = add_assignment(
+        db_session,
+        tenant_records,
+        starts_at=started_at - timedelta(hours=1),
+    )
+    driver = user_by_name(db_session, "Driver A")
+    token = session_for_user(
+        db_session,
+        driver,
+        value(tenant_records, "driver_a", CompanyMembership),
+    )
+    client = driver_app(db_session, token, storage=InMemoryStorage())
+    try:
+        first_start = submit_km(
+            client,
+            reading_type="START_READING",
+            reading_value=10000,
+            created_at=started_at,
+        )
+        assert first_start.status_code == 200
+        first_trip = client.post(
+            "/api/v1/driver/events",
+            json=event_payload(str(uuid4()), created_at=started_at + timedelta(hours=1)),
+        )
+        assert first_trip.status_code == 200
+        first_end = submit_km(
+            client,
+            reading_type="END_READING",
+            reading_value=10120,
+            created_at=started_at + timedelta(hours=2),
+        )
+        assert first_end.status_code == 200
+        first_state = client.get("/api/v1/driver/duty/current").json()
+        assert first_state["status"] == "CLOSED"
+
+        second_start = submit_km(
+            client,
+            reading_type="START_READING",
+            reading_value=10120,
+            created_at=started_at + timedelta(hours=3),
+        )
+        assert second_start.status_code == 200
+        second_state = client.get("/api/v1/driver/duty/current").json()
+        assert second_state["status"] == "ACTIVE"
+        assert second_state["session_id"] != first_state["session_id"]
+        second_end = submit_km(
+            client,
+            reading_type="END_READING",
+            reading_value=10150,
+            created_at=started_at + timedelta(hours=4),
+        )
+        assert second_end.status_code == 200
+
+        sessions = list(
+            db_session.scalars(
+                select(DutySession)
+                .where(DutySession.assignment_id == assignment.id)
+                .order_by(DutySession.started_at)
+            ).all()
+        )
+        assert len(sessions) == 2
+        assert all(item.status.value == "CLOSED" for item in sessions)
+        assert sessions[0].operational_date == sessions[1].operational_date
+        event_ids = [
+            first_start.json()["event_id"],
+            first_trip.json()["event_id"],
+            first_end.json()["event_id"],
+            second_start.json()["event_id"],
+            second_end.json()["event_id"],
+        ]
+        linked = list(
+            db_session.scalars(
+                select(OperationalEvent).where(OperationalEvent.id.in_(event_ids))
+            ).all()
+        )
+        assert {event.duty_session_id for event in linked} == {item.id for item in sessions}
+        assert str(sessions[0].start_event_id) == first_start.json()["event_id"]
+        assert str(sessions[0].end_event_id) == first_end.json()["event_id"]
+        assert str(sessions[1].start_event_id) == second_start.json()["event_id"]
+        assert str(sessions[1].end_event_id) == second_end.json()["event_id"]
+    finally:
+        client.close()
+
+
+def test_active_session_is_rejected_and_survives_a_new_client(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(hours=3)
+    add_assignment(db_session, tenant_records, starts_at=started_at - timedelta(hours=1))
+    driver = user_by_name(db_session, "Driver A")
+    token = session_for_user(
+        db_session,
+        driver,
+        value(tenant_records, "driver_a", CompanyMembership),
+    )
+    first_client = driver_app(db_session, token, storage=InMemoryStorage())
+    second_client = driver_app(db_session, token, storage=InMemoryStorage())
+    try:
+        started = submit_km(
+            first_client,
+            reading_type="START_READING",
+            reading_value=100,
+            created_at=started_at,
+        )
+        assert started.status_code == 200
+        duplicate = submit_km(
+            second_client,
+            reading_type="START_READING",
+            reading_value=100,
+            created_at=started_at + timedelta(minutes=1),
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"]["code"] == "DUTY_ALREADY_STARTED"
+        state = second_client.get("/api/v1/driver/duty/current")
+        assert state.status_code == 200
+        assert state.json()["status"] == "ACTIVE"
+        first_state = first_client.get("/api/v1/driver/duty/current")
+        assert state.json()["session_id"] == first_state.json()["session_id"]
+    finally:
+        first_client.close()
+        second_client.close()
+
+
+def test_start_requires_tipper_odometer_continuity(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(hours=6)
+    add_assignment(db_session, tenant_records, starts_at=started_at - timedelta(hours=1))
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    try:
+        assert (
+            submit_km(
+                client,
+                reading_type="START_READING",
+                reading_value=10100,
+                created_at=started_at,
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client,
+                reading_type="END_READING",
+                reading_value=10120,
+                created_at=started_at + timedelta(hours=1),
+            ).status_code
+            == 200
+        )
+        rejected = submit_km(
+            client,
+            reading_type="START_READING",
+            reading_value=10000,
+            created_at=started_at + timedelta(hours=2),
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"]["code"] == "ODOMETER_CONTINUITY"
+        accepted = submit_km(
+            client,
+            reading_type="START_READING",
+            reading_value=10125,
+            created_at=started_at + timedelta(hours=2, minutes=1),
+        )
+        assert accepted.status_code == 200
+    finally:
+        client.close()
+
+
+def test_cross_midnight_session_keeps_start_operational_date(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    started_at = datetime(2026, 9, 23, 20, 0, tzinfo=UTC)
+    ended_at = datetime(2026, 9, 24, 4, 0, tzinfo=UTC)
+    assignment = add_assignment(
+        db_session,
+        tenant_records,
+        starts_at=started_at - timedelta(hours=1),
+    )
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    try:
+        assert (
+            submit_km(
+                client,
+                reading_type="START_READING",
+                reading_value=100,
+                created_at=started_at,
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client,
+                reading_type="END_READING",
+                reading_value=120,
+                created_at=ended_at,
+            ).status_code
+            == 200
+        )
+        session = db_session.scalar(
+            select(DutySession).where(DutySession.assignment_id == assignment.id)
+        )
+        assert session is not None
+        assert session.ended_at is not None
+        assert session.status.value == "CLOSED"
+        assert session.operational_date == started_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        assert session.started_at.date() != session.ended_at.date()
+    finally:
+        client.close()
+
+
+def test_overtime_is_calculated_independently_per_session(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    first_start = datetime.now(UTC) - timedelta(hours=25)
+    first_end = first_start + timedelta(hours=11)
+    second_start = first_end + timedelta(hours=1)
+    second_end = second_start + timedelta(hours=10, minutes=15)
+    assignment = add_assignment(
+        db_session,
+        tenant_records,
+        starts_at=first_start - timedelta(hours=1),
+    )
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    try:
+        assert (
+            submit_km(
+                client, reading_type="START_READING", reading_value=100, created_at=first_start
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client, reading_type="END_READING", reading_value=120, created_at=first_end
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client, reading_type="START_READING", reading_value=120, created_at=second_start
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client, reading_type="END_READING", reading_value=140, created_at=second_end
+            ).status_code
+            == 200
+        )
+        sessions = list(
+            db_session.scalars(
+                select(DutySession)
+                .where(DutySession.assignment_id == assignment.id)
+                .order_by(DutySession.started_at)
+            ).all()
+        )
+        assert [item.final_overtime_minutes for item in sessions] == [60, 15]
+    finally:
+        client.close()
+
+
+def test_driver_handover_can_start_after_previous_session_closes(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    handover_at = datetime.now(UTC) - timedelta(hours=3)
+    first_assignment = add_assignment(
+        db_session,
+        tenant_records,
+        starts_at=handover_at - timedelta(hours=4),
+        ends_at=handover_at,
+    )
+    second_assignment = add_assignment(
+        db_session,
+        tenant_records,
+        driver_key="driver_a2",
+        starts_at=handover_at,
+    )
+    driver_a = user_by_name(db_session, "Driver A")
+    client_a = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver_a,
+            value(tenant_records, "driver_a", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    driver_a2 = user_by_name(db_session, "Driver A2")
+    client_a2 = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            driver_a2,
+            value(tenant_records, "driver_a2", CompanyMembership),
+        ),
+        storage=InMemoryStorage(),
+    )
+    try:
+        assert (
+            submit_km(
+                client_a,
+                reading_type="START_READING",
+                reading_value=100,
+                created_at=handover_at - timedelta(hours=2),
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client_a,
+                reading_type="END_READING",
+                reading_value=120,
+                created_at=handover_at - timedelta(minutes=30),
+            ).status_code
+            == 200
+        )
+        assert (
+            submit_km(
+                client_a2,
+                reading_type="START_READING",
+                reading_value=125,
+                created_at=handover_at + timedelta(minutes=1),
+                installation_identifier="handover-driver-a2",
+            ).status_code
+            == 200
+        )
+        sessions = list(
+            db_session.scalars(
+                select(DutySession)
+                .where(DutySession.tipper_id == value(tenant_records, "tipper_a", Tipper).id)
+                .order_by(DutySession.started_at)
+            ).all()
+        )
+        assert [item.assignment_id for item in sessions] == [
+            first_assignment.id,
+            second_assignment.id,
+        ]
+        assert sessions[0].driver_membership_id != sessions[1].driver_membership_id
+    finally:
+        client_a.close()
+        client_a2.close()
 
 
 def test_driver_assignment_role_boundary_and_idempotent_event(
@@ -371,6 +782,7 @@ def test_driver_qa_registers_web_device_and_submits_real_event(
             driver,
             value(tenant_records, "driver_a", CompanyMembership),
         ),
+        storage=InMemoryStorage(),
     )
     try:
         device = client.post(

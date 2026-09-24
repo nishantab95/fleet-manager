@@ -462,11 +462,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final canReadKm =
         canCapture &&
         !_busy &&
-        (_duty.status == DriverDutyStatus.none || _duty.isActive);
+        (_duty.status == DriverDutyStatus.none ||
+            _duty.isActive ||
+            _duty.status == DriverDutyStatus.closed);
     final dutyLabel = switch (_duty.status) {
       DriverDutyStatus.none => 'Before START KM',
       DriverDutyStatus.active => 'Duty active',
-      DriverDutyStatus.closed => 'Duty completed',
+      DriverDutyStatus.closed =>
+        'Previous duty completed · Record START KM for the next session',
     };
     return Scaffold(
       appBar: AppBar(

@@ -97,15 +97,17 @@ describe("Driver QA workspace", () => {
     expect(screen.getByLabelText("Optional fuel image")).not.toBeRequired();
   });
 
-  it("keeps four buttons visible after duty closes with only emergency enabled", async () => {
+  it("keeps four buttons visible after duty closes with KM ready for a new START", async () => {
     dutyState.current = makeDutyState("CLOSED");
     await renderWorkspace();
     expectFourButtons();
     expect(screen.getByRole("button", { name: "TRIP COMPLETE" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "KM READING" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "KM READING" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "DIESEL" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeEnabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Duty completed");
+    expect(screen.getByRole("status")).toHaveTextContent("Previous duty completed");
+    fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
+    expect(screen.getByRole("heading", { name: "START KM" })).toBeInTheDocument();
   });
 
   it("keeps emergency one-tap available regardless of duty state and preserves server state after remount", async () => {

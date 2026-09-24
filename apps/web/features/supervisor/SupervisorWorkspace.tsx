@@ -200,7 +200,7 @@ export function SupervisorShell(props: SupervisorShellProps) {
 
   const renderReviewRow = (event: SupervisorEvent, label: string, detail: string) => <article className="table-card supervisor-event-card" key={event.event_id}>
     <div className="table-row"><div><strong>{label}</strong><span>{detail}</span></div><span>{eventTime(event.device_created_at)}</span><span>{event.verification_status}</span>{event.verification_status === "PENDING_VERIFICATION" && <label className="row-check"><input checked={selectedEventIds.includes(event.event_id)} onChange={() => toggleSelection(event.event_id)} type="checkbox" /> Select</label>}</div>
-    <div className="table-row">{event.event_type === "KM_READING" && <span>{event.reading_value ?? "Unavailable"} km</span>}{event.event_type === "DIESEL" && <span>{event.litres ?? "Unavailable"} L</span>}{event.evidence_available && <button className="secondary" onClick={() => void viewEvidence(event)} type="button">View Photo</button>}</div>
+    <div className="table-row">{event.event_type === "KM_READING" && <span>{event.reading_value ?? "Unavailable"} km</span>}{event.event_type === "DIESEL" && <span>{event.litres ?? "Unavailable"} L</span>}<span>{event.duty_session_id ? `Session ${event.duty_session_id.slice(0, 8)}` : "Outside duty session"}</span>{event.evidence_available && <button className="secondary" onClick={() => void viewEvidence(event)} type="button">View Photo</button>}</div>
     {renderVerificationControls(event)}
     {renderHistory(event)}
   </article>;

@@ -100,6 +100,7 @@ def _event_response(event: ReportEvent) -> ReportEventResponse:
         event_id=event.event_id,
         event_type=event.event_type,
         assignment_id=event.assignment_id,
+        duty_session_id=event.duty_session_id,
         tipper_id=event.tipper_id,
         tipper_registration_number=event.tipper_registration_number,
         site_id=event.site_id,

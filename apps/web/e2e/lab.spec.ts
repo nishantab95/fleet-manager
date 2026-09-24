@@ -19,9 +19,9 @@ test.describe("PC Test Lab", () => {
 
     await expect(page.getByRole("heading", { name: "PC TEST LAB" })).toBeVisible();
     await expect(page.getByText("INTERNAL / QA ONLY")).toBeVisible();
-    await expect(page.getByRole("link", { name: /DRIVER.*Enter operational events/ })).toHaveAttribute("href", "/driver-test");
-    await expect(page.getByRole("link", { name: /SUPERVISOR.*Review and verify events/ })).toHaveAttribute("href", "/supervisor");
-    await expect(page.getByRole("link", { name: /OWNER.*Dashboard, reports and administration/ })).toHaveAttribute("href", "/owner");
+    await expect(page.getByRole("link", { name: /DRIVER.*Enter operational events/ })).toHaveAttribute("href", "/login?workspace=driver-test");
+    await expect(page.getByRole("link", { name: /SUPERVISOR.*Review and verify events/ })).toHaveAttribute("href", "/login?workspace=supervisor");
+    await expect(page.getByRole("link", { name: /OWNER.*Dashboard, reports and administration/ })).toHaveAttribute("href", "/login?workspace=owner");
     await expect(page.getByText("API").locator("..").getByText("READY")).toBeVisible();
     await expect(page.getByText("Database").locator("..").getByText("READY")).toBeVisible();
     await expect(page.getByText("LAUNCHER")).toBeVisible();

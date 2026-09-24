@@ -38,6 +38,7 @@ from fleet_api.domain.errors import (
     DutyEventOutsideSessionError,
     DutyKmValidationError,
     DutyNotStartedError,
+    DutyOdometerContinuityError,
     EvidenceValidationError,
     ObjectStorageUnavailableError,
     RoleViolationError,
@@ -76,6 +77,9 @@ def _fail(exc: DomainError) -> NoReturn:
     elif isinstance(exc, DutyKmValidationError):
         http_status = 422
         code = "INVALID_END_KM"
+    elif isinstance(exc, DutyOdometerContinuityError):
+        http_status = 422
+        code = "ODOMETER_CONTINUITY"
     else:
         http_status = 422
         code = "VALIDATION_ERROR"

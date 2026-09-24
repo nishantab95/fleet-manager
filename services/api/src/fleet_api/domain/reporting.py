@@ -68,6 +68,7 @@ class ReportEvent:
     event_id: UUID
     event_type: OperationalEventType
     assignment_id: UUID
+    duty_session_id: UUID | None
     tipper_id: UUID
     tipper_registration_number: str
     site_id: UUID
@@ -482,6 +483,7 @@ class ReportingService:
             event_id=parts.event.id,
             event_type=parts.event.event_type,
             assignment_id=parts.assignment.id,
+            duty_session_id=parts.event.duty_session_id,
             tipper_id=parts.tipper.id,
             tipper_registration_number=parts.tipper.registration_number,
             site_id=parts.site.id,
@@ -508,17 +510,36 @@ class ReportingService:
 
     @staticmethod
     def _reading_value(events: list[_EventParts], reading_type: str) -> tuple[Decimal | None, bool]:
-        approved_values = [
-            parts.km.reading_value
+        approved_readings = [
+            (parts.event.device_created_at, parts.km.reading_value, parts.event.duty_session_id)
             for parts in events
             if parts.km is not None
             and parts.km.reading_type.value == reading_type
             and parts.event.verification_status == VerificationStatus.APPROVED
         ]
-        distinct_values = set(approved_values)
-        if len(distinct_values) > 1:
+
+        # A daily report can contain several legitimate duty sessions for one
+        # tipper.  Readings only conflict when one session has competing
+        # approved values; readings from separate linked sessions are the
+        # first/last boundary of the daily aggregate.  Keep the old conflict
+        # behavior for legacy events that have no session link.
+        values_by_session: dict[UUID | None, set[Decimal]] = defaultdict(set)
+        for _, value, session_id in approved_readings:
+            values_by_session[session_id].add(value)
+        if any(len(values) > 1 for values in values_by_session.values()):
             return None, True
-        return (next(iter(distinct_values)) if distinct_values else None), False
+
+        distinct_values = {value for _, value, _ in approved_readings}
+        if not distinct_values:
+            return None, False
+        if len(distinct_values) == 1:
+            return next(iter(distinct_values)), False
+        if None in values_by_session:
+            return None, True
+
+        ordered_readings = sorted(approved_readings, key=lambda item: item[0])
+        selected = ordered_readings[0 if reading_type == "START_READING" else -1]
+        return selected[1], False
 
     @staticmethod
     def _has_status(

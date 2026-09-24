@@ -106,3 +106,7 @@ class DutyEventOutsideSessionError(DomainError):
 
 class DutyKmValidationError(DomainError):
     pass
+
+
+class DutyOdometerContinuityError(DomainError):
+    pass

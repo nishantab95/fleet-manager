@@ -38,6 +38,9 @@ class OperationalEvent(UpdatedTimestampModel):
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
     assignment_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    duty_session_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("duty_sessions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     client_event_uuid: Mapped[UUID] = mapped_column(nullable=False)
     device_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     device_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

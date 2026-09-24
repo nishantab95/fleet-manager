@@ -68,7 +68,7 @@ void main() {
   });
 
   testWidgets(
-    'driver home keeps four actions while gating NONE and CLOSED duty',
+    'driver home keeps four actions while gating NONE and restarting CLOSED duty',
     (tester) async {
       final database = LocalDatabase(NativeDatabase.memory());
       final dependencies = DriverAppDependencies(
@@ -122,7 +122,7 @@ void main() {
       );
       await tester.pump();
       expect(enabled('TRIP COMPLETE'), isFalse);
-      expect(enabled('KM READING'), isFalse);
+      expect(enabled('KM READING'), isTrue);
       expect(enabled('DIESEL'), isFalse);
       expect(enabled('EMERGENCY'), isTrue);
       await database.close();
