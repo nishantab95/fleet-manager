@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -41,6 +42,11 @@ class SupervisorStorage:
 
     def read_private(self, *, object_key: str) -> tuple[bytes, str]:
         return self.objects[object_key]
+
+
+COLORFUL_JPEG_BYTES = base64.b64decode(
+    "/9j/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAoACgDASIAAhEBAxEB/8QAGQABAAMBAQAAAAAAAAAAAAAAAAcICQYK/8QALRABAAABBRADAAAAAAAAAAAAABEIExdhpAIFCRQVGEVHZWaEhcPE4uMWI0L/xAAZAQACAwEAAAAAAAAAAAAAAAAFCQYHCAr/xAA1EQAAAwQDCw0AAAAAAAAAAAAAAQIDBQYRBBIhBwgTFzdUgaOytNMVIjEyNDVTVYOEodHS/9oADAMBAAIRAxEAPwCugCjA1MTHJ50/w/UTGhyTzp/h+omNVr67e00bJBFd8tlWe/obsxAAEGYxn3Srsu0eJSrsu0eLgA8HElAHl2tb8QNIxvxvn+rY8MXzkE3lpl+dfdkfJuI/mfnJzGK7mEJuuMaltc3XeCxexV7BNa1OVd40GJsvgWLOE7pT0czmLBUdlgaqetKtR2SztXWUc1KM7TPpkVkiEJeMMumOaUuIYhY4altpV11lInUIkJ5qFJSUkpSViSnKZzMzMQ1m67wWL2CZRnnlx4eJ8J+gNxWwhmWsa/sefIB1FgINB8E1rU5V3jQYCAb6PK8+vb7qwFqOTu9np2jABlUHB//Z"
+)
 
 
 def auth_settings() -> Settings:
@@ -470,6 +476,59 @@ def test_km_evidence_is_available_only_to_authorized_supervisor_and_completeness
         assert driver_again.get(f"/api/v1/supervisor/events/{uuid4()}/evidence").status_code == 403
     finally:
         driver_again.close()
+
+
+def test_colorful_jpeg_bytes_survive_upload_storage_and_authorized_response(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    add_assignment(db_session, tenant_records)
+    storage = SupervisorStorage()
+    driver_client = create_driver_client(db_session, tenant_records, storage)
+    client_event_uuid = str(uuid4())
+    try:
+        uploaded = driver_client.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": client_event_uuid},
+            files={"file": ("colorful.jpg", COLORFUL_JPEG_BYTES, "image/jpeg")},
+        )
+        assert uploaded.status_code == 200
+        object_reference = uploaded.json()["object_reference"]
+        assert storage.objects[object_reference] == (COLORFUL_JPEG_BYTES, "image/jpeg")
+
+        created = driver_client.post(
+            "/api/v1/driver/events",
+            json=driver_event_payload(
+                "KM_READING",
+                client_event_uuid=client_event_uuid,
+                reading_type="START_READING",
+                reading_value="10000.00",
+                object_reference=object_reference,
+            ),
+        )
+        assert created.status_code == 200
+        event_id = created.json()["event_id"]
+    finally:
+        driver_client.close()
+
+    supervisor = user_by_name(db_session, "Supervisor A")
+    supervisor_client = client_for(
+        db_session,
+        access_token(
+            db_session,
+            supervisor,
+            value(tenant_records, "supervisor_a", CompanyMembership),
+        ),
+        storage=storage,
+    )
+    try:
+        response = supervisor_client.get(f"/api/v1/supervisor/events/{event_id}/evidence")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+        assert int(response.headers["content-length"]) == len(COLORFUL_JPEG_BYTES)
+        assert response.content == COLORFUL_JPEG_BYTES
+    finally:
+        supervisor_client.close()
 
 
 def test_completeness_surfaces_odometer_regression(

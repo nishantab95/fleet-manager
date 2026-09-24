@@ -64,7 +64,8 @@ describe("Supervisor workspace", () => {
   it("opens private evidence in a modal with event context", async () => {
     const evidenceEvents = events.map((item, index) => index === 4 ? { ...item, evidence_available: true } : item);
     const apiRequest = vi.fn(async (path: string) => path.includes("/events") ? evidenceEvents : completeness) as unknown as WebRequest;
-    const fetchMock = vi.fn(async () => new Response(new Blob(["photo"], { type: "image/jpeg" }), {
+    const responseBytes = new Uint8Array([0xff, 0xd8, 0xff, 0x00, 0x01, 0xff, 0xd9]);
+    const fetchMock = vi.fn(async () => new Response(responseBytes, {
       status: 200,
       headers: {
         "Content-Type": "image/jpeg",
@@ -75,7 +76,8 @@ describe("Supervisor workspace", () => {
       },
     }));
     vi.stubGlobal("fetch", fetchMock);
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:evidence") });
+    const createObjectUrlMock = vi.fn(() => "blob:evidence");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrlMock });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
 
     render(<SupervisorShell accessToken="token" error="" sites={[site]} setError={vi.fn()} onLogout={vi.fn()} apiRequest={apiRequest} />);
@@ -87,5 +89,9 @@ describe("Supervisor workspace", () => {
     expect(dialog).toHaveTextContent("Pilot Driver");
     expect(dialog).toHaveTextContent("PILOT12");
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/v1/supervisor/events/event-5/evidence"), expect.any(Object));
+    const [blob] = createObjectUrlMock.mock.calls[0] as [Blob][];
+    expect(blob.type).toBe("image/jpeg");
+    expect(blob.size).toBe(responseBytes.byteLength);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(responseBytes);
   });
 });
