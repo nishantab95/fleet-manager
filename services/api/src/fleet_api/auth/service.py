@@ -38,6 +38,7 @@ from fleet_api.domain.enums import (
     UserStatus,
 )
 from fleet_api.domain.errors import (
+    AuthConfigurationError,
     AuthenticationError,
     InvalidOtpError,
     InvalidTokenError,
@@ -122,20 +123,26 @@ class AuthService:
         self,
         *,
         phone: str,
+        requested_role: MembershipRole | None = None,
         request_ip: str | None = None,
         user_agent: str | None = None,
     ) -> UUID:
+        if requested_role is not None and self.settings.otp_provider.lower() != "pilot":
+            raise AuthConfigurationError("role-aware pilot OTP is not enabled")
         normalized_phone = normalize_phone(
             phone,
             default_region=self.settings.phone_default_region,
         )
         now = utc_now()
+        challenge_scope = [
+            OtpChallenge.phone_number == normalized_phone,
+            OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+        ]
+        if requested_role is not None:
+            challenge_scope.append(OtpChallenge.requested_role == requested_role)
         latest = self.session.scalar(
             select(OtpChallenge)
-            .where(
-                OtpChallenge.phone_number == normalized_phone,
-                OtpChallenge.status == OtpChallengeStatus.ACTIVE,
-            )
+            .where(*challenge_scope)
             .order_by(OtpChallenge.created_at.desc())
             .limit(1)
         )
@@ -152,23 +159,27 @@ class AuthService:
         # that control while keeping source addresses out of the database.
         request_ip_hash = _hash_metadata(request_ip)
         if request_ip_hash:
+            ip_scope = [
+                OtpChallenge.request_ip_hash == request_ip_hash,
+                OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+                OtpChallenge.expires_at > now,
+            ]
+            if requested_role is not None:
+                ip_scope.append(OtpChallenge.requested_role == requested_role)
             latest_from_ip = self.session.scalar(
                 select(OtpChallenge)
-                .where(
-                    OtpChallenge.request_ip_hash == request_ip_hash,
-                    OtpChallenge.status == OtpChallengeStatus.ACTIVE,
-                    OtpChallenge.expires_at > now,
-                )
+                .where(*ip_scope)
                 .order_by(OtpChallenge.created_at.desc())
                 .limit(1)
             )
             if latest_from_ip is not None and latest_from_ip.next_allowed_at > now:
                 raise OtpRateLimitError("OTP request cooldown is active")
 
-        otp = self.otp_provider.generate()
+        otp = self.otp_provider.generate(requested_role=requested_role)
         salt = token_bytes(16).hex()
         challenge = OtpChallenge(
             phone_number=normalized_phone,
+            requested_role=requested_role,
             otp_hash=_hash_otp(otp, salt),
             otp_salt=salt,
             status=OtpChallengeStatus.ACTIVE,
@@ -223,6 +234,7 @@ class AuthService:
         pre_session = issue_pre_session(
             self.settings,
             user_id=user.id if user is not None else None,
+            requested_role=challenge.requested_role,
             now=now,
         )
         return pre_session, self.settings.pre_session_ttl_seconds
@@ -241,8 +253,10 @@ class AuthService:
                 CompanyMembership.status == MembershipStatus.ACTIVE,
                 Company.status == CompanyStatus.ACTIVE,
             )
-            .order_by(Company.name, CompanyMembership.id)
         )
+        if claims.requested_role is not None:
+            statement = statement.where(CompanyMembership.role == claims.requested_role)
+        statement = statement.order_by(Company.name, CompanyMembership.id)
         return [row._tuple() for row in self.session.execute(statement).all()]
 
     def create_session(self, *, pre_session_token: str, membership_id: UUID) -> SessionTokens:
@@ -253,6 +267,8 @@ class AuthService:
             select(CompanyMembership).where(CompanyMembership.id == membership_id)
         )
         if membership_row is None:
+            raise MembershipSelectionError("membership selection is invalid")
+        if claims.requested_role is not None and membership_row.role != claims.requested_role:
             raise MembershipSelectionError("membership selection is invalid")
         context_row = _active_context_for_membership(
             self.session,

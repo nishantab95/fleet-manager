@@ -90,6 +90,7 @@ def request_otp(
     try:
         challenge_id = service.request_otp(
             phone=payload.phone,
+            requested_role=payload.requested_role,
             request_ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )

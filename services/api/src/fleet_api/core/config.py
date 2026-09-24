@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     otp_provider: str = "unavailable"
     enable_development_otp: bool = False
     pilot_otp: str | None = Field(default=None, repr=False)
+    pilot_driver_otp: str | None = Field(default=None, repr=False)
+    pilot_supervisor_otp: str | None = Field(default=None, repr=False)
+    pilot_owner_otp: str | None = Field(default=None, repr=False)
     otp_ttl_seconds: int = 300
     otp_max_attempts: int = 5
     otp_resend_cooldown_seconds: int = 60
@@ -61,16 +64,33 @@ class Settings(BaseSettings):
 
         environment = self.environment.lower()
         otp_provider = self.otp_provider.lower()
-        if self.pilot_otp is not None and (
-            len(self.pilot_otp) != 6 or not self.pilot_otp.isdigit()
-        ):
-            raise ValueError("pilot OTP must be exactly six digits")
+        pilot_codes = {
+            "FLEET_PILOT_OTP": self.pilot_otp,
+            "FLEET_PILOT_DRIVER_OTP": self.pilot_driver_otp,
+            "FLEET_PILOT_SUPERVISOR_OTP": self.pilot_supervisor_otp,
+            "FLEET_PILOT_OWNER_OTP": self.pilot_owner_otp,
+        }
+        for name, code in pilot_codes.items():
+            if code is not None and (len(code) != 6 or not code.isdigit()):
+                raise ValueError(f"{name} must be exactly six digits")
         if otp_provider == "pilot" and environment not in {"development", "pilot", "test"}:
             raise ValueError(
                 "pilot OTP provider is restricted to local non-production environments"
             )
-        if otp_provider == "pilot" and not self.pilot_otp:
-            raise ValueError("pilot OTP provider requires FLEET_PILOT_OTP")
+        if otp_provider == "pilot":
+            missing = [
+                name
+                for name, code in (
+                    ("FLEET_PILOT_DRIVER_OTP", self.pilot_driver_otp or self.pilot_otp),
+                    ("FLEET_PILOT_SUPERVISOR_OTP", self.pilot_supervisor_otp or self.pilot_otp),
+                    ("FLEET_PILOT_OWNER_OTP", self.pilot_owner_otp or self.pilot_otp),
+                )
+                if not code
+            ]
+            if missing:
+                raise ValueError(
+                    "pilot OTP provider requires role codes: " + ", ".join(missing)
+                )
 
         if environment in {"production", "prod"}:
             if not self.web_public_base_url.strip():
@@ -79,7 +99,15 @@ class Settings(BaseSettings):
                 raise ValueError("production requires a JWT signing key of at least 32 characters")
             if self.enable_development_otp or otp_provider in {"development", "fake", "pilot"}:
                 raise ValueError("development and pilot OTP providers are forbidden in production")
-            if self.pilot_otp:
+            if any(
+                code
+                for code in (
+                    self.pilot_otp,
+                    self.pilot_driver_otp,
+                    self.pilot_supervisor_otp,
+                    self.pilot_owner_otp,
+                )
+            ):
                 raise ValueError("pilot OTP material is forbidden in production")
             if self.otp_provider.lower() == "unavailable":
                 raise ValueError("production requires a configured OTP provider")

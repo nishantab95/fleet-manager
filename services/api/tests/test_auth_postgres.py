@@ -34,6 +34,7 @@ from fleet_api.domain.enums import (
     MembershipRole,
     MembershipStatus,
     OtpChallengeStatus,
+    UserStatus,
 )
 from fleet_api.domain.errors import (
     AuthConfigurationError,
@@ -190,6 +191,79 @@ def test_development_provider_and_production_secret_configuration_fail_closed() 
         Settings(environment="production", jwt_signing_key="too-short")
     with pytest.raises(AuthConfigurationError):
         build_otp_provider(auth_settings(otp_provider="fake"))
+    with pytest.raises(ValueError):
+        Settings(
+            environment="production",
+            otp_provider="sms",
+            pilot_driver_otp="111111",
+            jwt_signing_key="test-signing-key-that-is-longer-than-32-characters",
+        )
+
+
+def test_local_pilot_otp_and_membership_selection_are_role_bound(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    pilot = User(
+        phone_number="+919606743463",
+        display_name="Pilot Driver",
+        status=UserStatus.ACTIVE,
+    )
+    db_session.add(pilot)
+    db_session.flush()
+    memberships = [
+        CompanyMembership(
+            company_id=company.id,
+            user_id=pilot.id,
+            role=role,
+            status=MembershipStatus.ACTIVE,
+        )
+        for role in MembershipRole
+    ]
+    db_session.add_all(memberships)
+    db_session.flush()
+
+    settings = auth_settings(
+        otp_provider="pilot",
+        otp_resend_cooldown_seconds=0,
+        pilot_driver_otp="111111",
+        pilot_supervisor_otp="222222",
+        pilot_owner_otp="333333",
+    )
+    provider = build_otp_provider(settings)
+    service = AuthService(db_session, settings, provider)
+    expected_codes = {
+        MembershipRole.DRIVER: "111111",
+        MembershipRole.SUPERVISOR: "222222",
+        MembershipRole.OWNER_ADMIN: "333333",
+    }
+
+    for role, expected_code in expected_codes.items():
+        challenge_id = service.request_otp(
+            phone="9606743463",
+            requested_role=role,
+        )
+        assert provider.deliveries[challenge_id] == expected_code  # type: ignore[attr-defined]
+        pre_session, _ = service.verify_otp(
+            challenge_id=challenge_id,
+            otp=expected_code,
+        )
+        options = service.list_memberships(pre_session_token=pre_session)
+        assert [option[3] for option in options] == [role]
+        selected = service.create_session(
+            pre_session_token=pre_session,
+            membership_id=options[0][0],
+        )
+        assert selected.context.membership.role == role
+
+        other_membership = next(
+            membership for membership in memberships if membership.role != role
+        )
+        with pytest.raises(MembershipSelectionError):
+            service.create_session(
+                pre_session_token=pre_session,
+                membership_id=other_membership.id,
+            )
 
 
 def test_membership_selection_is_user_scoped_and_returns_safe_context(

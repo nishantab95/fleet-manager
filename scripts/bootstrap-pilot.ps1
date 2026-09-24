@@ -8,7 +8,7 @@ $cacheDir = Join-Path $repoRoot ".uv-cache"
 $apiProject = Join-Path $repoRoot "services\api"
 
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot ".env"))) {
-    throw "A local .env is required. Configure the explicit pilot OTP before running this command."
+    throw "A local .env is required. Configure the explicit pilot role OTPs before running this command."
 }
 
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {

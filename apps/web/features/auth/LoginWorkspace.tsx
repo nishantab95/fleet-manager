@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { driverQaEnabled, workspaceForRole } from "../../lib/auth/config";
+import type { MembershipRole } from "../../lib/types";
 import { useAuth } from "./AuthProvider";
 import { AccessDenied } from "./AccessDenied";
 
@@ -15,6 +16,13 @@ const workspaceLabels = {
 export function workspaceHintLabel(value: string | null): string | null {
   if (!value || !(value in workspaceLabels)) return null;
   return workspaceLabels[value as keyof typeof workspaceLabels];
+}
+
+function requestedRoleForWorkspace(value: string | null): MembershipRole | undefined {
+  if (value === "owner") return "OWNER_ADMIN";
+  if (value === "supervisor") return "SUPERVISOR";
+  if (value === "driver-test") return "DRIVER";
+  return undefined;
 }
 
 export function LoginWorkspace() {
@@ -38,13 +46,15 @@ export function LoginWorkspace() {
   }, [auth.me, auth.status, router]);
 
   const reason = searchParams.get("reason");
-  const workspaceLabel = workspaceHintLabel(searchParams.get("workspace"));
+  const workspace = searchParams.get("workspace");
+  const workspaceLabel = workspaceHintLabel(workspace);
+  const requestedRole = requestedRoleForWorkspace(workspace);
   const submitPhone = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
-      setChallengeId(await auth.requestOtp(phone.trim()));
+      setChallengeId(await auth.requestOtp(phone.trim(), requestedRole));
       setPhase("otp");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not request an OTP.");
@@ -63,6 +73,12 @@ export function LoginWorkspace() {
       setMemberships(result.memberships);
       setPhase("membership");
       if (!result.memberships.length) setError("No active company membership is available.");
+      if (result.memberships.length === 1) {
+        const session = await auth.selectMembership(result.preSessionToken, result.memberships[0].membership_id);
+        const target = workspaceForRole(session.role);
+        if (target) router.replace(target);
+        else setError("Access denied: Driver QA is disabled. Enable NEXT_PUBLIC_ENABLE_DRIVER_QA=true for the local QA client.");
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The OTP could not be verified.");
     } finally {

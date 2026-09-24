@@ -8,7 +8,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from fleet_api.db.models.common import UpdatedTimestampModel
-from fleet_api.domain.enums import OtpChallengeStatus
+from fleet_api.domain.enums import MembershipRole, OtpChallengeStatus
 
 
 class OtpChallenge(UpdatedTimestampModel):
@@ -17,6 +17,9 @@ class OtpChallenge(UpdatedTimestampModel):
     __tablename__ = "otp_challenges"
 
     phone_number: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    requested_role: Mapped[MembershipRole | None] = mapped_column(
+        SAEnum(MembershipRole, name="membership_role_enum"), nullable=True
+    )
     otp_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     otp_salt: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[OtpChallengeStatus] = mapped_column(

@@ -23,9 +23,9 @@ describe("PC Test Lab home", () => {
     render(<TestLabHome />);
 
     expect(screen.getByRole("heading", { name: "PC TEST LAB" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /DRIVER.*Enter operational events/ })).toHaveAttribute("href", "/driver-test");
-    expect(screen.getByRole("link", { name: /SUPERVISOR.*Review and verify events/ })).toHaveAttribute("href", "/supervisor");
-    expect(screen.getByRole("link", { name: /OWNER.*Dashboard, reports and administration/ })).toHaveAttribute("href", "/owner");
+    expect(screen.getByRole("link", { name: /DRIVER.*Enter operational events/ })).toHaveAttribute("href", "/login?workspace=driver-test");
+    expect(screen.getByRole("link", { name: /SUPERVISOR.*Review and verify events/ })).toHaveAttribute("href", "/login?workspace=supervisor");
+    expect(screen.getByRole("link", { name: /OWNER.*Dashboard, reports and administration/ })).toHaveAttribute("href", "/login?workspace=owner");
     expect((await screen.findAllByText("READY")).length).toBe(2);
     expect(screen.getByText("LAUNCHER")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);

@@ -7,7 +7,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from fleet_api.auth.phone import normalize_phone
-from fleet_api.core.config import get_settings
+from fleet_api.core.config import Settings, get_settings
 from fleet_api.db.models import (
     Assignment,
     AuthSession,
@@ -41,6 +41,7 @@ OWNER_PHONE = "+919876543210"
 OWNER_NAME = "Pilot Owner"
 SUPERVISOR_PHONE = "+919876543222"
 SUPERVISOR_NAME = "Pilot Supervisor"
+PILOT_PHONE = "+919606743463"
 DRIVER_NAME = "Pilot Driver"
 SITE_NAME = "Pilot Site"
 SITE_CODE = "PILOT"
@@ -113,6 +114,7 @@ def _membership(
         select(CompanyMembership).where(
             CompanyMembership.company_id == company_id,
             CompanyMembership.user_id == user_id,
+            CompanyMembership.role == role,
         ),
         f"{label} membership",
     )
@@ -195,6 +197,144 @@ def _site_access(
     return access
 
 
+def _merge_legacy_pilot_users(
+    session: Session,
+    *,
+    company_id: UUID,
+    pilot_user: User,
+    legacy_users: list[User],
+) -> None:
+    """Move the old three-phone fixture onto the single pilot identity."""
+
+    for legacy_user in legacy_users:
+        if legacy_user.id == pilot_user.id:
+            continue
+        legacy_memberships = list(
+            session.scalars(
+                select(CompanyMembership).where(
+                    CompanyMembership.company_id == company_id,
+                    CompanyMembership.user_id == legacy_user.id,
+                )
+            )
+        )
+        for legacy_membership in legacy_memberships:
+            target_membership = session.scalar(
+                select(CompanyMembership).where(
+                    CompanyMembership.company_id == company_id,
+                    CompanyMembership.user_id == pilot_user.id,
+                    CompanyMembership.role == legacy_membership.role,
+                )
+            )
+            if target_membership is None:
+                legacy_membership.user_id = pilot_user.id
+                continue
+
+            for assignment in session.scalars(
+                select(Assignment).where(
+                    Assignment.company_id == company_id,
+                    Assignment.driver_membership_id == legacy_membership.id,
+                )
+            ):
+                assignment.driver_membership_id = target_membership.id
+            for assignment in session.scalars(
+                select(Assignment).where(
+                    Assignment.company_id == company_id,
+                    Assignment.supervisor_membership_id == legacy_membership.id,
+                )
+            ):
+                assignment.supervisor_membership_id = target_membership.id
+            for access in session.scalars(
+                select(SupervisorSiteAccess).where(
+                    SupervisorSiteAccess.company_id == company_id,
+                    SupervisorSiteAccess.supervisor_membership_id == legacy_membership.id,
+                )
+            ):
+                access.supervisor_membership_id = target_membership.id
+            for auth_session in session.scalars(
+                select(AuthSession).where(
+                    AuthSession.company_id == company_id,
+                    AuthSession.membership_id == legacy_membership.id,
+                )
+            ):
+                auth_session.membership_id = target_membership.id
+            session.delete(legacy_membership)
+
+        for auth_session in session.scalars(
+            select(AuthSession).where(
+                AuthSession.company_id == company_id,
+                AuthSession.user_id == legacy_user.id,
+            )
+        ):
+            auth_session.user_id = pilot_user.id
+        session.flush()
+        remaining_membership = session.scalar(
+            select(CompanyMembership).where(CompanyMembership.user_id == legacy_user.id)
+        )
+        remaining_session = session.scalar(
+            select(AuthSession).where(AuthSession.user_id == legacy_user.id)
+        )
+        if remaining_membership is None and remaining_session is None:
+            session.delete(legacy_user)
+
+
+def _pilot_user(session: Session, *, company_id: UUID, settings: Settings) -> User:
+    common_phone = normalize_phone(PILOT_PHONE, default_region="IN")
+    pilot_user = _single(
+        session,
+        select(User).where(User.phone_number == common_phone),
+        "common pilot user",
+    )
+    if pilot_user is not None and pilot_user.display_name not in {
+        OWNER_NAME,
+        SUPERVISOR_NAME,
+        DRIVER_NAME,
+    }:
+        raise RuntimeError(
+            f"pilot phone {common_phone} belongs to {pilot_user.display_name!r}, "
+            "not the pilot fixture"
+        )
+
+    legacy_phones = [OWNER_PHONE, SUPERVISOR_PHONE]
+    if settings.pilot_driver_phone:
+        legacy_phones.append(settings.pilot_driver_phone)
+    normalized_legacy_phones = {
+        normalize_phone(phone, default_region="IN") for phone in legacy_phones
+    }
+    legacy_users = list(
+        session.scalars(
+            select(User).where(
+                User.phone_number.in_(normalized_legacy_phones),
+                User.display_name.in_({OWNER_NAME, SUPERVISOR_NAME, DRIVER_NAME}),
+            )
+        )
+    )
+    if pilot_user is None:
+        pilot_user = next(
+            (user for user in legacy_users if user.display_name == DRIVER_NAME), None
+        ) or (legacy_users[0] if legacy_users else None)
+        if pilot_user is None:
+            pilot_user = User(
+                phone_number=common_phone,
+                display_name=DRIVER_NAME,
+                status=UserStatus.ACTIVE,
+            )
+            session.add(pilot_user)
+            session.flush()
+        else:
+            pilot_user.phone_number = common_phone
+
+    pilot_user.display_name = DRIVER_NAME
+    pilot_user.status = UserStatus.ACTIVE
+    session.flush()
+    _merge_legacy_pilot_users(
+        session,
+        company_id=company_id,
+        pilot_user=pilot_user,
+        legacy_users=legacy_users,
+    )
+    return pilot_user
+
+
 def _assignment(
     session: Session,
     *,
@@ -239,66 +379,27 @@ def bootstrap_pilot(session: Session) -> dict[str, UUID]:
     settings = get_settings()
     if settings.environment.lower() in {"production", "prod"}:
         raise RuntimeError("pilot bootstrap is forbidden in production")
-    if not settings.pilot_driver_phone:
-        raise RuntimeError("FLEET_PILOT_DRIVER_PHONE must be set for the pilot bootstrap")
 
     company = _company(session)
-    owner = _user(session, phone=OWNER_PHONE, display_name=OWNER_NAME)
-    supervisor = _user(session, phone=SUPERVISOR_PHONE, display_name=SUPERVISOR_NAME)
-    driver_phone = normalize_phone(settings.pilot_driver_phone, default_region="IN")
-    driver = _single(
-        session,
-        select(User).where(User.phone_number == driver_phone),
-        f"user {driver_phone}",
-    )
-    existing_driver = _single(
-        session,
-        select(User)
-        .join(CompanyMembership, CompanyMembership.user_id == User.id)
-        .where(
-            CompanyMembership.company_id == company.id,
-            User.display_name == DRIVER_NAME,
-        ),
-        "pilot driver",
-    )
-    if driver is None and existing_driver is not None:
-        existing_driver.phone_number = driver_phone
-        driver = existing_driver
-        for auth_session in session.scalars(
-            select(AuthSession).where(
-                AuthSession.user_id == driver.id,
-                AuthSession.revoked_at.is_(None),
-            )
-        ):
-            auth_session.revoked_at = utc_now()
-            auth_session.revocation_reason = "pilot phone corrected"
-        session.flush()
-    if driver is None:
-        driver = _user(session, phone=driver_phone, display_name=DRIVER_NAME)
-    elif driver.display_name != DRIVER_NAME:
-        raise RuntimeError(
-            f"pilot phone {driver_phone} belongs to {driver.display_name!r}, not {DRIVER_NAME!r}"
-        )
-    else:
-        driver.status = UserStatus.ACTIVE
+    pilot_user = _pilot_user(session, company_id=company.id, settings=settings)
     owner_membership = _membership(
         session,
         company_id=company.id,
-        user_id=owner.id,
+        user_id=pilot_user.id,
         role=MembershipRole.OWNER_ADMIN,
         label="owner",
     )
     supervisor_membership = _membership(
         session,
         company_id=company.id,
-        user_id=supervisor.id,
+        user_id=pilot_user.id,
         role=MembershipRole.SUPERVISOR,
         label="supervisor",
     )
     driver_membership = _membership(
         session,
         company_id=company.id,
-        user_id=driver.id,
+        user_id=pilot_user.id,
         role=MembershipRole.DRIVER,
         label="driver",
     )
@@ -321,11 +422,11 @@ def bootstrap_pilot(session: Session) -> dict[str, UUID]:
     session.flush()
     return {
         "company_id": company.id,
-        "owner_user_id": owner.id,
+        "owner_user_id": pilot_user.id,
         "owner_membership_id": owner_membership.id,
-        "supervisor_user_id": supervisor.id,
+        "supervisor_user_id": pilot_user.id,
         "supervisor_membership_id": supervisor_membership.id,
-        "driver_user_id": driver.id,
+        "driver_user_id": pilot_user.id,
         "driver_membership_id": driver_membership.id,
         "site_id": site.id,
         "tipper_id": tipper.id,

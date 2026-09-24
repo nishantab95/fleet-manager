@@ -23,6 +23,7 @@ from fleet_api.domain.enums import (
 
 class OtpRequest(BaseModel):
     phone: str = Field(min_length=3, max_length=64)
+    requested_role: MembershipRole | None = None
 
 
 class OtpRequestResponse(BaseModel):

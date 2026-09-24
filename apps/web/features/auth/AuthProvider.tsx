@@ -3,14 +3,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, request, refreshWebSession } from "../../lib/api/client";
-import type { Membership, Me, Tokens } from "../../lib/types";
+import type { Membership, MembershipRole, Me, Tokens } from "../../lib/types";
 
 type AuthStatus = "restoring" | "unauthenticated" | "authenticated";
 type AuthContextValue = {
   status: AuthStatus;
   session: Tokens | null;
   me: Me | null;
-  requestOtp: (phone: string) => Promise<string>;
+  requestOtp: (phone: string, requestedRole?: MembershipRole) => Promise<string>;
   verifyOtp: (challengeId: string, otp: string) => Promise<{ preSessionToken: string; memberships: Membership[] }>;
   selectMembership: (preSessionToken: string, membershipId: string) => Promise<Tokens>;
   logout: () => Promise<void>;
@@ -83,8 +83,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [refresh, session]);
 
-  const requestOtp = useCallback(async (phone: string) => {
-    const result = await request<{ challenge_id: string }>("/api/v1/auth/otp/request", { method: "POST", body: JSON.stringify({ phone }) });
+  const requestOtp = useCallback(async (phone: string, requestedRole?: MembershipRole) => {
+    const result = await request<{ challenge_id: string }>("/api/v1/auth/otp/request", { method: "POST", body: JSON.stringify({ phone, ...(requestedRole ? { requested_role: requestedRole } : {}) }) });
     return result.challenge_id;
   }, []);
 

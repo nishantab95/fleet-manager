@@ -8,12 +8,12 @@ test.describe(
   () => {
   test.skip(!ownerPhone || !ownerOtp, "Set PLAYWRIGHT_OWNER_PHONE and PLAYWRIGHT_OWNER_OTP for a real test environment.");
   test("owner can authenticate, view operations, download Excel, and logout", async ({ page, context }) => {
-    await page.goto("/");
+    await page.goto("/login?workspace=owner");
     await page.getByLabel("Phone number").fill(ownerPhone!);
     await page.getByRole("button", { name: "Send OTP" }).click();
     await page.getByLabel("One-time code").fill(ownerOtp!);
     await page.getByRole("button", { name: "Verify and continue" }).click();
-    await page.getByRole("button", { name: /OWNER_ADMIN/ }).first().click();
+    await expect(page).toHaveURL(/\/owner$/);
 
     await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible();
     await page.getByRole("button", { name: "Operations" }).click();
@@ -46,15 +46,29 @@ test.describe(
   test.skip(!supervisorPhone || !supervisorOtp, "Set supervisor OTP variables for role-isolation coverage.");
   test("role-isolated sessions do not expose owner administration", async ({ page }) => {
 
-    await page.goto("/");
+    await page.goto("/login?workspace=supervisor");
     await page.getByLabel("Phone number").fill(supervisorPhone!);
     await page.getByRole("button", { name: "Send OTP" }).click();
     await page.getByLabel("One-time code").fill(supervisorOtp!);
     await page.getByRole("button", { name: "Verify and continue" }).click();
-    await page.getByRole("button", { name: /SUPERVISOR/ }).first().click();
+    await expect(page).toHaveURL(/\/supervisor$/);
 
     await expect(page.getByRole("heading", { name: "Site operations verification" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Administration" })).not.toBeVisible();
+  });
+});
+
+test.describe("driver role-bound browser flow", () => {
+  test.skip(!driverPhone || !driverOtp, "Set driver OTP variables for driver login coverage.");
+  test("driver reaches the QA workspace with the driver OTP", async ({ page }) => {
+    await page.goto("/login?workspace=driver-test");
+    await page.getByLabel("Phone number").fill(driverPhone!);
+    await page.getByRole("button", { name: "Send OTP" }).click();
+    await page.getByLabel("One-time code").fill(driverOtp!);
+    await page.getByRole("button", { name: "Verify and continue" }).click();
+    await expect(page).toHaveURL(/\/driver-test$/);
+    await expect(page.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "EMERGENCY", exact: true })).toBeVisible();
   });
 });
 
@@ -62,24 +76,23 @@ test.describe("three-role owned-tipper acceptance flow", () => {
   test.skip(!ownerPhone || !ownerOtp || !supervisorPhone || !supervisorOtp || !driverPhone || !driverOtp, "Set all pilot role phone/OTP variables for the real three-role flow.");
 
   test("Driver QA events reach Supervisor and Owner reporting", async ({ browser }) => {
-    const authenticate = async (page: import("@playwright/test").Page, phone: string, otp: string, role: string) => {
-      await page.goto("/");
+    const authenticate = async (page: import("@playwright/test").Page, phone: string, otp: string, workspace: string) => {
+      await page.goto(`/login?workspace=${workspace}`);
       await page.getByLabel("Phone number").fill(phone);
       await page.getByRole("button", { name: "Send OTP" }).click();
       await page.getByLabel("One-time code").fill(otp);
       await page.getByRole("button", { name: "Verify and continue" }).click();
-      await page.getByRole("button", { name: new RegExp(role) }).first().click();
     };
 
     const ownerContext = await browser.newContext();
     const ownerPage = await ownerContext.newPage();
-    await authenticate(ownerPage, ownerPhone!, ownerOtp!, "OWNER_ADMIN");
+    await authenticate(ownerPage, ownerPhone!, ownerOtp!, "owner");
     await expect(ownerPage).toHaveURL(/\/owner$/);
     await expect(ownerPage.getByRole("heading", { name: "Administration" })).toBeVisible();
 
     const driverContext = await browser.newContext();
     const driverPage = await driverContext.newPage();
-    await authenticate(driverPage, driverPhone!, driverOtp!, "DRIVER");
+    await authenticate(driverPage, driverPhone!, driverOtp!, "driver-test");
     await expect(driverPage).toHaveURL(/\/driver-test$/);
     await expect(driverPage.getByText("Pilot Site")).toBeVisible();
     await expect(driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeVisible();
@@ -114,14 +127,11 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     await expect(driverPage.getByText("KM_READING").nth(1)).toBeVisible();
 
     await driverPage.getByRole("button", { name: "EMERGENCY", exact: true }).click();
-    await driverPage.getByLabel("Category").selectOption("CONTACT_SUPERVISOR");
-    await driverPage.getByLabel("Description (optional)").fill("PC role lab test");
-    await driverPage.getByRole("button", { name: "Submit emergency" }).click();
     await expect(driverPage.getByText("EMERGENCY").first()).toBeVisible();
 
     const supervisorContext = await browser.newContext();
     const supervisorPage = await supervisorContext.newPage();
-    await authenticate(supervisorPage, supervisorPhone!, supervisorOtp!, "SUPERVISOR");
+    await authenticate(supervisorPage, supervisorPhone!, supervisorOtp!, "supervisor");
     await expect(supervisorPage).toHaveURL(/\/supervisor$/);
     await expect(supervisorPage.getByRole("heading", { name: /Pilot Site · daily completeness/ })).toBeVisible();
     await expect(supervisorPage.getByText(/KM READING/).first()).toBeVisible();

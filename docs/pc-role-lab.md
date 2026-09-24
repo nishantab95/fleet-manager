@@ -12,6 +12,19 @@ The Driver QA route is disabled unless `NEXT_PUBLIC_ENABLE_DRIVER_QA=true` is
 present in the web process environment. It is disabled by default and does not
 change backend authorization.
 
+## Local pilot login
+
+The controlled PC pilot uses one identity with three active memberships:
+
+- Phone: `9606743463` (or `+919606743463`)
+- Driver OTP: `111111`
+- Supervisor OTP: `222222`
+- Owner/Admin OTP: `333333`
+
+Choose the role card first. The selected role is sent with the OTP request,
+filtered again by the backend, and checked again when the session is created.
+The role picker is never an authorization boundary.
+
 ## Start the local role lab
 
 Normal daily use is one double-click. From Windows:
@@ -83,8 +96,9 @@ Create and edit the ignored local environment file:
 
 ```powershell
 Copy-Item .env.example .env
-# Set FLEET_PILOT_DRIVER_PHONE to the local pilot driver's real number.
-# Set FLEET_OTP_PROVIDER=pilot, FLEET_PILOT_OTP=<six digits>, and a local JWT key.
+# Set FLEET_OTP_PROVIDER=pilot and a local JWT key.
+# Set FLEET_PILOT_DRIVER_OTP=111111, FLEET_PILOT_SUPERVISOR_OTP=222222,
+# and FLEET_PILOT_OWNER_OTP=333333 for this controlled local pilot.
 ```
 
 Start PostgreSQL and MinIO, then the API:
@@ -124,12 +138,12 @@ For advanced/manual three-role testing, the preserved role-workspace routine
 creates separate Microsoft Edge user-data directories so each role has its own
 HttpOnly refresh cookie:
 
-- Browser/Profile A — Owner/Admin, phone `+919876543210`.
-- Browser/Profile B — Supervisor, phone `+919876543222`.
-- Browser/Profile C — Driver QA, the local value of `$env:FLEET_PILOT_DRIVER_PHONE`.
+- Browser/Profile A — Owner/Admin, phone `+919606743463`, OTP `333333`.
+- Browser/Profile B — Supervisor, phone `+919606743463`, OTP `222222`.
+- Browser/Profile C — Driver QA, phone `+919606743463`, OTP `111111`.
 
-Enter the configured local pilot OTP when prompted. Never copy a real OTP into
-source control or this document.
+Enter the configured local pilot OTP for the selected role when prompted. Never
+copy a real OTP into source control or this document.
 
 ## Acceptance sequence
 

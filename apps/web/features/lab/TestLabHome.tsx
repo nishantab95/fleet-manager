@@ -6,9 +6,9 @@ import { API_BASE } from "../../lib/api/client";
 type CheckState = "checking" | "ready" | "not-ready" | "launcher";
 
 const roleCards = [
-  { label: "DRIVER", description: "Enter operational events", href: "/driver-test" },
-  { label: "SUPERVISOR", description: "Review and verify events", href: "/supervisor" },
-  { label: "OWNER", description: "Dashboard, reports and administration", href: "/owner" },
+  { label: "DRIVER", description: "Enter operational events", href: "/login?workspace=driver-test" },
+  { label: "SUPERVISOR", description: "Review and verify events", href: "/login?workspace=supervisor" },
+  { label: "OWNER", description: "Dashboard, reports and administration", href: "/login?workspace=owner" },
 ] as const;
 
 export function TestLabHome() {
@@ -51,6 +51,7 @@ export function TestLabHome() {
           <strong>Pilot Construction</strong>
           <span>Pilot Site</span>
           <span>Tipper 12</span>
+          <span>Local pilot phone: 9606743463</span>
         </div>
       </header>
 

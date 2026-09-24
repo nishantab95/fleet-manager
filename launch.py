@@ -83,8 +83,9 @@ class CommandTools:
     powershell: str
 
 
-OWNER_PHONE = "+919876543210"
-SUPERVISOR_PHONE = "+919876543222"
+PILOT_PHONE = "+919606743463"
+OWNER_PHONE = PILOT_PHONE
+SUPERVISOR_PHONE = PILOT_PHONE
 KNOWN_BOOKKEEPER_ROOT = r"D:\Git\AI-MSME-Book-Keeper"
 ROLE_URLS = {
     "OWNER": "http://localhost:3000/owner",
@@ -95,7 +96,7 @@ LAB_URL = "http://localhost:3000/lab"
 ROLE_PHONES = {
     "OWNER": OWNER_PHONE,
     "SUPERVISOR": SUPERVISOR_PHONE,
-    "DRIVER QA": "FLEET_PILOT_DRIVER_PHONE",
+    "DRIVER QA": PILOT_PHONE,
 }
 FIXTURE_SQL = """
 SELECT CASE WHEN EXISTS (
@@ -111,12 +112,16 @@ SELECT CASE WHEN EXISTS (
         AND dm.id = a.driver_membership_id
         AND dm.role = 'DRIVER'
         AND dm.status = 'ACTIVE'
-    JOIN users du ON du.id = dm.user_id AND du.display_name = 'Pilot Driver'
+    JOIN users du ON du.id = dm.user_id AND du.phone_number = '+919606743463'
     JOIN company_memberships sm ON sm.company_id = c.id
         AND sm.id = a.supervisor_membership_id
         AND sm.role = 'SUPERVISOR'
         AND sm.status = 'ACTIVE'
-    JOIN users su ON su.id = sm.user_id AND su.display_name = 'Pilot Supervisor'
+    JOIN users su ON su.id = sm.user_id AND su.phone_number = '+919606743463'
+    JOIN company_memberships om ON om.company_id = c.id
+        AND om.user_id = du.id
+        AND om.role = 'OWNER_ADMIN'
+        AND om.status = 'ACTIVE'
     JOIN supervisor_site_access ssa ON ssa.company_id = c.id
         AND ssa.supervisor_membership_id = sm.id
         AND ssa.site_id = s.id
@@ -186,11 +191,7 @@ def validate_local_configuration(env: Mapping[str, str]) -> list[str]:
             "Refusing the PC Role Lab: FLEET_ENVIRONMENT is production."
         )
 
-    missing = [
-        key
-        for key in ("FLEET_PILOT_DRIVER_PHONE", "FLEET_JWT_SIGNING_KEY")
-        if not env.get(key, "").strip()
-    ]
+    missing = [key for key in ("FLEET_JWT_SIGNING_KEY",) if not env.get(key, "").strip()]
     if missing:
         raise LauncherError(f"Missing local pilot configuration: {', '.join(missing)}")
     if len(env["FLEET_JWT_SIGNING_KEY"]) < 32:
@@ -203,9 +204,34 @@ def validate_local_configuration(env: Mapping[str, str]) -> list[str]:
         raise LauncherError(
             "FLEET_OTP_PROVIDER must be 'pilot' for the local Role Lab; no production OTP fallback is used."
         )
-    otp = env.get("FLEET_PILOT_OTP", "").strip()
-    if len(otp) != 6 or not otp.isdigit():
-        raise LauncherError("FLEET_PILOT_OTP must be configured as six local digits.")
+    role_otp_keys = (
+        "FLEET_PILOT_DRIVER_OTP",
+        "FLEET_PILOT_SUPERVISOR_OTP",
+        "FLEET_PILOT_OWNER_OTP",
+    )
+    missing_role_otps = [key for key in role_otp_keys if not env.get(key, "").strip()]
+    if missing_role_otps:
+        legacy_otp = env.get("FLEET_PILOT_OTP", "").strip()
+        if len(legacy_otp) != 6 or not legacy_otp.isdigit():
+            raise LauncherError(
+                "Configure FLEET_PILOT_DRIVER_OTP, FLEET_PILOT_SUPERVISOR_OTP, "
+                "and FLEET_PILOT_OWNER_OTP as six local digits."
+            )
+        warnings = [
+            "Using legacy FLEET_PILOT_OTP fallback; configure distinct role OTPs for the local pilot."
+        ]
+    else:
+        invalid_role_otps = [
+            key
+            for key in role_otp_keys
+            if len(env[key].strip()) != 6 or not env[key].strip().isdigit()
+        ]
+        if invalid_role_otps:
+            raise LauncherError(
+                "Local pilot role OTPs must be configured as six digits: "
+                + ", ".join(invalid_role_otps)
+            )
+        warnings = []
 
     origins = {
         origin.strip().rstrip("/")
@@ -217,7 +243,6 @@ def validate_local_configuration(env: Mapping[str, str]) -> list[str]:
             "FLEET_CORS_ALLOWED_ORIGINS must include http://localhost:3000."
         )
 
-    warnings: list[str] = []
     if env.get("FLEET_OBJECT_STORAGE_PROVIDER", "unavailable").strip().lower() != "s3":
         warnings.append(
             "FLEET_OBJECT_STORAGE_PROVIDER is not s3; MinIO is ready but evidence uploads may remain unavailable."
