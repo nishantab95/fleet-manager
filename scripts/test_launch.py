@@ -720,6 +720,21 @@ def test_windows_wrappers_use_uv_and_resolve_their_own_root() -> None:
     assert "--project" in stop
 
 
+def test_pilot_reset_wrapper_requires_confirmation_and_reuses_safe_scripts() -> None:
+    reset = Path("Reset Pilot Test Data.bat").read_text(encoding="utf-8")
+
+    assert "%~dp0" in reset
+    assert "uv" in reset.lower()
+    assert "python.exe" not in reset.lower()
+    assert "RESET PILOT" in reset
+    assert 'if not "%PILOT_CONFIRM%"=="RESET PILOT"' in reset
+    assert "reset-pilot.ps1" in reset
+    assert "-ConfirmPilotReset" in reset
+    assert "bootstrap-pilot.ps1" in reset
+    assert "Pilot test data reset successfully." in reset
+    assert "Driver can now begin with KM READING" in reset
+
+
 def test_start_calls_browser_launcher_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
