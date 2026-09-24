@@ -155,22 +155,29 @@ copy a real OTP into source control or this document.
    KM, diesel, emergency acknowledgement, individual decisions, batch approval,
    rejection/dispute reasons, and stale-decision behavior.
 3. In Profile C, sign in as Driver QA and confirm the current assignment shows
-   `Tipper 12`, `Pilot Site`, and the pilot supervisor. Confirm the four primary
-   actions are available: `TRIP COMPLETE`, `KM READING`, `DIESEL ISSUED / RECORDED`,
-   and `EMERGENCY`.
+   `Tipper 12`, `Pilot Site`, and the pilot supervisor. Before duty starts, only
+   `START DUTY` and `EMERGENCY` are available. Overtime and owner reporting are
+   never shown in the driver workspace.
 
    The browser must register a generated installation identifier with platform
    `WEB`. It must not use `ANDROID` and must not display operational totals.
 
 4. In Profile C, perform these real API actions:
 
-   - KM `START_READING`, value `10000`, with a local JPEG/PNG/WebP test image.
+   - `START DUTY`: KM `START_READING`, value `10000`, with a required local
+     JPEG/PNG/WebP dashboard/odometer image.
    - Four separate `TRIP COMPLETE` actions.
-   - Diesel `30` litres with a local test image. The label is issued/recorded,
+   - Diesel `30` litres. Evidence is optional; the label is issued/recorded,
      never consumed, and no km/L is calculated.
-   - KM `END_READING`, value `10120`, with a local test image.
+   - `END DUTY`: KM `END_READING`, value `10120`, with a required local
+     dashboard/odometer image. The backend closes the duty session and computes
+     owner-only overtime after the configured regular duty duration.
    - One one-tap `EMERGENCY` action using the current assignment context. No
      category, description, or evidence is required.
+
+   Trips and diesel must be rejected with `DUTY_NOT_STARTED` before `START
+   DUTY`. Refreshing the browser or restarting the web app while duty is active
+   must preserve the active session and must not create a duplicate start.
 
    The QA diagnostics list should show a distinct client UUID for every event,
    the API acknowledgement, and the server verification state.
@@ -187,21 +194,25 @@ copy a real OTP into source control or this document.
    - End KM: `10120`
    - Distance: `120 KM`
    - Diesel issued: `30 L`
+   - Driver Duty: one closed session with the start/end KM, regular duty
+     configuration, actual duty span, and owner-only overtime.
 
    Check the dashboard, Pilot Site report, Tipper 12 report, exceptions, and
    closure state. No fuel-efficiency calculation should appear.
 
 7. Download Excel from Owner Operations. Confirm the response is an XLSX file
    and that its Daily Summary, Trip Register, KM Register, Diesel Register, and
-   Exceptions sheets reconcile to the same report values. Do not commit the
+   Exceptions sheets reconcile to the same report values. Confirm the owner-only
+   `Driver Duty` sheet contains the required duty columns. Do not commit the
    downloaded workbook.
 
 ## PASS / FAIL
 
 PASS means all three roles authenticate through the backend, each role sees
-only its allowed workspace, Driver QA events are visible to Supervisor and
-Owner from real PostgreSQL state, the report values above reconcile, Excel
-downloads as XLSX, and closure succeeds only after its blockers are resolved.
+only its allowed workspace, duty-gated Driver QA events are visible to
+Supervisor and Owner from real PostgreSQL state, the report values above
+reconcile, owner-only duty/overtime reporting is present, Excel downloads as
+XLSX, and closure succeeds only after its blockers are resolved.
 
 FAIL means any event was faked, inserted directly into PostgreSQL, assigned to
 the wrong role/site, missing required evidence, missing from supervisor review
@@ -212,8 +223,9 @@ or owner reporting, or a report calculation disagrees with the backend.
 The reset is deliberately narrow. It identifies the exact `Pilot Construction`
 company and requires the named `Pilot Site` and `PILOT-12` tipper. It refuses
 production and does not accept a company ID. It removes only operational events,
-verification history, evidence metadata/objects when storage is configured,
-closure records, and related operational audit entries. It retains the company,
+driver duty sessions, verification history, evidence metadata/objects when
+storage is configured, closure records, and related operational audit entries.
+It retains the company,
 users, memberships, site, tipper, supervisor access, and active assignment.
 
 ```powershell

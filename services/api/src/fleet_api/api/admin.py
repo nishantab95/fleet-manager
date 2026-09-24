@@ -344,6 +344,7 @@ def list_assignments(
             site_name=site_name,
             starts_at=assignment.starts_at,
             ends_at=assignment.ends_at,
+            regular_duty_minutes=assignment.regular_duty_minutes,
         )
         for assignment, registration_number, site_name, driver_name, supervisor_name in (
             service.list_assignments()
@@ -365,6 +366,7 @@ def _assignment_response(row: tuple[Assignment, str, str, str, str]) -> Assignme
         site_name=row[2],
         starts_at=assignment.starts_at,
         ends_at=assignment.ends_at,
+        regular_duty_minutes=assignment.regular_duty_minutes,
     )
 
 
@@ -393,6 +395,7 @@ def create_assignment(
             site_id=payload.site_id,
             starts_at=payload.starts_at,
             ends_at=payload.ends_at,
+            regular_duty_minutes=payload.regular_duty_minutes,
         )
         db.commit()
         row = next(row for row in service.list_assignments() if row[0].id == assignment.id)

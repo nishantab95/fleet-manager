@@ -67,7 +67,7 @@ test.describe("driver role-bound browser flow", () => {
     await page.getByLabel("One-time code").fill(driverOtp!);
     await page.getByRole("button", { name: "Verify and continue" }).click();
     await expect(page).toHaveURL(/\/driver-test$/);
-    await expect(page.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "START DUTY", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "EMERGENCY", exact: true })).toBeVisible();
   });
 });
@@ -95,18 +95,19 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     await authenticate(driverPage, driverPhone!, driverOtp!, "driver-test");
     await expect(driverPage).toHaveURL(/\/driver-test$/);
     await expect(driverPage.getByText("Pilot Site")).toBeVisible();
-    await expect(driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeVisible();
-    await expect(driverPage.getByRole("button", { name: "KM READING", exact: true })).toBeVisible();
-    await expect(driverPage.getByRole("button", { name: /DIESEL ISSUED/ })).toBeVisible();
+    await expect(driverPage.getByRole("button", { name: "START DUTY", exact: true })).toBeVisible();
+    await expect(driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true })).not.toBeVisible();
+    await expect(driverPage.getByRole("button", { name: /DIESEL ISSUED/ })).not.toBeVisible();
     await expect(driverPage.getByRole("button", { name: "EMERGENCY", exact: true })).toBeVisible();
 
     const image = { name: "meter-test.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") };
-    await driverPage.getByRole("button", { name: "KM READING", exact: true }).click();
-    await driverPage.getByLabel("Reading type").selectOption("START_READING");
+    await driverPage.getByRole("button", { name: "START DUTY", exact: true }).click();
     await driverPage.getByLabel("KM value").fill("10000");
-    await driverPage.getByLabel("Local test image").setInputFiles(image);
-    await driverPage.getByRole("button", { name: "Submit KM reading" }).click();
+    await driverPage.getByLabel("Required dashboard/odometer image").setInputFiles(image);
+    await driverPage.getByRole("button", { name: "Submit START KM" }).click();
     await expect(driverPage.getByText("KM_READING").first()).toBeVisible();
+    await expect(driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true })).toBeVisible();
+    await expect(driverPage.getByRole("button", { name: "END DUTY", exact: true })).toBeVisible();
 
     for (let index = 0; index < 4; index += 1) {
       await driverPage.getByRole("button", { name: "TRIP COMPLETE", exact: true }).click();
@@ -115,16 +116,15 @@ test.describe("three-role owned-tipper acceptance flow", () => {
 
     await driverPage.getByRole("button", { name: /DIESEL ISSUED/ }).click();
     await driverPage.getByLabel("Litres").fill("30");
-    await driverPage.getByLabel("Local test image").setInputFiles(image);
     await driverPage.getByRole("button", { name: /Submit diesel/ }).click();
     await expect(driverPage.getByText("DIESEL").first()).toBeVisible();
 
-    await driverPage.getByRole("button", { name: "KM READING", exact: true }).click();
-    await driverPage.getByLabel("Reading type").selectOption("END_READING");
+    await driverPage.getByRole("button", { name: "END DUTY", exact: true }).click();
     await driverPage.getByLabel("KM value").fill("10120");
-    await driverPage.getByLabel("Local test image").setInputFiles(image);
-    await driverPage.getByRole("button", { name: "Submit KM reading" }).click();
+    await driverPage.getByLabel("Required dashboard/odometer image").setInputFiles(image);
+    await driverPage.getByRole("button", { name: "Submit END KM" }).click();
     await expect(driverPage.getByText("KM_READING").nth(1)).toBeVisible();
+    await expect(driverPage.getByText(/Duty state: CLOSED/)).toBeVisible();
 
     await driverPage.getByRole("button", { name: "EMERGENCY", exact: true }).click();
     await expect(driverPage.getByText("EMERGENCY").first()).toBeVisible();
@@ -135,7 +135,7 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     await expect(supervisorPage).toHaveURL(/\/supervisor$/);
     await expect(supervisorPage.getByRole("heading", { name: /Pilot Site · daily completeness/ })).toBeVisible();
     await expect(supervisorPage.getByText(/KM READING/).first()).toBeVisible();
-    await expect(supervisorPage.getByText(/TRIP COMPLETE/).first()).toBeVisible();
+    await expect(supervisorPage.getByText(/Trip 1/).first()).toBeVisible();
     await expect(supervisorPage.getByText(/DIESEL/).first()).toBeVisible();
     await expect(supervisorPage.getByText(/EMERGENCY/).first()).toBeVisible();
 
@@ -147,10 +147,11 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     }
     await supervisorPage.getByRole("button", { name: /Approve selected/ }).click();
     await expect(supervisorPage.getByText(/APPROVED/).first()).toBeVisible();
-    const emergency = supervisorPage.locator("article").filter({ hasText: "EMERGENCY" }).first();
-    if (await emergency.getByRole("button", { name: "Acknowledge" }).count()) await emergency.getByRole("button", { name: "Acknowledge" }).click();
-    await expect(emergency.getByRole("button", { name: "Resolve" })).toBeVisible();
-    await emergency.getByRole("button", { name: "Resolve" }).click();
+    const emergency = supervisorPage.locator(".emergency-alert").filter({ hasText: "Pilot Driver" }).first();
+    const acknowledgeButton = emergency.getByRole("button", { name: "ACKNOWLEDGE" });
+    if (await acknowledgeButton.count()) await acknowledgeButton.click();
+    await expect(emergency.getByRole("button", { name: "RESOLVE" })).toBeVisible();
+    await emergency.getByRole("button", { name: "RESOLVE" }).click();
 
     await ownerPage.getByRole("button", { name: "Operations" }).click();
     await expect(ownerPage.getByRole("heading", { name: "Owner operations" })).toBeVisible();

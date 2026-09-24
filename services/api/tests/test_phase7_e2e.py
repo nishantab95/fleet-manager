@@ -299,6 +299,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             "KM Register",
             "Diesel Register",
             "Exceptions",
+            "Driver Duty",
         ]
         assert workbook["Trip Register"].max_row - 1 == 8
         assert workbook["KM Register"].max_row - 1 == 2

@@ -72,6 +72,11 @@ class KmReadingType(StrEnum):
     END_READING = "END_READING"
 
 
+class DutySessionStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    CLOSED = "CLOSED"
+
+
 class EmergencyCategory(StrEnum):
     BREAKDOWN = "BREAKDOWN"
     ACCIDENT = "ACCIDENT"

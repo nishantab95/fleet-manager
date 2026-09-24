@@ -188,6 +188,7 @@ class AssignmentCreateRequest(BaseModel):
     site_id: UUID
     starts_at: datetime
     ends_at: datetime | None = None
+    regular_duty_minutes: int = Field(default=600, ge=1, le=1440)
 
 
 class AssignmentCloseRequest(BaseModel):
@@ -206,6 +207,7 @@ class AssignmentResponse(BaseModel):
     site_name: str
     starts_at: datetime
     ends_at: datetime | None
+    regular_duty_minutes: int
 
 
 class DriverAssignmentResponse(BaseModel):
@@ -216,6 +218,20 @@ class DriverAssignmentResponse(BaseModel):
     site_id: UUID
     site_name: str
     supervisor_name: str
+    regular_duty_minutes: int
+
+
+class DriverDutyStateResponse(BaseModel):
+    status: Literal["NONE", "ACTIVE", "CLOSED"]
+    session_id: UUID | None = None
+    assignment_id: UUID | None = None
+    tipper_id: UUID | None = None
+    site_id: UUID | None = None
+    started_at: datetime | None = None
+    start_km: Decimal | None = None
+    ended_at: datetime | None = None
+    end_km: Decimal | None = None
+    regular_duty_minutes: int | None = None
 
 
 class DriverDeviceRequest(BaseModel):
@@ -452,8 +468,29 @@ class DashboardResponse(BaseModel):
     unresolved_emergency_count: int
     sites_not_closed_count: int
     complete_tippers_count: int
+    drivers_on_duty: int = 0
+    drivers_past_regular_duty: int = 0
+    closed_duties_count: int = 0
     sites: list[SiteDailyReportResponse]
     exceptions: list[ReportExceptionResponse]
+
+
+class DriverDutyReportResponse(BaseModel):
+    operational_date: date
+    session_id: UUID
+    assignment_id: UUID
+    driver_name: str
+    tipper_registration_number: str
+    site_name: str
+    duty_start: datetime
+    start_km: Decimal
+    regular_duty_minutes: int
+    regular_duty_ends_at: datetime
+    actual_duty_end: datetime | None
+    end_km: Decimal | None
+    actual_duty_span_seconds: float | None
+    overtime_minutes: int
+    status: Literal["ACTIVE", "CLOSED"]
 
 
 class ClosureActionRequest(BaseModel):

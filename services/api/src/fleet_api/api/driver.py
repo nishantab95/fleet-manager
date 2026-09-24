@@ -15,6 +15,7 @@ from fleet_api.api.schemas import (
     DriverAssignmentResponse,
     DriverDeviceRequest,
     DriverDeviceResponse,
+    DriverDutyStateResponse,
     DriverEventRequest,
     DriverEventResponse,
     EvidenceUploadResponse,
@@ -25,12 +26,18 @@ from fleet_api.db.session import get_db
 from fleet_api.domain.driver import (
     create_driver_event,
     get_current_assignment,
+    get_current_duty_state,
     register_device,
     upload_evidence,
 )
 from fleet_api.domain.errors import (
     AssignmentNotEffectiveError,
     DomainError,
+    DutyAlreadyStartedError,
+    DutyAssignmentMismatchError,
+    DutyEventOutsideSessionError,
+    DutyKmValidationError,
+    DutyNotStartedError,
     EvidenceValidationError,
     ObjectStorageUnavailableError,
     RoleViolationError,
@@ -54,6 +61,21 @@ def _fail(exc: DomainError) -> NoReturn:
     elif isinstance(exc, AssignmentNotEffectiveError):
         http_status = 422
         code = "ASSIGNMENT_INVALID"
+    elif isinstance(exc, DutyNotStartedError):
+        http_status = 422
+        code = "DUTY_NOT_STARTED"
+    elif isinstance(exc, DutyAlreadyStartedError):
+        http_status = 409
+        code = "DUTY_ALREADY_STARTED"
+    elif isinstance(exc, DutyAssignmentMismatchError):
+        http_status = 422
+        code = "DUTY_ASSIGNMENT_MISMATCH"
+    elif isinstance(exc, DutyEventOutsideSessionError):
+        http_status = 422
+        code = "DUTY_EVENT_OUTSIDE_SESSION"
+    elif isinstance(exc, DutyKmValidationError):
+        http_status = 422
+        code = "INVALID_END_KM"
     else:
         http_status = 422
         code = "VALIDATION_ERROR"
@@ -82,6 +104,32 @@ def current_assignment(
         site_id=current.site.id,
         site_name=current.site.name,
         supervisor_name=current.supervisor.display_name,
+        regular_duty_minutes=current.assignment.regular_duty_minutes,
+    )
+
+
+@router.get("/duty/current", response_model=DriverDutyStateResponse)
+def current_duty(
+    context: Annotated[AuthContext, Depends(require_driver)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DriverDutyStateResponse:
+    try:
+        state = get_current_duty_state(db, context).session
+    except DomainError as exc:
+        _fail(exc)
+    if state is None:
+        return DriverDutyStateResponse(status="NONE")
+    return DriverDutyStateResponse(
+        status=state.status.value,
+        session_id=state.id,
+        assignment_id=state.assignment_id,
+        tipper_id=state.tipper_id,
+        site_id=state.site_id,
+        started_at=state.started_at,
+        start_km=state.start_km,
+        ended_at=state.ended_at,
+        end_km=state.end_km,
+        regular_duty_minutes=state.configured_regular_duty_minutes,
     )
 
 

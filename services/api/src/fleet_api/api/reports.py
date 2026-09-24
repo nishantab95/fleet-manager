@@ -11,6 +11,7 @@ from openpyxl import Workbook  # type: ignore[import-untyped]
 from openpyxl.cell.cell import MergedCell  # type: ignore[import-untyped]
 from openpyxl.styles import Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import (
@@ -24,6 +25,7 @@ from fleet_api.api.schemas import (
     ClosureHistoryResponse,
     ClosureResponse,
     DashboardResponse,
+    DriverDutyReportResponse,
     ReportEventResponse,
     ReportExceptionResponse,
     ReportHistoryResponse,
@@ -32,9 +34,9 @@ from fleet_api.api.schemas import (
 )
 from fleet_api.auth.service import AuthContext
 from fleet_api.core.config import Settings
-from fleet_api.db.models import Site
+from fleet_api.db.models import Assignment, CompanyMembership, DutySession, Site, Tipper, User
 from fleet_api.db.session import get_db
-from fleet_api.domain.enums import SiteClosureStatus, VerificationStatus
+from fleet_api.domain.enums import DutySessionStatus, SiteClosureStatus, VerificationStatus
 from fleet_api.domain.errors import (
     ClosureBlockedError,
     ConflictError,
@@ -216,7 +218,65 @@ def _site_response(report: SiteDailyReport) -> SiteDailyReportResponse:
     )
 
 
-def _dashboard_response(report: DashboardReport) -> DashboardResponse:
+def _duty_reports(
+    db: Session,
+    context: AuthContext,
+    requested_date: date | None = None,
+) -> list[DriverDutyReportResponse]:
+    service = _service(db, context)
+    day = service.operational_day(requested_date)
+    rows = db.execute(
+        select(DutySession, Assignment, Tipper, Site, User.display_name)
+        .join(Assignment, Assignment.id == DutySession.assignment_id)
+        .join(Tipper, Tipper.id == DutySession.tipper_id)
+        .join(Site, Site.id == DutySession.site_id)
+        .join(CompanyMembership, CompanyMembership.id == DutySession.driver_membership_id)
+        .join(User, User.id == CompanyMembership.user_id)
+        .where(
+            DutySession.company_id == context.company.id,
+            DutySession.operational_date == day.operational_date,
+        )
+        .order_by(DutySession.started_at, DutySession.id)
+    ).all()
+    now = datetime.now(UTC)
+    reports: list[DriverDutyReportResponse] = []
+    for duty, assignment, tipper, site, driver_name in rows:
+        actual_end = duty.ended_at
+        actual_reference = actual_end or now
+        span = max(0.0, (actual_reference - duty.started_at).total_seconds())
+        overtime = duty.final_overtime_minutes
+        if overtime is None:
+            overtime = max(
+                0,
+                int((actual_reference - duty.regular_duty_ends_at).total_seconds() // 60),
+            )
+        reports.append(
+            DriverDutyReportResponse(
+                operational_date=duty.operational_date,
+                session_id=duty.id,
+                assignment_id=assignment.id,
+                driver_name=driver_name,
+                tipper_registration_number=tipper.registration_number,
+                site_name=site.name,
+                duty_start=duty.started_at,
+                start_km=duty.start_km,
+                regular_duty_minutes=duty.configured_regular_duty_minutes,
+                regular_duty_ends_at=duty.regular_duty_ends_at,
+                actual_duty_end=actual_end,
+                end_km=duty.end_km,
+                actual_duty_span_seconds=span,
+                overtime_minutes=overtime,
+                status=duty.status.value,
+            )
+        )
+    return reports
+
+
+def _dashboard_response(
+    report: DashboardReport,
+    duty_reports: list[DriverDutyReportResponse] | None = None,
+) -> DashboardResponse:
+    duty_reports = duty_reports or []
     return DashboardResponse(
         operational_date=report.operational_day.operational_date,
         reporting_timezone=report.operational_day.reporting_timezone,
@@ -231,6 +291,14 @@ def _dashboard_response(report: DashboardReport) -> DashboardResponse:
         unresolved_emergency_count=report.unresolved_emergency_count,
         sites_not_closed_count=report.sites_not_closed_count,
         complete_tippers_count=report.complete_tippers_count,
+        drivers_on_duty=sum(item.status == DutySessionStatus.ACTIVE.value for item in duty_reports),
+        drivers_past_regular_duty=sum(
+            item.status == DutySessionStatus.ACTIVE.value and item.overtime_minutes > 0
+            for item in duty_reports
+        ),
+        closed_duties_count=sum(
+            item.status == DutySessionStatus.CLOSED.value for item in duty_reports
+        ),
         sites=[_site_response(site) for site in report.sites],
         exceptions=[_exception_response(item) for item in report.exceptions],
     )
@@ -258,7 +326,23 @@ def dashboard(
     db: Session = Depends(get_db),
 ) -> DashboardResponse:
     try:
-        return _dashboard_response(_service(db, context).dashboard(operational_date))
+        report = _service(db, context).dashboard(operational_date)
+        return _dashboard_response(
+            report,
+            _duty_reports(db, context, report.operational_day.operational_date),
+        )
+    except DomainError as exc:
+        _fail(exc)
+
+
+@router.get("/duty", response_model=list[DriverDutyReportResponse])
+def duty_report(
+    operational_date: date | None = Query(default=None),
+    context: AuthContext = Depends(require_owner_admin),
+    db: Session = Depends(get_db),
+) -> list[DriverDutyReportResponse]:
+    try:
+        return _duty_reports(db, context, operational_date)
     except DomainError as exc:
         _fail(exc)
 
@@ -403,7 +487,12 @@ def _evidence_formula(base_url: str, event_id: UUID) -> _ExcelFormula:
     return _ExcelFormula(f'=HYPERLINK("{url}","Open Evidence")')
 
 
-def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> bytes:
+def _build_workbook(
+    report: DashboardReport,
+    *,
+    web_public_base_url: str,
+    duty_reports: list[DriverDutyReportResponse] | None = None,
+) -> bytes:
     workbook = Workbook()
     workbook.remove(workbook.active)
     sheets: dict[str, tuple[list[str], list[list[object]]]] = {}
@@ -476,6 +565,7 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
     km_rows: list[list[object]] = []
     diesel_rows: list[list[object]] = []
     exception_rows: list[list[object]] = []
+    duty_rows: list[list[object]] = []
     for site in report.sites:
         for row in site.rows:
             emergency = "UNRESOLVED" if row.unresolved_emergency_count else "CLEAR"
@@ -712,6 +802,44 @@ def _build_workbook(report: DashboardReport, *, web_public_base_url: str) -> byt
         ["Date", "Site", "Tipper", "Exception Type", "Description", "Status"],
         exception_rows,
     )
+    for duty in duty_reports or []:
+        duty_rows.append(
+            [
+                duty.operational_date,
+                duty.driver_name,
+                duty.tipper_registration_number,
+                duty.site_name,
+                _excel_local_datetime(duty.duty_start),
+                duty.start_km,
+                duty.regular_duty_minutes / 60,
+                _excel_local_datetime(duty.regular_duty_ends_at),
+                _excel_local_datetime(duty.actual_duty_end) if duty.actual_duty_end else None,
+                duty.end_km,
+                timedelta(seconds=duty.actual_duty_span_seconds)
+                if duty.actual_duty_span_seconds is not None
+                else None,
+                duty.overtime_minutes,
+                duty.status,
+            ]
+        )
+    sheets["Driver Duty"] = (
+        [
+            "Operational Date",
+            "Driver",
+            "Tipper",
+            "Site",
+            "Duty Start",
+            "START KM",
+            "Regular Duty Hours",
+            "Regular Duty End",
+            "Actual Duty End",
+            "END KM",
+            "Actual Duty Span",
+            "Overtime",
+            "Status",
+        ],
+        duty_rows,
+    )
     dashboard = workbook.create_sheet("Management Dashboard")
     dashboard["A1"] = "Management Dashboard"
     dashboard["A1"].font = Font(bold=True, size=16, color="173C35")
@@ -857,7 +985,12 @@ def daily_excel(
 ) -> Response:
     try:
         report = _service(db, context).dashboard(operational_date)
-        content = _build_workbook(report, web_public_base_url=settings.web_public_base_url)
+        duties = _duty_reports(db, context, report.operational_day.operational_date)
+        content = _build_workbook(
+            report,
+            web_public_base_url=settings.web_public_base_url,
+            duty_reports=duties,
+        )
         filename = f"fleet-report-{report.operational_day.operational_date.isoformat()}.xlsx"
         return Response(
             content=content,

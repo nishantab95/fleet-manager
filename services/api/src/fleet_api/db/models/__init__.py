@@ -6,6 +6,7 @@ from fleet_api.db.models.auth import AuthSession, OtpChallenge
 from fleet_api.db.models.closure import SiteDailyClosure, SiteDailyClosureHistory
 from fleet_api.db.models.company import Company, Site, Tipper, User
 from fleet_api.db.models.device import Device
+from fleet_api.db.models.duty import DutySession
 from fleet_api.db.models.events import (
     DieselEvent,
     EmergencyEvent,
@@ -24,6 +25,7 @@ __all__ = [
     "Company",
     "CompanyMembership",
     "Device",
+    "DutySession",
     "DieselEvent",
     "EmergencyEvent",
     "EventVerification",

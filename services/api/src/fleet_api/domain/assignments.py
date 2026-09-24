@@ -72,10 +72,13 @@ def create_assignment(
     site_id: UUID,
     starts_at: datetime,
     ends_at: datetime | None = None,
+    regular_duty_minutes: int = 600,
 ) -> Assignment:
     _require_company(session, company_id)
     if ends_at is not None and ends_at <= starts_at:
         raise DomainError("ends_at must be greater than starts_at")
+    if regular_duty_minutes <= 0 or regular_duty_minutes > 1440:
+        raise DomainError("regular_duty_minutes must be between 1 and 1440")
     _require_membership(
         session,
         company_id=company_id,
@@ -99,6 +102,7 @@ def create_assignment(
         site_id=site_id,
         starts_at=starts_at,
         ends_at=ends_at,
+        regular_duty_minutes=regular_duty_minutes,
     )
     session.add(assignment)
     try:

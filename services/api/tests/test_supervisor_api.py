@@ -163,6 +163,27 @@ def create_driver_client(
     return client_for(db_session, token, storage=storage)
 
 
+def start_driver_duty(client: TestClient) -> None:
+    client_event_uuid = str(uuid4())
+    uploaded = client.post(
+        "/api/v1/driver/evidence",
+        params={"client_event_uuid": client_event_uuid},
+        files={"file": ("start.jpg", b"\xff\xd8\xffstart", "image/jpeg")},
+    )
+    assert uploaded.status_code == 200
+    started = client.post(
+        "/api/v1/driver/events",
+        json=driver_event_payload(
+            "KM_READING",
+            client_event_uuid=client_event_uuid,
+            reading_type="START_READING",
+            reading_value="100.00",
+            object_reference=uploaded.json()["object_reference"],
+        ),
+    )
+    assert started.status_code == 200, started.text
+
+
 def test_supervisor_only_sees_permitted_site_and_verification_is_auditable(
     db_session: Session,
     tenant_records: dict[str, object],
@@ -171,6 +192,7 @@ def test_supervisor_only_sees_permitted_site_and_verification_is_auditable(
     storage = SupervisorStorage()
     driver_client = create_driver_client(db_session, tenant_records, storage)
     try:
+        start_driver_duty(driver_client)
         created = driver_client.post(
             "/api/v1/driver/events",
             json=driver_event_payload("TRIP_COMPLETE"),
@@ -237,6 +259,7 @@ def test_supervisor_batch_preserves_each_event_and_driver_is_denied(
     driver_client = create_driver_client(db_session, tenant_records, storage)
     event_ids: list[str] = []
     try:
+        start_driver_duty(driver_client)
         for _ in range(2):
             response = driver_client.post(
                 "/api/v1/driver/events",
@@ -531,7 +554,7 @@ def test_colorful_jpeg_bytes_survive_upload_storage_and_authorized_response(
         supervisor_client.close()
 
 
-def test_completeness_surfaces_odometer_regression(
+def test_driver_rejects_odometer_regression_at_end_duty(
     db_session: Session,
     tenant_records: dict[str, object],
 ) -> None:
@@ -557,7 +580,11 @@ def test_completeness_surfaces_odometer_regression(
                     object_reference=uploaded.json()["object_reference"],
                 ),
             )
-            assert response.status_code == 200
+            if reading_type == "START_READING":
+                assert response.status_code == 200
+            else:
+                assert response.status_code == 422
+                assert response.json()["detail"]["code"] == "INVALID_END_KM"
     finally:
         driver_client.close()
 
@@ -578,8 +605,8 @@ def test_completeness_surfaces_odometer_regression(
             params={"review_date": datetime.now(UTC).date().isoformat()},
         )
         assert completeness.status_code == 200
-        assert completeness.json()[0]["odometer_regression"] is True
+        assert completeness.json()[0]["odometer_regression"] is False
         assert completeness.json()[0]["start_reading_value"] == "100.00"
-        assert completeness.json()[0]["end_reading_value"] == "90.00"
+        assert completeness.json()[0]["end_reading_value"] is None
     finally:
         supervisor_client.close()

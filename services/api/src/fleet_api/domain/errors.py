@@ -82,3 +82,27 @@ class ClosureBlockedError(DomainError):
     def __init__(self, message: str, blockers: list[dict[str, str]]) -> None:
         super().__init__(message)
         self.blockers = blockers
+
+
+class DutyNotStartedError(DomainError):
+    pass
+
+
+class DutyAlreadyStartedError(DomainError):
+    pass
+
+
+class DutySessionClosedError(DomainError):
+    pass
+
+
+class DutyAssignmentMismatchError(DomainError):
+    pass
+
+
+class DutyEventOutsideSessionError(DomainError):
+    pass
+
+
+class DutyKmValidationError(DomainError):
+    pass

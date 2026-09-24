@@ -94,7 +94,7 @@ describe("Supervisor workspace", () => {
     const [blob] = createObjectUrlMock.mock.calls[0] as Blob[];
     expect(blob.type).toBe("image/jpeg");
     expect(blob.size).toBe(responseBytes.byteLength);
-    expect(blob).toBeInstanceOf(Blob);
+    expect(Object.prototype.toString.call(blob)).toBe("[object Blob]");
   });
 
   it("keeps tipper groups separate and labels operational subsections explicitly", async () => {

@@ -480,6 +480,7 @@ class AdminService:
         site_id: UUID,
         starts_at: datetime,
         ends_at: datetime | None,
+        regular_duty_minutes: int = 600,
     ) -> Assignment:
         driver = self._membership(driver_membership_id)
         supervisor = self._membership(supervisor_membership_id)
@@ -498,6 +499,7 @@ class AdminService:
             site_id=site_id,
             starts_at=starts_at,
             ends_at=ends_at,
+            regular_duty_minutes=regular_duty_minutes,
         )
         self._audit(
             action="ADMIN_ASSIGNMENT_CREATED",
@@ -510,6 +512,7 @@ class AdminService:
                 "site_id": str(site_id),
                 "starts_at": starts_at.isoformat(),
                 "ends_at": ends_at.isoformat() if ends_at else None,
+                "regular_duty_minutes": regular_duty_minutes,
             },
         )
         return assignment

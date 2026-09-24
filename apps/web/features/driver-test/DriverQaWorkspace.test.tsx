@@ -1,9 +1,25 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DriverDutyState } from "../../lib/types";
 
-const { requestMock, authMock } = vi.hoisted(() => {
+const { requestMock, authMock, dutyState } = vi.hoisted(() => {
+  const dutyState: { current: DriverDutyState } = {
+    current: {
+      status: "NONE",
+      session_id: null,
+      assignment_id: null,
+      tipper_id: null,
+      site_id: null,
+      started_at: null,
+      start_km: null,
+      ended_at: null,
+      end_km: null,
+      regular_duty_minutes: null,
+    },
+  };
   const requestMock = vi.fn(async (path: string, options?: RequestInit) => {
-    if (path === "/api/v1/driver/assignment/current") return { assignment_id: "assignment-1", tipper_id: "tipper-1", tipper_registration_number: "PILOT-12", tipper_short_name: "Tipper 12", site_id: "site-1", site_name: "Pilot Site", supervisor_name: "Pilot Supervisor" };
+    if (path === "/api/v1/driver/assignment/current") return { assignment_id: "assignment-1", tipper_id: "tipper-1", tipper_registration_number: "PILOT-12", tipper_short_name: "Tipper 12", site_id: "site-1", site_name: "Pilot Site", supervisor_name: "Pilot Supervisor", regular_duty_minutes: 600 };
+    if (path === "/api/v1/driver/duty/current") return dutyState.current;
     if (path === "/api/v1/driver/device") return { device_id: "device-1", installation_identifier: "qa-web-test", platform: "WEB" };
     if (path.startsWith("/api/v1/driver/events")) {
       const body = JSON.parse(String(options?.body)) as { client_event_uuid: string; event_type: string };
@@ -12,28 +28,44 @@ const { requestMock, authMock } = vi.hoisted(() => {
     return {};
   });
   const authMock = { session: { access_token: "access-token" }, request: requestMock, refresh: vi.fn(), logout: vi.fn() };
-  return { requestMock, authMock };
+  return { requestMock, authMock, dutyState };
 });
 
 vi.mock("../auth/AuthProvider", () => ({ useAuth: () => authMock }));
 
 import { DriverQaWorkspace } from "./DriverQaWorkspace";
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => {
+  cleanup();
+  dutyState.current = {
+    status: "NONE",
+    session_id: null,
+    assignment_id: null,
+    tipper_id: null,
+    site_id: null,
+    started_at: null,
+    start_km: null,
+    ended_at: null,
+    end_km: null,
+    regular_duty_minutes: null,
+  };
+  vi.clearAllMocks();
+});
 
 describe("Driver QA workspace", () => {
-  it("loads the real assignment, registers WEB, and exposes exactly four primary actions without totals", async () => {
+  it("loads real assignment state and exposes only START DUTY plus emergency before duty", async () => {
     render(<DriverQaWorkspace />);
     expect(await screen.findByText(/Pilot Site/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "TRIP COMPLETE" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "KM READING" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /DIESEL ISSUED/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "START DUTY" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "EMERGENCY" })).toBeInTheDocument();
-    expect(screen.queryByText(/total km|fuel consumed|km\/l/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "TRIP COMPLETE" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /DIESEL ISSUED/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/overtime/i)).toBeInTheDocument();
     await waitFor(() => expect(requestMock).toHaveBeenCalledWith("/api/v1/driver/device", expect.objectContaining({ method: "POST", body: expect.stringContaining('"platform":"WEB"') })));
   });
 
-  it("creates separate UUIDs for separate trips and reports server acknowledgement", async () => {
+  it("resumes an active duty session and creates separate UUIDs for separate trips", async () => {
+    dutyState.current = { ...dutyState.current, status: "ACTIVE", session_id: "session-1", assignment_id: "assignment-1", started_at: "2026-09-24T08:00:00Z", start_km: 100, regular_duty_minutes: 600 };
     render(<DriverQaWorkspace />);
     await screen.findByText(/Pilot Site/);
     const tripButton = screen.getByRole("button", { name: "TRIP COMPLETE" });
@@ -47,29 +79,25 @@ describe("Driver QA workspace", () => {
     expect(screen.getAllByText(/API: accepted/)).toHaveLength(2);
   });
 
-  it("requires KM evidence, validates diesel, and sends one-tap emergencies", async () => {
+  it("requires KM evidence, makes diesel evidence optional, and keeps one-tap emergencies", async () => {
     render(<DriverQaWorkspace />);
     await screen.findByText(/Pilot Site/);
-    fireEvent.click(screen.getByRole("button", { name: "KM READING" }));
-    fireEvent.change(screen.getByLabelText("KM value"), { target: { value: "-1" } });
-    expect(screen.getByLabelText("KM value")).toBeInvalid();
-    fireEvent.change(screen.getByLabelText("KM value"), { target: { value: "100" } });
-    expect(screen.getByLabelText("Local test image")).toBeRequired();
-
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: /DIESEL ISSUED/ }));
-    fireEvent.change(screen.getByLabelText("Litres"), { target: { value: "0" } });
-    expect(screen.getByLabelText("Litres")).toBeInvalid();
-    fireEvent.change(screen.getByLabelText("Litres"), { target: { value: "30" } });
-    expect(screen.getByLabelText("Local test image")).toBeRequired();
-
+    fireEvent.click(screen.getByRole("button", { name: "START DUTY" }));
+    expect(screen.getByRole("heading", { name: "START KM" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Required dashboard/odometer image")).toBeRequired();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "EMERGENCY" }));
     await waitFor(() => expect(requestMock.mock.calls.some(([path, options]) => path === "/api/v1/driver/events" && String(options?.body).includes('"event_type":"EMERGENCY"'))).toBe(true));
-    expect(screen.queryByLabelText("Category")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Description (optional)")).not.toBeInTheDocument();
-    const emergencyCall = requestMock.mock.calls.find(([path, options]) => path === "/api/v1/driver/events" && String(options?.body).includes('"event_type":"EMERGENCY"'));
-    expect(String(emergencyCall?.[1]?.body)).not.toContain('"category"');
-    expect(String(emergencyCall?.[1]?.body)).not.toContain('"description"');
+
+    cleanup();
+    dutyState.current = { ...dutyState.current, status: "ACTIVE", session_id: "session-1", assignment_id: "assignment-1", regular_duty_minutes: 600 };
+    render(<DriverQaWorkspace />);
+    await screen.findByText(/Pilot Site/);
+    fireEvent.click(screen.getByRole("button", { name: /DIESEL ISSUED/ }));
+    expect(screen.getByLabelText("Optional fuel image")).not.toBeRequired();
+    fireEvent.change(screen.getByLabelText("Litres"), { target: { value: "0" } });
+    expect(screen.getByLabelText("Litres")).toBeInvalid();
+    fireEvent.change(screen.getByLabelText("Litres"), { target: { value: "30" } });
+    expect(screen.getByLabelText("Optional fuel image")).not.toBeRequired();
   });
 });

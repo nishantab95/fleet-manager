@@ -14,6 +14,7 @@ from fleet_api.db.models import (
     AuditLog,
     Company,
     DieselEvent,
+    DutySession,
     EmergencyEvent,
     EventVerification,
     EvidenceObject,
@@ -82,6 +83,7 @@ def reset_pilot_operational_data(
             # still removed so the pilot can be repeated safely.
             pass
 
+    session.execute(delete(DutySession).where(DutySession.company_id == company.id))
     if event_ids:
         session.execute(delete(EventVerification).where(EventVerification.company_id == company.id))
         session.execute(delete(TripEvent).where(TripEvent.event_id.in_(event_ids)))

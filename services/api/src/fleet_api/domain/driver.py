@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import PurePosixPath
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,7 @@ from fleet_api.db.models import (
     Assignment,
     CompanyMembership,
     Device,
+    DutySession,
     EmergencyEvent,
     EvidenceObject,
     OperationalEvent,
@@ -27,6 +29,7 @@ from fleet_api.db.models.common import utc_now
 from fleet_api.domain.enums import (
     DevicePlatform,
     DeviceStatus,
+    DutySessionStatus,
     EmergencyCategory,
     EmergencyStatus,
     KmReadingType,
@@ -38,6 +41,11 @@ from fleet_api.domain.enums import (
 from fleet_api.domain.errors import (
     AssignmentNotEffectiveError,
     DomainError,
+    DutyAlreadyStartedError,
+    DutyAssignmentMismatchError,
+    DutyEventOutsideSessionError,
+    DutyKmValidationError,
+    DutyNotStartedError,
     EvidenceValidationError,
     ObjectStorageUnavailableError,
     RoleViolationError,
@@ -65,6 +73,11 @@ class DriverAssignment:
 class DriverEventResult:
     event: OperationalEvent
     duplicate: bool
+
+
+@dataclass(frozen=True)
+class DriverDutyState:
+    session: DutySession | None
 
 
 def _require_driver(context: AuthContext) -> None:
@@ -107,6 +120,71 @@ def _assignment_query(
 def get_current_assignment(session: Session, context: AuthContext) -> DriverAssignment | None:
     _require_driver(context)
     return _assignment_query(session, context=context, at=utc_now())
+
+
+def _active_duty_session(
+    session: Session,
+    *,
+    context: AuthContext,
+    lock: bool = False,
+) -> DutySession | None:
+    statement = select(DutySession).where(
+        DutySession.company_id == context.company.id,
+        DutySession.driver_membership_id == context.membership.id,
+        DutySession.status == DutySessionStatus.ACTIVE,
+    ).order_by(DutySession.started_at.desc(), DutySession.id.desc())
+    if lock:
+        statement = statement.with_for_update()
+    return session.scalars(statement).first()
+
+
+def get_current_duty_state(session: Session, context: AuthContext) -> DriverDutyState:
+    _require_driver(context)
+    active = _active_duty_session(session, context=context)
+    if active is not None:
+        return DriverDutyState(active)
+    assignment = get_current_assignment(session, context)
+    if assignment is None:
+        return DriverDutyState(None)
+    closed = session.scalar(
+        select(DutySession)
+        .where(
+            DutySession.company_id == context.company.id,
+            DutySession.driver_membership_id == context.membership.id,
+            DutySession.assignment_id == assignment.assignment.id,
+            DutySession.status == DutySessionStatus.CLOSED,
+        )
+        .order_by(DutySession.ended_at.desc(), DutySession.id.desc())
+    )
+    return DriverDutyState(closed)
+
+
+def _operational_date(context: AuthContext, timestamp: datetime) -> date:
+    try:
+        local = timestamp.astimezone(ZoneInfo(context.company.reporting_timezone))
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise DomainError("company reporting timezone is invalid") from exc
+    return (local - timedelta(minutes=context.company.operational_day_start_minutes)).date()
+
+
+def _require_active_duty(
+    session: Session,
+    *,
+    context: AuthContext,
+    assignment: Assignment,
+    device_created_at: datetime,
+) -> DutySession:
+    active = _active_duty_session(session, context=context, lock=True)
+    if active is None:
+        raise DutyNotStartedError("an active duty session is required")
+    if active.assignment_id != assignment.id:
+        raise DutyAssignmentMismatchError(
+            "the active duty session belongs to another assignment; "
+            "end it before starting this assignment"
+        )
+    if device_created_at < active.started_at:
+        raise DutyEventOutsideSessionError("event timestamp is before the active duty session")
+    return active
 
 
 def _assignment_at_event(
@@ -282,8 +360,33 @@ def create_driver_event(
         context=context,
         client_event_uuid=client_event_uuid,
         object_reference=object_reference,
-        required=event_type in {OperationalEventType.KM_READING, OperationalEventType.DIESEL},
+        required=event_type == OperationalEventType.KM_READING,
     )
+    active_duty: DutySession | None = None
+    if event_type in {OperationalEventType.TRIP_COMPLETE, OperationalEventType.DIESEL}:
+        active_duty = _require_active_duty(
+            session,
+            context=context,
+            assignment=assignment,
+            device_created_at=device_created_at,
+        )
+    elif event_type == OperationalEventType.KM_READING:
+        if reading_type is None or reading_value is None:
+            raise DomainError("reading_type and reading_value are required")
+        if reading_type == KmReadingType.START_READING:
+            if _active_duty_session(session, context=context, lock=True) is not None:
+                raise DutyAlreadyStartedError("an active duty session already exists")
+        elif reading_type == KmReadingType.END_READING:
+            active_duty = _require_active_duty(
+                session,
+                context=context,
+                assignment=assignment,
+                device_created_at=device_created_at,
+            )
+            if reading_value < active_duty.start_km:
+                raise DutyKmValidationError(
+                    "END_READING must be greater than or equal to START_READING"
+                )
     if event_type == OperationalEventType.TRIP_COMPLETE:
         create_trip_event(
             session,
@@ -294,9 +397,8 @@ def create_driver_event(
             device_id=device.id,
         )
     elif event_type == OperationalEventType.KM_READING:
-        if reading_type is None or reading_value is None:
-            raise DomainError("reading_type and reading_value are required")
-        create_km_reading(
+        assert reading_type is not None and reading_value is not None
+        km_reading = create_km_reading(
             session,
             company_id=context.company.id,
             assignment_id=assignment.id,
@@ -307,6 +409,39 @@ def create_driver_event(
             object_reference=object_reference,
             device_id=device.id,
         )
+        if reading_type == KmReadingType.START_READING:
+            regular_minutes = assignment.regular_duty_minutes
+            session.add(
+                DutySession(
+                    company_id=context.company.id,
+                    assignment_id=assignment.id,
+                    driver_membership_id=context.membership.id,
+                    tipper_id=assignment.tipper_id,
+                    site_id=assignment.site_id,
+                    operational_date=_operational_date(context, device_created_at),
+                    start_event_id=km_reading.event_id,
+                    start_km=reading_value,
+                    started_at=device_created_at,
+                    configured_regular_duty_minutes=regular_minutes,
+                    regular_duty_ends_at=device_created_at + timedelta(minutes=regular_minutes),
+                    status=DutySessionStatus.ACTIVE,
+                )
+            )
+            try:
+                with session.begin_nested():
+                    session.flush()
+            except IntegrityError as exc:
+                raise DutyAlreadyStartedError("an active duty session already exists") from exc
+        elif active_duty is not None and reading_type == KmReadingType.END_READING:
+            active_duty.end_event_id = km_reading.event_id
+            active_duty.end_km = reading_value
+            active_duty.ended_at = device_created_at
+            active_duty.status = DutySessionStatus.CLOSED
+            active_duty.final_overtime_minutes = max(
+                0,
+                int((device_created_at - active_duty.regular_duty_ends_at).total_seconds() // 60),
+            )
+            session.flush()
     elif event_type == OperationalEventType.DIESEL:
         if litres is None:
             raise DomainError("litres are required")

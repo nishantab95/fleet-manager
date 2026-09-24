@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -28,6 +29,9 @@ class Assignment(UpdatedTimestampModel):
     site_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    regular_duty_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=600, server_default="600"
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -55,6 +59,7 @@ class Assignment(UpdatedTimestampModel):
             ondelete="RESTRICT",
         ),
         CheckConstraint("ends_at IS NULL OR ends_at > starts_at", name="end_after_start"),
+        CheckConstraint("regular_duty_minutes > 0", name="ck_assignments_regular_duty_positive"),
         UniqueConstraint("company_id", "id", name="uq_assignments_company_id"),
         Index("ix_assignments_company_active", "company_id", "starts_at", "ends_at"),
     )

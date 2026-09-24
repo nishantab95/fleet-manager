@@ -155,14 +155,6 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
             reading_type="START_READING",
             reading_value="10000.00",
         )
-        end = create_event(
-            driver,
-            storage,
-            "KM_READING",
-            DAY_START + timedelta(hours=22),
-            reading_type="END_READING",
-            reading_value="10120.00",
-        )
         for index in range(8):
             event_ids["approved_trips"].append(
                 create_event(
@@ -198,6 +190,14 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
             DAY_START + timedelta(hours=17),
             category="BREAKDOWN",
             description="Open hydraulic warning",
+        )
+        end = create_event(
+            driver,
+            storage,
+            "KM_READING",
+            DAY_START + timedelta(hours=22),
+            reading_type="END_READING",
+            reading_value="10120.00",
         )
     finally:
         driver.close()
@@ -288,7 +288,9 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
             "KM Register",
             "Diesel Register",
             "Exceptions",
+            "Driver Duty",
         ]
+        assert workbook["Driver Duty"]["A1"].value == "Operational Date"
         assert workbook["Daily Summary"]["B2"].value == "'=Unsafe Site"
         assert workbook["Daily Summary"]["J2"].value == 120
         assert workbook["Management Dashboard"]["A8"].value == "Site"
@@ -377,20 +379,31 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
             reading_type="START_READING",
             reading_value="100.00",
         )
-        end = create_event(
-            driver,
-            storage,
-            "KM_READING",
-            DAY_START + timedelta(hours=2),
-            reading_type="END_READING",
-            reading_value="90.00",
+        invalid_end_uuid = str(uuid4())
+        invalid_upload = driver.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": invalid_end_uuid},
+            files={"file": ("evidence.jpg", b"\xff\xd8\xffphase6-evidence", "image/jpeg")},
         )
+        assert invalid_upload.status_code == 200
+        invalid_end = driver.post(
+            "/api/v1/driver/events",
+            json=driver_event_payload(
+                "KM_READING",
+                client_event_uuid=invalid_end_uuid,
+                created_at=DAY_START + timedelta(hours=2),
+                reading_type="END_READING",
+                reading_value="90.00",
+                object_reference=invalid_upload.json()["object_reference"],
+            ),
+        )
+        assert invalid_end.status_code == 422
+        assert invalid_end.json()["detail"]["code"] == "INVALID_END_KM"
     finally:
         driver.close()
     supervisor = supervisor_client(db_session, tenant_records)
     try:
         verify(supervisor, start)
-        verify(supervisor, end)
     finally:
         supervisor.close()
     owner = owner_client(db_session, tenant_records)
@@ -402,7 +415,7 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
         assert report.status_code == 200
         data = report.json()
         assert data["total_km"] is None
-        assert "END_BELOW_START" in {item["code"] for item in data["tippers"][0]["exceptions"]}
+        assert "MISSING_END_READING" in {item["code"] for item in data["tippers"][0]["exceptions"]}
         close = owner.post(
             f"/api/v1/reports/sites/{site.id}/closure/close",
             params={"operational_date": REPORT_DATE.isoformat()},
@@ -411,7 +424,8 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
         assert close.status_code == 409
         assert close.json()["detail"]["code"] == "CLOSURE_BLOCKED"
         assert any(
-            blocker["code"] == "END_BELOW_START" for blocker in close.json()["detail"]["blockers"]
+            blocker["code"] == "MISSING_END_READING"
+            for blocker in close.json()["detail"]["blockers"]
         )
     finally:
         owner.close()
@@ -434,14 +448,6 @@ def test_phase6_smoke_fixture_approves_pending_work_then_closes_day(
             reading_type="START_READING",
             reading_value="10000.00",
         )
-        end = create_event(
-            driver,
-            storage,
-            "KM_READING",
-            DAY_START + timedelta(hours=20),
-            reading_type="END_READING",
-            reading_value="10120.00",
-        )
         trips = [
             create_event(driver, storage, "TRIP_COMPLETE", DAY_START + timedelta(hours=2 + index))
             for index in range(9)
@@ -452,6 +458,14 @@ def test_phase6_smoke_fixture_approves_pending_work_then_closes_day(
             "DIESEL",
             DAY_START + timedelta(hours=19),
             litres="30.000",
+        )
+        end = create_event(
+            driver,
+            storage,
+            "KM_READING",
+            DAY_START + timedelta(hours=20),
+            reading_type="END_READING",
+            reading_value="10120.00",
         )
     finally:
         driver.close()
@@ -546,8 +560,32 @@ def test_timezone_boundary_and_assignment_transfer_are_historical_and_not_double
     storage = SupervisorStorage()
     driver = create_driver_client(db_session, tenant_records, storage)
     try:
+        create_event(
+            driver,
+            storage,
+            "KM_READING",
+            datetime(2025, 1, 15, 0, tzinfo=UTC),
+            reading_type="START_READING",
+            reading_value="100.00",
+        )
         first_event = create_event(
             driver, storage, "TRIP_COMPLETE", datetime(2025, 1, 15, 0, 45, tzinfo=UTC)
+        )
+        create_event(
+            driver,
+            storage,
+            "KM_READING",
+            datetime(2025, 1, 15, 4, tzinfo=UTC),
+            reading_type="END_READING",
+            reading_value="105.00",
+        )
+        create_event(
+            driver,
+            storage,
+            "KM_READING",
+            datetime(2025, 1, 15, 5, 15, tzinfo=UTC),
+            reading_type="START_READING",
+            reading_value="200.00",
         )
         second_event = create_event(
             driver, storage, "TRIP_COMPLETE", datetime(2025, 1, 15, 5, 30, tzinfo=UTC)

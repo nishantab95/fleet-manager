@@ -17,6 +17,7 @@ from fleet_api.db.models import (
     Assignment,
     Company,
     CompanyMembership,
+    DutySession,
     EmergencyEvent,
     OperationalEvent,
     Site,
@@ -148,6 +149,30 @@ def event_payload(
     }
 
 
+def start_duty(client: TestClient, *, installation_identifier: str = "android-test-device") -> None:
+    client_event_uuid = str(uuid4())
+    uploaded = client.post(
+        "/api/v1/driver/evidence",
+        params={"client_event_uuid": client_event_uuid},
+        files={"file": ("start.jpg", b"\xff\xd8\xffstart", "image/jpeg")},
+    )
+    assert uploaded.status_code == 200
+    started = client.post(
+        "/api/v1/driver/events",
+        json={
+            "client_event_uuid": client_event_uuid,
+            "event_type": "KM_READING",
+            "device_created_at": datetime.now(UTC).isoformat(),
+            "installation_identifier": installation_identifier,
+            "platform": "ANDROID",
+            "reading_type": "START_READING",
+            "reading_value": "100",
+            "object_reference": uploaded.json()["object_reference"],
+        },
+    )
+    assert started.status_code == 200
+
+
 def test_driver_assignment_role_boundary_and_idempotent_event(
     db_session: Session,
     tenant_records: dict[str, object],
@@ -156,7 +181,7 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
     driver = user_by_name(db_session, "Driver A")
     driver_membership = value(tenant_records, "driver_a", CompanyMembership)
     driver_token = session_for_user(db_session, driver, driver_membership)
-    client = driver_app(db_session, driver_token)
+    client = driver_app(db_session, driver_token, storage=InMemoryStorage())
     try:
         current = client.get("/api/v1/driver/assignment/current")
         assert current.status_code == 200
@@ -164,6 +189,7 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
         assert current.json()["site_name"] == "Alpha Site"
 
         event_id = str(uuid4())
+        start_duty(client)
         accepted = client.post("/api/v1/driver/events", json=event_payload(event_id))
         assert accepted.status_code == 200
         assert accepted.json()["status"] == "accepted"
@@ -221,9 +247,10 @@ def test_driver_event_timestamp_and_cross_driver_uuid_are_rejected(
         driver_a,
         value(tenant_records, "driver_a", CompanyMembership),
     )
-    client_a = driver_app(db_session, driver_a_token)
+    client_a = driver_app(db_session, driver_a_token, storage=InMemoryStorage())
     event_id = str(uuid4())
     try:
+        start_duty(client_a)
         assert (
             client_a.post("/api/v1/driver/events", json=event_payload(event_id)).status_code == 200
         )
@@ -315,6 +342,7 @@ def test_driver_device_platform_is_restricted_to_supported_values(
             driver,
             value(tenant_records, "driver_a", CompanyMembership),
         ),
+        storage=InMemoryStorage(),
     )
     try:
         invalid = client.post(
@@ -348,6 +376,7 @@ def test_driver_qa_registers_web_device_and_submits_real_event(
         assert device.status_code == 200
         assert device.json()["platform"] == "WEB"
 
+        start_duty(client, installation_identifier="qa-web-installation")
         event = client.post(
             "/api/v1/driver/events",
             json=event_payload(
@@ -401,5 +430,120 @@ def test_one_tap_emergency_needs_no_category_or_evidence_and_deduplicates_rapid_
         assert emergency.category is None
         assert emergency.description is None
         assert len(db_session.scalars(select(EmergencyEvent)).all()) == 1
+    finally:
+        client.close()
+
+
+def test_duty_session_gates_work_and_calculates_overtime(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(hours=11)
+    assignment = add_assignment(
+        db_session,
+        tenant_records,
+        starts_at=started_at - timedelta(hours=1),
+    )
+    driver = user_by_name(db_session, "Driver A")
+    client = driver_app(
+        db_session,
+        session_for_user(db_session, driver, value(tenant_records, "driver_a", CompanyMembership)),
+        storage=InMemoryStorage(),
+    )
+    try:
+        blocked_trip = client.post("/api/v1/driver/events", json=event_payload(str(uuid4())))
+        assert blocked_trip.status_code == 422
+        assert blocked_trip.json()["detail"]["code"] == "DUTY_NOT_STARTED"
+        blocked_diesel = client.post(
+            "/api/v1/driver/events",
+            json={**event_payload(str(uuid4())), "event_type": "DIESEL", "litres": "20"},
+        )
+        assert blocked_diesel.status_code == 422
+        assert blocked_diesel.json()["detail"]["code"] == "DUTY_NOT_STARTED"
+
+        start_uuid = str(uuid4())
+        start_upload = client.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": start_uuid},
+            files={"file": ("start.jpg", b"\xff\xd8\xffstart", "image/jpeg")},
+        )
+        assert start_upload.status_code == 200
+        started = client.post(
+            "/api/v1/driver/events",
+            json={
+                "client_event_uuid": start_uuid,
+                "event_type": "KM_READING",
+                "device_created_at": started_at.isoformat(),
+                "installation_identifier": "duty-test-device",
+                "platform": "ANDROID",
+                "reading_type": "START_READING",
+                "reading_value": "100",
+                "object_reference": start_upload.json()["object_reference"],
+            },
+        )
+        assert started.status_code == 200
+        state = client.get("/api/v1/driver/duty/current")
+        assert state.status_code == 200
+        assert state.json()["status"] == "ACTIVE"
+        assert "overtime" not in state.text.lower()
+
+        accepted_diesel = client.post(
+            "/api/v1/driver/events",
+            json={**event_payload(str(uuid4())), "event_type": "DIESEL", "litres": "20"},
+        )
+        assert accepted_diesel.status_code == 200
+
+        duplicate_start_uuid = str(uuid4())
+        duplicate_upload = client.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": duplicate_start_uuid},
+            files={"file": ("start.jpg", b"\xff\xd8\xffstart", "image/jpeg")},
+        )
+        assert duplicate_upload.status_code == 200
+        duplicate_start = client.post(
+            "/api/v1/driver/events",
+            json={
+                "client_event_uuid": duplicate_start_uuid,
+                "event_type": "KM_READING",
+                "device_created_at": (started_at + timedelta(minutes=1)).isoformat(),
+                "installation_identifier": "duty-test-device",
+                "platform": "ANDROID",
+                "reading_type": "START_READING",
+                "reading_value": "100",
+                "object_reference": duplicate_upload.json()["object_reference"],
+            },
+        )
+        assert duplicate_start.status_code == 409
+        assert duplicate_start.json()["detail"]["code"] == "DUTY_ALREADY_STARTED"
+
+        end_uuid = str(uuid4())
+        end_upload = client.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": end_uuid},
+            files={"file": ("end.jpg", b"\xff\xd8\xffend", "image/jpeg")},
+        )
+        assert end_upload.status_code == 200
+        ended_at = started_at + timedelta(hours=10, minutes=20)
+        ended = client.post(
+            "/api/v1/driver/events",
+            json={
+                "client_event_uuid": end_uuid,
+                "event_type": "KM_READING",
+                "device_created_at": ended_at.isoformat(),
+                "installation_identifier": "duty-test-device",
+                "platform": "ANDROID",
+                "reading_type": "END_READING",
+                "reading_value": "120",
+                "object_reference": end_upload.json()["object_reference"],
+            },
+        )
+        assert ended.status_code == 200
+        session = db_session.scalar(
+            select(DutySession).where(DutySession.assignment_id == assignment.id)
+        )
+        assert session is not None
+        assert session.status.value == "CLOSED"
+        assert session.final_overtime_minutes == 20
+        assert client.get("/api/v1/driver/duty/current").json()["status"] == "CLOSED"
     finally:
         client.close()
