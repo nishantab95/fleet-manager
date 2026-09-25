@@ -4,21 +4,6 @@ setlocal EnableExtensions
 set "REPO_ROOT=%~dp0"
 if "%REPO_ROOT:~-1%"=="\" set "REPO_ROOT=%REPO_ROOT:~0,-1%"
 
-set "UV_EXE="
-for /f "delims=" %%I in ('where uv 2^>nul') do if not defined UV_EXE set "UV_EXE=%%I"
-if not defined UV_EXE if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.local\bin\uv.exe"
-if not defined UV_EXE if exist "%LOCALAPPDATA%\uv\uv.exe" set "UV_EXE=%LOCALAPPDATA%\uv\uv.exe"
-if not defined UV_EXE if exist "%USERPROFILE%\.cargo\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.cargo\bin\uv.exe"
-if not defined UV_EXE if exist "%USERPROFILE%\scoop\shims\uv.exe" set "UV_EXE=%USERPROFILE%\scoop\shims\uv.exe"
-
-if not defined UV_EXE (
-    echo.
-    echo Fleet Manager could not find uv.exe.
-    echo Install uv for your Windows user, then double-click this file again.
-    pause
-    exit /b 1
-)
-
 pushd "%REPO_ROOT%" >nul 2>&1
 if errorlevel 1 (
     echo.
@@ -28,8 +13,27 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Preparing the trusted Python 3.12 environment...
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\ensure-trusted-python.ps1"
+if errorlevel 1 (
+    echo.
+    echo Fleet Manager could not prepare its trusted Python environment.
+    popd
+    pause
+    endlocal & exit /b 1
+)
+
+set "PYTHON_EXE=%REPO_ROOT%\services\api\.venv\Scripts\python.exe"
+if not exist "%PYTHON_EXE%" (
+    echo.
+    echo Fleet Manager could not find its trusted project Python executable.
+    popd
+    pause
+    endlocal & exit /b 1
+)
+
 echo Starting Fleet Manager...
-"%UV_EXE%" run --project "%REPO_ROOT%\services\api" "%REPO_ROOT%\launch.py"
+"%PYTHON_EXE%" "%REPO_ROOT%\launch.py"
 set "FLEET_EXIT_CODE=%ERRORLEVEL%"
 popd
 

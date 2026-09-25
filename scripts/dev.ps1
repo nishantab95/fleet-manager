@@ -6,7 +6,6 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
-$cacheDir = Join-Path $repoRoot ".uv-cache"
 $apiProject = Join-Path $repoRoot "services\api"
 
 if (-not $SkipInfrastructure) {
@@ -16,9 +15,14 @@ if (-not $SkipInfrastructure) {
     docker compose up -d postgres minio
 }
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    throw "uv is required to run the API."
+$ensurePython = Join-Path $PSScriptRoot "ensure-trusted-python.ps1"
+& $ensurePython
+if ($LASTEXITCODE -ne 0) {
+    throw "Trusted Python environment preparation failed (exit $LASTEXITCODE)."
 }
 
-uv --cache-dir $cacheDir run --project $apiProject uvicorn fleet_api.main:app --reload --host 0.0.0.0 --port 8000
-
+$projectPython = Join-Path $apiProject ".venv\Scripts\python.exe"
+& $projectPython -m uvicorn fleet_api.main:app --reload --host 0.0.0.0 --port 8000
+if ($LASTEXITCODE -ne 0) {
+    throw "API development server failed (exit $LASTEXITCODE)."
+}

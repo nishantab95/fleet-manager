@@ -190,7 +190,7 @@ def test_fresh_start_reuses_existing_reset_script(
     assert calls == [("reset-pilot.ps1", ("-ConfirmPilotReset",))]
 
 
-def test_alembic_runs_from_services_api_directory(tmp_path: Path) -> None:
+def test_alembic_uses_the_trusted_project_python(tmp_path: Path) -> None:
     paths = launch.LauncherPaths.from_root(tmp_path)
     calls: list[dict[str, object]] = []
 
@@ -199,16 +199,15 @@ def test_alembic_runs_from_services_api_directory(tmp_path: Path) -> None:
         return launch.subprocess.CompletedProcess(args, 0, "", "")
 
     launcher = launch.RoleLabLauncher(paths=paths, run=fake_run)
-    launcher.tools = launch.CommandTools("docker", "uv", "npm", "python", "powershell")
+    launcher.tools = launch.CommandTools(
+        "docker", "uv", "npm", "trusted-python.exe", "powershell"
+    )
     launcher.env = {}
 
     launcher.run_migrations()
 
     assert Path(str(calls[0]["cwd"])).resolve() == paths.api.resolve()
-    assert (
-        calls[0]["args"][-3:] == ["run", "alembic", "upgrade"]
-        or "alembic" in calls[0]["args"]
-    )
+    assert calls[0]["args"][:3] == ["trusted-python.exe", "-m", "alembic"]
     assert "head" in calls[0]["args"]
 
 
@@ -456,16 +455,36 @@ def test_find_listening_pid_is_bounded_and_ignores_malformed_response() -> None:
     assert launch.find_listening_pid(3000, run=lambda *args, **kwargs: result) is None
 
 
-def test_python_is_optional_when_uv_is_available() -> None:
+def test_project_python_is_required_even_when_uv_is_available(tmp_path: Path) -> None:
+    project_python = (
+        tmp_path / "services" / "api" / ".venv" / "Scripts" / "python.exe"
+    )
+    project_python.parent.mkdir(parents=True)
+    project_python.touch()
     resolved = {
         "docker": "docker.exe",
         "uv": "uv.exe",
         "npm": "npm.cmd",
         "pwsh": "pwsh.exe",
     }
-    tools = launch.find_required_commands(lambda name: resolved.get(name))
+    tools = launch.find_required_commands(
+        lambda name: resolved.get(name), root=tmp_path
+    )
     assert tools.uv == "uv.exe"
-    assert tools.python == ""
+    assert Path(tools.python) == project_python
+
+
+def test_service_commands_use_the_project_python() -> None:
+    python = r"D:\repo\services\api\.venv\Scripts\python.exe"
+
+    assert launch.build_alembic_command(python) == [
+        python,
+        "-m",
+        "alembic",
+        "upgrade",
+        "head",
+    ]
+    assert launch.build_api_command(python)[:3] == [python, "-m", "uvicorn"]
 
 
 def test_docker_already_running_is_not_started_again(
@@ -706,26 +725,30 @@ def test_normal_lab_window_uses_default_edge_profile(
     assert not any(item.startswith("--user-data-dir=") for item in commands[0])
 
 
-def test_windows_wrappers_use_uv_and_resolve_their_own_root() -> None:
+def test_windows_wrappers_use_trusted_python_and_resolve_their_own_root() -> None:
     start = Path("Start Fleet Manager.bat").read_text(encoding="utf-8")
     stop = Path("Stop Fleet Manager.bat").read_text(encoding="utf-8")
 
     assert "%~dp0" in start
-    assert "uv" in start.lower()
+    assert "ensure-trusted-python.ps1" in start.lower()
+    assert "services\\api\\.venv\\scripts\\python.exe" in start.lower()
     assert "launch.py" in start
-    assert "--project" in start
-    assert "powershell" not in start.lower()
+    assert "uv run" not in start.lower()
+    assert "powershell" in start.lower()
     assert "%~dp0" in stop
     assert "--stop" in stop
-    assert "--project" in stop
+    assert "ensure-trusted-python.ps1" in stop.lower()
+    assert "uv run" not in stop.lower()
 
 
 def test_pilot_reset_wrapper_requires_confirmation_and_reuses_safe_scripts() -> None:
     reset = Path("Reset Pilot Test Data.bat").read_text(encoding="utf-8")
+    reset_script = Path("scripts/reset-pilot.ps1").read_text(encoding="utf-8")
+    bootstrap_script = Path("scripts/bootstrap-pilot.ps1").read_text(encoding="utf-8")
 
     assert "%~dp0" in reset
-    assert "uv" in reset.lower()
-    assert "python.exe" not in reset.lower()
+    assert "ensure-trusted-python.ps1" in reset.lower()
+    assert "uv run" not in reset.lower()
     assert "RESET PILOT" in reset
     assert 'if not "%PILOT_CONFIRM%"=="RESET PILOT"' in reset
     assert "reset-pilot.ps1" in reset
@@ -733,6 +756,11 @@ def test_pilot_reset_wrapper_requires_confirmation_and_reuses_safe_scripts() -> 
     assert "bootstrap-pilot.ps1" in reset
     assert "Pilot test data reset successfully." in reset
     assert "Driver can now begin with KM READING" in reset
+    assert reset.lower().count("if errorlevel 1 goto :failed") >= 2
+    assert "ensure-trusted-python.ps1" in reset_script.lower()
+    assert "$lastexitcode" in reset_script.lower()
+    assert "ensure-trusted-python.ps1" in bootstrap_script.lower()
+    assert "$lastexitcode" in bootstrap_script.lower()
 
 
 def test_start_calls_browser_launcher_once(

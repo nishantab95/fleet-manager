@@ -13,10 +13,15 @@ if (-not $ConfirmPilotReset) {
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot ".env"))) {
     throw "A local .env is required."
 }
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    throw "uv is required to reset the pilot fixture."
+$apiProject = Join-Path $repoRoot "services\api"
+$ensurePython = Join-Path $PSScriptRoot "ensure-trusted-python.ps1"
+& $ensurePython
+if ($LASTEXITCODE -ne 0) {
+    throw "Trusted Python environment verification failed (exit $LASTEXITCODE)."
 }
 
-$cacheDir = Join-Path $repoRoot ".uv-cache"
-$apiProject = Join-Path $repoRoot "services\api"
-uv --cache-dir $cacheDir run --project $apiProject python -m fleet_api.bootstrap.reset_pilot --confirm-pilot-reset --yes
+$projectPython = Join-Path $apiProject ".venv\Scripts\python.exe"
+& $projectPython -m fleet_api.bootstrap.reset_pilot --confirm-pilot-reset --yes
+if ($LASTEXITCODE -ne 0) {
+    throw "Pilot test data reset failed (exit $LASTEXITCODE)."
+}

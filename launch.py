@@ -250,10 +250,19 @@ def validate_local_configuration(env: Mapping[str, str]) -> list[str]:
     return warnings
 
 
+def project_python_path(root: Path) -> Path:
+    """Return the repository's trusted, dependency-backed Python executable."""
+
+    if os.name == "nt":
+        return root / "services" / "api" / ".venv" / "Scripts" / "python.exe"
+    return root / "services" / "api" / ".venv" / "bin" / "python"
+
+
 def find_required_commands(
     which: Callable[[str], str | None] = shutil.which,
+    root: Path | None = None,
 ) -> CommandTools:
-    """Resolve required Windows commands without assuming a particular shell."""
+    """Resolve commands and the locked project Python without using uv's runtime."""
 
     def require(label: str, *names: str) -> str:
         for name in names:
@@ -264,30 +273,33 @@ def find_required_commands(
             f"Required command not found: {label}. Install it and rerun launch.py."
         )
 
+    repo_root = (root or resolve_repo_root()).resolve()
+    project_python = project_python_path(repo_root)
+    if not project_python.is_file():
+        raise LauncherError(
+            "The trusted Fleet Manager Python environment is missing: "
+            f"{project_python}. Run Start Fleet Manager.bat to recreate it from Python 3.12."
+        )
+
     return CommandTools(
         docker=require("docker", "docker"),
-        uv=require("uv", "uv"),
+        # uv remains available for dependency synchronization, but it is not
+        # used as the runtime interpreter for Fleet Manager services.
+        uv=which("uv") or "",
         npm=require("npm", "npm.cmd", "npm"),
-        # The launcher executes Python through uv. Keep this field for
-        # diagnostics/backwards-compatible test fixtures, but do not make a
-        # machine-wide python PATH entry a startup prerequisite.
-        python=which("python") or which("python.exe") or "",
+        python=str(project_python),
         powershell=require("PowerShell", "pwsh", "powershell", "powershell.exe"),
     )
 
 
-def build_alembic_command(uv: str, cache_dir: Path) -> list[str]:
-    return [uv, "--cache-dir", str(cache_dir), "run", "alembic", "upgrade", "head"]
+def build_alembic_command(python: str) -> list[str]:
+    return [python, "-m", "alembic", "upgrade", "head"]
 
 
-def build_api_command(uv: str, cache_dir: Path) -> list[str]:
+def build_api_command(python: str) -> list[str]:
     return [
-        uv,
-        "--cache-dir",
-        str(cache_dir),
-        "run",
-        "--project",
-        "services/api",
+        python,
+        "-m",
         "uvicorn",
         "fleet_api.main:app",
         "--host",
@@ -539,7 +551,7 @@ class RoleLabLauncher:
     def prepare_config(self) -> None:
         self.env, self.local_env = load_local_environment(self.paths.root)
         self.warnings = validate_local_configuration(self.env)
-        self.tools = find_required_commands(self.command_lookup)
+        self.tools = find_required_commands(self.command_lookup, root=self.paths.root)
 
     def _require_tools(self) -> CommandTools:
         if self.tools is None:
@@ -810,7 +822,7 @@ class RoleLabLauncher:
 
     def run_migrations(self) -> None:
         tools = self._require_tools()
-        command = build_alembic_command(tools.uv, self.paths.root / ".uv-cache")
+        command = build_alembic_command(tools.python)
         self._run_checked(
             command, cwd=self.paths.api, label="Alembic migration", timeout=240
         )
@@ -1010,7 +1022,7 @@ class RoleLabLauncher:
         if status.state == "occupied":
             self._handle_api_port_conflict()
 
-        command = build_api_command(tools.uv, self.paths.root / ".uv-cache")
+        command = build_api_command(tools.python)
         record = self._start_process(
             "api", command, self.paths.root, self.env, "api.log"
         )

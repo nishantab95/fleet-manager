@@ -4,7 +4,6 @@ param()
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
-$cacheDir = Join-Path $repoRoot ".uv-cache"
 $apiProject = Join-Path $repoRoot "services\api"
 $failures = [System.Collections.Generic.List[string]]::new()
 
@@ -34,24 +33,29 @@ function Invoke-RequiredCheck {
     }
 }
 
-if (Get-Command uv -ErrorAction SilentlyContinue) {
+$ensurePython = Join-Path $repoRoot "scripts\ensure-trusted-python.ps1"
+& $ensurePython
+if ($LASTEXITCODE -eq 0) {
+    $projectPython = Join-Path $apiProject ".venv\Scripts\python.exe"
     Push-Location $apiProject
     try {
         if (-not $env:FLEET_TEST_DATABASE_URL) {
             $env:FLEET_TEST_DATABASE_URL = "postgresql+psycopg://fleet:fleet@127.0.0.1:5432/fleet_test"
         }
-        Invoke-RequiredCheck "uv lock verification" { uv --cache-dir $cacheDir lock --check }
-        Invoke-RequiredCheck "Backend Ruff" { uv --cache-dir $cacheDir run --project . --group dev ruff check src tests migrations }
-        Invoke-RequiredCheck "Backend formatter" { uv --cache-dir $cacheDir run --project . --group dev ruff format --check src tests migrations }
-        Invoke-RequiredCheck "Backend mypy" { uv --cache-dir $cacheDir run --project . --group dev mypy src tests }
-        Invoke-RequiredCheck "Backend pytest" { uv --cache-dir $cacheDir run --project . --group dev pytest -p no:cacheprovider }
-        Invoke-RequiredCheck "Alembic schema check" { uv --cache-dir $cacheDir run --project . alembic check }
-        Invoke-RequiredCheck "Alembic offline migration check" { uv --cache-dir $cacheDir run --project . alembic upgrade head --sql }
+        if (Get-Command uv -ErrorAction SilentlyContinue) {
+            Invoke-RequiredCheck "uv lock verification" { uv --cache-dir (Join-Path $repoRoot ".uv-cache") lock --check }
+        }
+        Invoke-RequiredCheck "Backend Ruff" { & $projectPython -m ruff check src tests migrations }
+        Invoke-RequiredCheck "Backend formatter" { & $projectPython -m ruff format --check src tests migrations }
+        Invoke-RequiredCheck "Backend mypy" { & $projectPython -m mypy src tests }
+        Invoke-RequiredCheck "Backend pytest" { & $projectPython -m pytest -p no:cacheprovider }
+        Invoke-RequiredCheck "Alembic schema check" { & $projectPython -m alembic check }
+        Invoke-RequiredCheck "Alembic offline migration check" { & $projectPython -m alembic upgrade head --sql }
     } finally {
         Pop-Location
     }
 } else {
-    $failures.Add("Backend checks (uv missing)")
+    $failures.Add("Trusted Python environment")
 }
 
 $npm = Get-Command npm -ErrorAction SilentlyContinue

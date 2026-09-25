@@ -35,8 +35,8 @@ Normal daily use is one double-click. From Windows:
    Start Fleet Manager.bat
    ```
 
-   The wrapper finds `uv` without requiring Python on PATH, starts Docker
-   Desktop when needed, waits for the Docker engine, starts or reuses
+   The wrapper verifies the trusted Python 3.12 environment, using uv only to
+   create the locked environment when needed, starts Docker Desktop when needed, waits for the Docker engine, starts or reuses
    PostgreSQL, MinIO, API, and Web, and opens exactly one normal Edge
    `http://localhost:3000/lab` app window. No PowerShell command or menu choice
    is required.
@@ -55,11 +55,11 @@ Docker services and their volumes are left running and untouched.
 Advanced launcher operations are available without changing the normal flow:
 
 ```text
-uv run --project services/api launch.py --fresh    # type RESET PILOT when prompted
-uv run --project services/api launch.py --status
-uv run --project services/api launch.py --stop
-uv run --project services/api launch.py --menu
-uv run --project services/api launch.py --help
+services\api\.venv\Scripts\python.exe launch.py --fresh    # type RESET PILOT when prompted
+services\api\.venv\Scripts\python.exe launch.py --status
+services\api\.venv\Scripts\python.exe launch.py --stop
+services\api\.venv\Scripts\python.exe launch.py --menu
+services\api\.venv\Scripts\python.exe launch.py --help
 ```
 
 The launcher validates the local non-production configuration, starts and
