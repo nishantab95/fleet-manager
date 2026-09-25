@@ -28,9 +28,7 @@ class CompanyMembership(UpdatedTimestampModel):
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "company_id", "user_id", "role", name="uq_memberships_company_user_role"
-        ),
+        UniqueConstraint("company_id", "user_id", "role", name="uq_memberships_company_user_role"),
         UniqueConstraint("company_id", "id", name="uq_memberships_company_id"),
     )
 

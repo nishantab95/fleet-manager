@@ -21,9 +21,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "UPDATE emergency_events SET category = 'CONTACT_SUPERVISOR' WHERE category IS NULL"
-    )
+    op.execute("UPDATE emergency_events SET category = 'CONTACT_SUPERVISOR' WHERE category IS NULL")
     op.alter_column(
         "emergency_events",
         "category",

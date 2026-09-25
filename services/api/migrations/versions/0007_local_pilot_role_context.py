@@ -32,9 +32,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "uq_memberships_company_user_role", "company_memberships", type_="unique"
-    )
+    op.drop_constraint("uq_memberships_company_user_role", "company_memberships", type_="unique")
     op.create_unique_constraint(
         "uq_memberships_company_user", "company_memberships", ["company_id", "user_id"]
     )

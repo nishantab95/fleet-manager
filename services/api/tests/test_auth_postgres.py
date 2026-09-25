@@ -256,9 +256,7 @@ def test_local_pilot_otp_and_membership_selection_are_role_bound(
         )
         assert selected.context.membership.role == role
 
-        other_membership = next(
-            membership for membership in memberships if membership.role != role
-        )
+        other_membership = next(membership for membership in memberships if membership.role != role)
         with pytest.raises(MembershipSelectionError):
             service.create_session(
                 pre_session_token=pre_session,

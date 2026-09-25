@@ -104,9 +104,7 @@ class Settings(BaseSettings):
                 if not code
             ]
             if missing:
-                raise ValueError(
-                    "pilot OTP provider requires role codes: " + ", ".join(missing)
-                )
+                raise ValueError("pilot OTP provider requires role codes: " + ", ".join(missing))
 
         if environment in {"production", "prod"}:
             if not self.web_public_base_url.strip():
