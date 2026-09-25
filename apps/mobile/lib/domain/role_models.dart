@@ -1,9 +1,17 @@
 import 'dart:typed_data';
 
-const bool isPilotBuild = bool.fromEnvironment(
+import 'package:flutter/services.dart' show appFlavor;
+
+const bool _explicitPilotDefine = bool.fromEnvironment(
   'FLEET_PILOT',
   defaultValue: false,
 );
+
+// Flutter exposes the selected Android product flavor through appFlavor.
+// Keep the explicit define for tests and scripted builds, but never let it
+// turn a production flavor into a Pilot build.
+const bool isPilotBuild =
+    appFlavor == 'pilot' || (appFlavor != 'production' && _explicitPilotDefine);
 
 class SupervisorSite {
   const SupervisorSite({

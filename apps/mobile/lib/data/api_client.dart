@@ -7,6 +7,17 @@ import 'package:http/http.dart' as http;
 import '../domain/driver_models.dart';
 import '../domain/role_models.dart';
 
+const String _configuredApiBaseUrl = String.fromEnvironment(
+  'FLEET_API_BASE_URL',
+);
+final String defaultApiBaseUrl = isPilotBuild
+    ? (_configuredApiBaseUrl.isEmpty
+          ? 'http://127.0.0.1:8000'
+          : _configuredApiBaseUrl)
+    : (_configuredApiBaseUrl.isEmpty
+          ? 'https://api.fleetmanager.example'
+          : _configuredApiBaseUrl);
+
 abstract class DriverRemoteApi {
   Future<void> registerDevice({required String installationIdentifier});
 
@@ -39,13 +50,7 @@ class ApiException implements Exception {
 
 class ApiClient implements DriverRemoteApi {
   ApiClient({String? baseUrl, http.Client? client})
-    : _baseUrl =
-          (baseUrl ??
-                  const String.fromEnvironment(
-                    'FLEET_API_BASE_URL',
-                    defaultValue: 'http://10.0.2.2:8000',
-                  ))
-              .replaceFirst(RegExp(r'/$'), ''),
+    : _baseUrl = (baseUrl ?? defaultApiBaseUrl).replaceFirst(RegExp(r'/$'), ''),
       _client = client ?? http.Client();
 
   String _baseUrl;

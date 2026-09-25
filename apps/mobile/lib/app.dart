@@ -97,11 +97,37 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
       DriverAssignment? assignment;
       var duty = const DriverDutyState.none();
       if (api.session?.role == 'DRIVER') {
-        await api.registerDevice(
-          installationIdentifier: widget.dependencies.installationIdentifier,
-        );
-        assignment = await api.currentAssignment();
-        duty = await api.currentDuty();
+        try {
+          await api.registerDevice(
+            installationIdentifier: widget.dependencies.installationIdentifier,
+          );
+        } on ApiException catch (error) {
+          if (error.isUnauthorized) rethrow;
+        }
+        try {
+          assignment = await api.currentAssignment();
+          if (assignment == null) {
+            assignment = await widget.dependencies.sync.localAssignment();
+            if (assignment != null) {
+              duty = await widget.dependencies.sync.localDutyState(
+                assignment.assignmentId,
+              );
+            }
+          } else {
+            duty = await api.currentDuty();
+            duty = await widget.dependencies.sync.effectiveDuty(
+              assignment.assignmentId,
+              duty,
+            );
+          }
+        } on ApiException catch (error) {
+          if (error.isUnauthorized) rethrow;
+          assignment = await widget.dependencies.sync.localAssignment();
+          if (assignment == null) rethrow;
+          duty = await widget.dependencies.sync.localDutyState(
+            assignment.assignmentId,
+          );
+        }
       } else {
         await api.validateSession();
       }
@@ -125,8 +151,30 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
     DriverAssignment? assignment;
     var duty = const DriverDutyState.none();
     if (tokens.role == 'DRIVER') {
-      assignment = await widget.dependencies.api.currentAssignment();
-      duty = await widget.dependencies.api.currentDuty();
+      try {
+        assignment = await widget.dependencies.api.currentAssignment();
+        if (assignment == null) {
+          assignment = await widget.dependencies.sync.localAssignment();
+          if (assignment != null) {
+            duty = await widget.dependencies.sync.localDutyState(
+              assignment.assignmentId,
+            );
+          }
+        } else {
+          duty = await widget.dependencies.api.currentDuty();
+          duty = await widget.dependencies.sync.effectiveDuty(
+            assignment.assignmentId,
+            duty,
+          );
+        }
+      } on ApiException catch (error) {
+        if (error.isUnauthorized) rethrow;
+        assignment = await widget.dependencies.sync.localAssignment();
+        if (assignment == null) rethrow;
+        duty = await widget.dependencies.sync.localDutyState(
+          assignment.assignmentId,
+        );
+      }
     }
     if (!mounted) return;
     setState(() {
@@ -520,20 +568,36 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void didUpdateWidget(covariant DriverHomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.duty.status != widget.duty.status ||
-        oldWidget.duty.sessionId != widget.duty.sessionId) {
+        oldWidget.duty.sessionId != widget.duty.sessionId ||
+        oldWidget.duty.localState != widget.duty.localState) {
       _duty = widget.duty;
     }
   }
 
   Future<void> _refreshDuty() async {
     try {
-      final duty = await widget.dependencies.api.currentDuty();
+      var duty = await widget.dependencies.api.currentDuty();
+      final assignment = widget.assignment;
+      if (assignment != null) {
+        duty = await widget.dependencies.sync.effectiveDuty(
+          assignment.assignmentId,
+          duty,
+        );
+      }
       if (mounted) setState(() => _duty = duty);
     } on ApiException catch (error) {
       if (error.isUnauthorized) {
         await widget.onSignOut();
+        return;
       }
-      // Offline mode keeps the last server-confirmed duty state.
+      final assignment = widget.assignment;
+      if (assignment == null) return;
+      final localDuty = await widget.dependencies.sync.localDutyState(
+        assignment.assignmentId,
+      );
+      if (localDuty.localState != null && mounted) {
+        setState(() => _duty = localDuty);
+      }
     }
   }
 
@@ -599,8 +663,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         };
         setState(() => _message = label);
       }
+      unawaited(_syncQueuedEvents());
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _syncQueuedEvents() async {
+    if (widget.dependencies.api.session == null) return;
+    try {
+      await widget.dependencies.sync.syncPending();
+      await _refreshQueue();
+      await _refreshDuty();
+    } catch (_) {
+      // Offline queue errors remain visible through the pending count and
+      // diagnostics; the local operational state must stay available.
     }
   }
 
@@ -608,7 +685,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final result = await showDialog<_KmCapture>(
       context: context,
       builder: (context) => _KmDialog(
-        type: _duty.isActive
+        type: _duty.canEnd
             ? KmReadingType.endReading
             : KmReadingType.startReading,
       ),
@@ -682,18 +759,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Widget build(BuildContext context) {
     final assignment = widget.assignment;
     final canCapture = assignment != null;
-    final canOperate = canCapture && !_busy && _duty.isActive;
-    final canReadKm =
-        canCapture &&
-        !_busy &&
-        (_duty.status == DriverDutyStatus.none ||
-            _duty.isActive ||
-            _duty.status == DriverDutyStatus.closed);
-    final dutyLabel = switch (_duty.status) {
-      DriverDutyStatus.none => 'Before START KM',
-      DriverDutyStatus.active => 'Duty active',
-      DriverDutyStatus.closed =>
+    final canOperate = canCapture && !_busy && _duty.isOperationallyActive;
+    final canReadKm = canCapture && !_busy && _duty.canReadKm;
+    final dutyLabel = switch (_duty.localState) {
+      LocalDutyState.startPendingSync => 'Saved on phone · Syncing start',
+      LocalDutyState.activeConfirmed => 'Duty active',
+      LocalDutyState.endPendingSync => 'Saving end KM…',
+      LocalDutyState.closedConfirmed =>
         'Previous duty completed · Record START KM for the next session',
+      LocalDutyState.needsAttention =>
+        'START KM needs correction. Please check the reading.',
+      null => switch (_duty.status) {
+        DriverDutyStatus.none => 'Before START KM',
+        DriverDutyStatus.active => 'Duty active',
+        DriverDutyStatus.closed =>
+          'Previous duty completed · Record START KM for the next session',
+      },
     };
     return Scaffold(
       appBar: AppBar(

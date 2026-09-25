@@ -140,9 +140,18 @@ class DriverAssignment {
 
 enum DriverDutyStatus { none, active, closed }
 
+enum LocalDutyState {
+  startPendingSync,
+  activeConfirmed,
+  endPendingSync,
+  closedConfirmed,
+  needsAttention,
+}
+
 class DriverDutyState {
   const DriverDutyState({
     required this.status,
+    this.localState,
     this.sessionId,
     this.assignmentId,
     this.tipperId,
@@ -157,6 +166,7 @@ class DriverDutyState {
   const DriverDutyState.none() : this(status: DriverDutyStatus.none);
 
   final DriverDutyStatus status;
+  final LocalDutyState? localState;
   final String? sessionId;
   final String? assignmentId;
   final String? tipperId;
@@ -168,8 +178,29 @@ class DriverDutyState {
   final int? regularDutyMinutes;
 
   bool get isActive => status == DriverDutyStatus.active;
-  bool get canStart => status == DriverDutyStatus.none;
-  bool get canEnd => status == DriverDutyStatus.active;
+  bool get isOperationallyActive => switch (localState) {
+    LocalDutyState.startPendingSync || LocalDutyState.activeConfirmed => true,
+    LocalDutyState.endPendingSync ||
+    LocalDutyState.closedConfirmed ||
+    LocalDutyState.needsAttention => false,
+    null => isActive,
+  };
+  bool get canStart => switch (localState) {
+    LocalDutyState.needsAttention || LocalDutyState.closedConfirmed => true,
+    LocalDutyState.startPendingSync ||
+    LocalDutyState.activeConfirmed ||
+    LocalDutyState.endPendingSync => false,
+    null =>
+      status == DriverDutyStatus.none || status == DriverDutyStatus.closed,
+  };
+  bool get canEnd => switch (localState) {
+    LocalDutyState.startPendingSync || LocalDutyState.activeConfirmed => true,
+    LocalDutyState.endPendingSync ||
+    LocalDutyState.closedConfirmed ||
+    LocalDutyState.needsAttention => false,
+    null => isActive,
+  };
+  bool get canReadKm => canStart || canEnd;
 
   factory DriverDutyState.fromJson(Map<String, dynamic> json) {
     final status = switch (json['status'] as String? ?? 'NONE') {
@@ -216,6 +247,8 @@ class PendingEvent {
     required this.createdAt,
     this.evidencePath,
     this.lastSyncError,
+    this.dutySessionId,
+    this.dependsOnEventUuid,
   });
 
   final String clientEventUuid;
@@ -231,6 +264,8 @@ class PendingEvent {
   final DateTime createdAt;
   final String? evidencePath;
   final String? lastSyncError;
+  final String? dutySessionId;
+  final String? dependsOnEventUuid;
 
   String get payloadJson => jsonEncode(payload);
 }

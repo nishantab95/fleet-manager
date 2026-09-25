@@ -5,17 +5,20 @@ import 'data/api_client.dart';
 import 'data/local_database.dart';
 import 'data/secure_session_store.dart';
 import 'data/sync_engine.dart';
+import 'domain/role_models.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final sessionStore = SecureSessionStore();
   final api = ApiClient();
-  final pilotBaseUrl = await sessionStore.readPilotBaseUrl();
-  if (pilotBaseUrl != null && pilotBaseUrl.isNotEmpty) {
-    try {
-      api.setBaseUrl(pilotBaseUrl);
-    } on FormatException {
-      // Ignore a stale/invalid local setting and keep the compile-time default.
+  if (isPilotBuild) {
+    final pilotBaseUrl = await sessionStore.readPilotBaseUrl();
+    if (pilotBaseUrl != null && pilotBaseUrl.isNotEmpty) {
+      try {
+        api.setBaseUrl(pilotBaseUrl);
+      } on FormatException {
+        // Ignore a stale/invalid local setting and keep the compile-time default.
+      }
     }
   }
   final tokens = await sessionStore.read();

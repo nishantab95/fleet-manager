@@ -27,6 +27,7 @@ class SyncEngine {
   static const lastSuccessfulSyncKey = 'last_successful_sync_at';
   static const lastSyncErrorKey = 'last_sync_error_category';
   static const lastSyncErrorMessageKey = 'last_sync_error_message';
+  bool _syncInProgress = false;
 
   Future<String> enqueue({
     required DriverAssignment assignment,
@@ -35,36 +36,164 @@ class SyncEngine {
     String? evidencePath,
   }) async {
     final clientEventUuid = _uuid.v4();
-    await database.enqueue(
-      local.PendingEventsCompanion.insert(
-        clientEventUuid: clientEventUuid,
-        eventType: eventType.wireName,
-        assignmentId: assignment.assignmentId,
-        tipperId: assignment.tipperId,
-        siteId: assignment.siteId,
-        supervisorName: assignment.supervisorName,
-        deviceCreatedAt: DateTime.now().toUtc(),
-        syncState: 'pending',
-        payloadJson: jsonEncode(payload),
-        evidencePath: Value(evidencePath),
-        createdAt: DateTime.now().toUtc(),
-      ),
+    final now = DateTime.now().toUtc();
+    final isStart = _isStartEvent(eventType, payload);
+    final isEnd = _isEndEvent(eventType, payload);
+    final existing = await database.latestLocalDutySession(
+      assignmentId: assignment.assignmentId,
     );
+    final activeSession = existing != null && _isLocallyActive(existing.state);
+    final localSessionId = isStart ? _uuid.v4() : existing?.localSessionId;
+    final dependency = activeSession ? existing.lastEventUuid : null;
+    final storedPayload = <String, dynamic>{
+      ...payload,
+      if (localSessionId != null) '_duty_session_id': localSessionId,
+      if (dependency != null) '_depends_on_event_uuid': dependency,
+    };
+    final event = local.PendingEventsCompanion.insert(
+      clientEventUuid: clientEventUuid,
+      eventType: eventType.wireName,
+      assignmentId: assignment.assignmentId,
+      tipperId: assignment.tipperId,
+      siteId: assignment.siteId,
+      supervisorName: assignment.supervisorName,
+      deviceCreatedAt: now,
+      syncState: 'pending',
+      payloadJson: jsonEncode(storedPayload),
+      evidencePath: Value(evidencePath),
+      createdAt: now,
+    );
+    await database.transaction(() async {
+      await database.enqueue(event);
+      if (isStart) {
+        await database.saveLocalDutySession(
+          local.LocalDutySession(
+            localSessionId: localSessionId!,
+            assignmentId: assignment.assignmentId,
+            tipperId: assignment.tipperId,
+            tipperRegistrationNumber: assignment.tipperRegistrationNumber,
+            tipperShortName: assignment.tipperShortName,
+            siteId: assignment.siteId,
+            siteName: assignment.siteName,
+            supervisorName: assignment.supervisorName,
+            startClientEventUuid: clientEventUuid,
+            startKm: _readingValue(payload),
+            startedAt: now,
+            endClientEventUuid: null,
+            endKm: null,
+            endedAt: null,
+            state: 'startPendingSync',
+            serverSessionId: null,
+            lastEventUuid: clientEventUuid,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+      } else if (existing != null && activeSession) {
+        await database.updateLocalDutySession(
+          existing.copyWith(
+            endClientEventUuid: isEnd ? clientEventUuid : null,
+            endKm: isEnd ? _readingValue(payload) : null,
+            endedAt: isEnd ? now : null,
+            state: isEnd ? 'endPendingSync' : null,
+            lastEventUuid: clientEventUuid,
+            updatedAt: now,
+          ),
+        );
+      }
+    });
     return clientEventUuid;
   }
 
+  Future<DriverAssignment?> localAssignment() async {
+    final row = await database.latestLocalDutySession();
+    if (row == null) return null;
+    return DriverAssignment(
+      assignmentId: row.assignmentId,
+      tipperId: row.tipperId,
+      tipperRegistrationNumber: row.tipperRegistrationNumber,
+      tipperShortName: row.tipperShortName,
+      siteId: row.siteId,
+      siteName: row.siteName,
+      supervisorName: row.supervisorName,
+    );
+  }
+
+  Future<DriverDutyState> localDutyState(String assignmentId) async {
+    final row = await database.latestLocalDutySession(
+      assignmentId: assignmentId,
+    );
+    return row == null ? const DriverDutyState.none() : _fromLocal(row);
+  }
+
+  Future<DriverDutyState> effectiveDuty(
+    String assignmentId,
+    DriverDutyState serverDuty,
+  ) async {
+    final row = await database.latestLocalDutySession(
+      assignmentId: assignmentId,
+    );
+    if (row == null) return serverDuty;
+    var state = _localState(row.state);
+    if (state == LocalDutyState.startPendingSync && serverDuty.isActive) {
+      state = LocalDutyState.activeConfirmed;
+      await database.updateLocalDutySession(
+        row.copyWith(
+          state: 'activeConfirmed',
+          serverSessionId: serverDuty.sessionId,
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+    } else if (state == LocalDutyState.endPendingSync &&
+        serverDuty.status == DriverDutyStatus.closed) {
+      state = LocalDutyState.closedConfirmed;
+      await database.updateLocalDutySession(
+        row.copyWith(
+          state: 'closedConfirmed',
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+    }
+    return _fromLocal(row, state: state, serverDuty: serverDuty);
+  }
+
   Future<int> syncPending() async {
+    if (_syncInProgress) return 0;
+    _syncInProgress = true;
+    try {
+      return await _syncPending();
+    } finally {
+      _syncInProgress = false;
+    }
+  }
+
+  Future<int> _syncPending() async {
     final rows = await database.pendingForSync();
     var synced = 0;
+    var attempted = 0;
     for (final row in rows) {
+      final storedPayload = _decodeStoredPayload(row.payloadJson);
+      final dependency = storedPayload['_depends_on_event_uuid'] as String?;
+      if (dependency != null) {
+        final dependencyRow = await database.eventById(dependency);
+        if (dependencyRow?.syncState != 'synced') continue;
+      }
+      attempted++;
       await database.markSyncing(row.clientEventUuid);
       final event = _toDomain(row);
       try {
         await _syncOne(event);
         await database.markSynced(event.clientEventUuid);
+        await _markLocalDutySynced(row);
         synced++;
       } on ApiException catch (error) {
         await database.markFailed(event.clientEventUuid, error.message);
+        final dutySessionId = storedPayload['_duty_session_id'] as String?;
+        if (_isDeterministicStartFailure(event, error) &&
+            dutySessionId != null) {
+          await database.markDutyNeedsAttention(dutySessionId);
+          await database.blockDependentEvents(row.clientEventUuid);
+        }
         await database.setMetadata(lastSyncErrorKey, _errorCategory(error));
         await database.setMetadata(lastSyncErrorMessageKey, error.message);
       } on Object catch (error) {
@@ -73,13 +202,13 @@ class SyncEngine {
         await database.setMetadata(lastSyncErrorMessageKey, error.toString());
       }
     }
-    if (rows.isEmpty || synced == rows.length) {
+    if (attempted == 0 || synced == attempted) {
       await database.setMetadata(
         lastSuccessfulSyncKey,
         DateTime.now().toUtc().toIso8601String(),
       );
     }
-    if (rows.isNotEmpty && synced == rows.length) {
+    if (attempted > 0 && synced == attempted) {
       await database.setMetadata(lastSyncErrorKey, '');
       await database.setMetadata(lastSyncErrorMessageKey, '');
     }
@@ -87,6 +216,122 @@ class SyncEngine {
   }
 
   Future<int> pendingCount() async => (await database.pendingForSync()).length;
+
+  Future<void> _markLocalDutySynced(local.PendingEvent row) async {
+    final storedPayload = _decodeStoredPayload(row.payloadJson);
+    final sessionId = storedPayload['_duty_session_id'] as String?;
+    if (sessionId == null) return;
+    final now = DateTime.now().toUtc();
+    if (_isStartEvent(
+      DriverEventType.values.firstWhere(
+        (value) => value.wireName == row.eventType,
+      ),
+      _eventPayload(row.payloadJson),
+    )) {
+      await database.markDutyStartSynced(sessionId, now);
+    } else if (_isEndEvent(
+      DriverEventType.values.firstWhere(
+        (value) => value.wireName == row.eventType,
+      ),
+      _eventPayload(row.payloadJson),
+    )) {
+      await database.markDutyEndSynced(sessionId, now);
+    }
+  }
+
+  static bool _isStartEvent(
+    DriverEventType eventType,
+    Map<String, dynamic> payload,
+  ) =>
+      eventType == DriverEventType.kmReading &&
+      payload['reading_type'] == 'START_READING';
+
+  static bool _isEndEvent(
+    DriverEventType eventType,
+    Map<String, dynamic> payload,
+  ) =>
+      eventType == DriverEventType.kmReading &&
+      payload['reading_type'] == 'END_READING';
+
+  static double _readingValue(Map<String, dynamic> payload) =>
+      double.tryParse('${payload['reading_value']}') ?? 0;
+
+  static Map<String, dynamic> _decodeStoredPayload(String payloadJson) {
+    try {
+      final decoded = jsonDecode(payloadJson);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } on Object {
+      // The sync attempt will report malformed payloads to diagnostics.
+    }
+    return <String, dynamic>{};
+  }
+
+  static Map<String, dynamic> _eventPayload(String payloadJson) {
+    final payload = <String, dynamic>{..._decodeStoredPayload(payloadJson)};
+    payload.remove('_duty_session_id');
+    payload.remove('_depends_on_event_uuid');
+    return payload;
+  }
+
+  static bool _isLocallyActive(String state) =>
+      state == LocalDutyState.startPendingSync.name ||
+      state == LocalDutyState.activeConfirmed.name;
+
+  static LocalDutyState _localState(String value) =>
+      LocalDutyState.values.firstWhere(
+        (state) => state.name == value,
+        orElse: () => LocalDutyState.needsAttention,
+      );
+
+  static DriverDutyState _fromLocal(
+    local.LocalDutySession row, {
+    LocalDutyState? state,
+    DriverDutyState? serverDuty,
+  }) {
+    final localState = state ?? _localState(row.state);
+    final status = switch (localState) {
+      LocalDutyState.startPendingSync ||
+      LocalDutyState.activeConfirmed => DriverDutyStatus.active,
+      LocalDutyState.closedConfirmed => DriverDutyStatus.closed,
+      LocalDutyState.endPendingSync => DriverDutyStatus.active,
+      LocalDutyState.needsAttention => DriverDutyStatus.none,
+    };
+    final useServer =
+        serverDuty?.isActive == true &&
+        localState == LocalDutyState.activeConfirmed;
+    return DriverDutyState(
+      status: status,
+      localState: localState,
+      sessionId: useServer ? serverDuty!.sessionId : row.serverSessionId,
+      assignmentId: row.assignmentId,
+      tipperId: row.tipperId,
+      siteId: row.siteId,
+      startedAt: useServer
+          ? serverDuty!.startedAt ?? row.startedAt
+          : row.startedAt,
+      startKm: useServer ? serverDuty!.startKm ?? row.startKm : row.startKm,
+      endedAt: useServer ? serverDuty!.endedAt ?? row.endedAt : row.endedAt,
+      endKm: useServer ? serverDuty!.endKm ?? row.endKm : row.endKm,
+      regularDutyMinutes: serverDuty?.regularDutyMinutes,
+    );
+  }
+
+  static bool _isDeterministicStartFailure(
+    PendingEvent event,
+    ApiException error,
+  ) {
+    if (!_isStartEvent(event.eventType, event.payload)) return false;
+    const codes = {
+      'ODOMETER_CONTINUITY',
+      'ODOMETER_OUT_OF_RANGE',
+      'ASSIGNMENT_INVALID',
+      'ASSIGNMENT_NOT_FOUND',
+    };
+    return codes.contains(error.code) ||
+        (error.statusCode >= 400 &&
+            error.statusCode < 500 &&
+            error.statusCode != 401);
+  }
 
   Future<DateTime?> lastSuccessfulSync() async {
     final value = await database.metadata(lastSuccessfulSyncKey);
@@ -174,7 +419,7 @@ class SyncEngine {
         (value) => value.wireName == row.eventType,
       ),
       deviceCreatedAt: row.deviceCreatedAt,
-      payload: jsonDecode(row.payloadJson) as Map<String, dynamic>,
+      payload: _eventPayload(row.payloadJson),
       state: SyncState.values.firstWhere(
         (value) => value.name == row.syncState,
       ),
@@ -182,6 +427,12 @@ class SyncEngine {
       createdAt: row.createdAt,
       evidencePath: row.evidencePath,
       lastSyncError: row.lastSyncError,
+      dutySessionId:
+          (_decodeStoredPayload(row.payloadJson)['_duty_session_id'])
+              as String?,
+      dependsOnEventUuid:
+          (_decodeStoredPayload(row.payloadJson)['_depends_on_event_uuid'])
+              as String?,
     );
   }
 }

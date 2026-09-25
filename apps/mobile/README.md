@@ -18,5 +18,10 @@ flutter analyze
 flutter test
 ```
 
-Use `--dart-define=FLEET_API_BASE_URL=http://10.0.2.2:8000` for an Android
-emulator pointing at the local API.
+The Pilot flavor defaults to `http://127.0.0.1:8000`, which works with
+`adb reverse tcp:8000 tcp:8000`. For a physical device without ADB reverse,
+use the host machine's LAN address through the visible Pilot server settings.
+
+Driver duty state and the causal event queue are stored locally in Drift. A
+START KM with its required evidence makes the duty operational immediately;
+the queue preserves START before trips, diesel, and END across app restarts.
