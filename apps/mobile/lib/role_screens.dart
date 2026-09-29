@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'data/api_client.dart';
 import 'domain/role_models.dart';
+import 'owner_fleet.dart';
 
 typedef SignOut = Future<void> Function();
 
@@ -599,7 +600,14 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final titles = ['Owner dashboard', 'Tippers', 'Sites', 'Alerts', 'Reports'];
+    final titles = [
+      'Owner dashboard',
+      'Fleet',
+      'Tippers',
+      'Sites',
+      'Alerts',
+      'Reports',
+    ];
     return _RoleScaffold(
       title: titles[_tab],
       subtitle: 'TODAY · ${_date.toIso8601String().substring(0, 10)}',
@@ -616,6 +624,7 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
             error: _error,
             onRetry: _load,
           ),
+          OwnerFleetScreen(api: widget.api, onUnauthorized: widget.onSignOut),
           _OwnerTippersBody(tippers: _tippers, onEvidence: _showEvidence),
           _OwnerSitesBody(
             sites: _dashboard?.sites ?? const [],
@@ -632,6 +641,7 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
+        labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
         onDestinationSelected: (value) => setState(() => _tab = value),
         destinations: const [
           NavigationDestination(
@@ -641,6 +651,10 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
           ),
           NavigationDestination(
             icon: Icon(Icons.local_shipping_outlined),
+            label: 'FLEET',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.list_alt_outlined),
             label: 'TIPPERS',
           ),
           NavigationDestination(

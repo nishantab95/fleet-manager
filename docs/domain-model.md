@@ -157,6 +157,16 @@ append-only and requires an owner reason.
     START preserves its client UUID and releases dependents in original order.
 22. Emergency is locally durable but has no START/activity sync dependency. UI
     copy distinguishes phone-only persistence from confirmed server receipt.
+23. Only an authenticated `OWNER_ADMIN` may create, edit, deactivate, or
+    reactivate Fleet Assets. Phase 1B.1 creation accepts only `TIPPER`, and
+    company scope always comes from the authenticated membership.
+24. A rented tipper requires `rental_party_name`. An owned tipper carries no
+    rental-only values; `RENTED -> OWNED` clears party and rental dates, while
+    `OWNED -> RENTED` requires an explicit party.
+25. Fleet Asset edits preserve the asset UUID. Deactivation is rejected while
+    an effective assignment or active duty session exists and never removes
+    assignments, duty sessions, events, verification history, evidence, or
+    report history.
 
 ## PC V1 emergency contract
 

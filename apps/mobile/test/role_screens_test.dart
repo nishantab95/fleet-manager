@@ -90,7 +90,7 @@ void main() {
     expect(find.text('TODAY'), findsOneWidget);
     expect(find.text('ACTIVE TIPPERS'), findsOneWidget);
     expect(find.text('APPROVED TRIPS'), findsOneWidget);
-    expect(find.text('TIPPERS'), findsOneWidget);
+    expect(find.text('FLEET'), findsOneWidget);
     expect(find.text('REPORTS'), findsOneWidget);
     await tester.tap(find.text('REPORTS'));
     await tester.pump();
@@ -101,6 +101,25 @@ void main() {
 
 class _FakeRoleApi extends ApiClient {
   _FakeRoleApi() : super(baseUrl: 'http://test');
+
+  @override
+  Future<List<OwnerAsset>> ownerAssets({
+    String? status,
+    String? ownershipType,
+    String assetType = 'TIPPER',
+  }) async => [
+    OwnerAsset.fromJson({
+      'id': 'pilot-asset',
+      'asset_code': 'TIPPER-12',
+      'asset_type': 'TIPPER',
+      'ownership_type': 'OWNED',
+      'registration_number': 'PILOT12',
+      'short_name': 'Tipper 12',
+      'status': 'ACTIVE',
+      'has_active_assignment': false,
+      'active_assignment': null,
+    }),
+  ];
 
   static const startEventId = '7cb203af-aaf4-4c8d-af39-84d2ca6e263f';
   static const emergencyEventId = 'cb0915c7-4e29-4f19-8e0c-4f6c95d51c74';

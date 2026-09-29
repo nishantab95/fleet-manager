@@ -8,9 +8,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from fleet_api.domain.enums import (
+    AssetOwnershipType,
     DevicePlatform,
     EmergencyCategory,
     FleetAssetStatus,
+    FleetAssetType,
     KmReadingType,
     MembershipRole,
     MembershipStatus,
@@ -145,6 +147,56 @@ class TipperResponse(BaseModel):
     registration_number: str
     short_name: str | None
     status: FleetAssetStatus
+
+
+class OwnerAssetCreateRequest(BaseModel):
+    asset_code: str = Field(min_length=1, max_length=64)
+    asset_type: Literal[FleetAssetType.TIPPER] = FleetAssetType.TIPPER
+    ownership_type: AssetOwnershipType
+    registration_number: str = Field(min_length=1, max_length=32)
+    short_name: str | None = Field(default=None, max_length=100)
+    manufacturer: str | None = Field(default=None, max_length=100)
+    model: str | None = Field(default=None, max_length=100)
+    rental_party_name: str | None = Field(default=None, max_length=200)
+    rental_start_date: date | None = None
+    rental_end_date: date | None = None
+
+
+class OwnerAssetUpdateRequest(BaseModel):
+    asset_code: str | None = Field(default=None, min_length=1, max_length=64)
+    ownership_type: AssetOwnershipType | None = None
+    registration_number: str | None = Field(default=None, min_length=1, max_length=32)
+    short_name: str | None = Field(default=None, max_length=100)
+    manufacturer: str | None = Field(default=None, max_length=100)
+    model: str | None = Field(default=None, max_length=100)
+    rental_party_name: str | None = Field(default=None, max_length=200)
+    rental_start_date: date | None = None
+    rental_end_date: date | None = None
+
+
+class OwnerAssetAssignmentResponse(BaseModel):
+    assignment_id: UUID
+    site_id: UUID
+    site_name: str
+    driver_membership_id: UUID
+    driver_name: str
+
+
+class OwnerAssetResponse(BaseModel):
+    id: UUID
+    asset_code: str
+    asset_type: FleetAssetType
+    ownership_type: AssetOwnershipType
+    registration_number: str | None
+    short_name: str | None
+    manufacturer: str | None
+    model: str | None
+    status: FleetAssetStatus
+    rental_party_name: str | None
+    rental_start_date: date | None
+    rental_end_date: date | None
+    has_active_assignment: bool
+    active_assignment: OwnerAssetAssignmentResponse | None
 
 
 class PersonCreateRequest(BaseModel):

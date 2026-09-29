@@ -85,7 +85,31 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
   @override
   void initState() {
     super.initState();
+    widget.dependencies.api.setSessionExpiredHandler(_sessionExpired);
     unawaited(_restoreSession());
+  }
+
+  @override
+  void dispose() {
+    widget.dependencies.api.setSessionExpiredHandler(null);
+    super.dispose();
+  }
+
+  Future<void> _sessionExpired() async {
+    try {
+      await widget.dependencies.sessionStore.clear();
+    } on Object {
+      // Continue to a safe signed-out UI even if secure-storage cleanup fails.
+    }
+    widget.dependencies.api.clearSession();
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    setState(() {
+      _assignment = null;
+      _duty = const DriverDutyState.none();
+      _role = null;
+      _error = sessionExpiredMessage;
+    });
   }
 
   Future<void> _restoreSession() async {
@@ -140,9 +164,14 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
         });
       }
     } on ApiException catch (error) {
-      api.clearSession();
-      await widget.dependencies.sessionStore.clear();
-      if (mounted) setState(() => _error = error.message);
+      if (error.isUnauthorized) {
+        await _sessionExpired();
+      } else if (mounted) {
+        setState(() {
+          _role = api.session?.role;
+          _error = error.message;
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

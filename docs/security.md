@@ -69,6 +69,21 @@ controls.
   localStorage and clears the session on logout; backend authorization remains
   authoritative.
 
+## Phase 1B.1 Owner Fleet controls
+
+- Fleet Asset lifecycle routes require `OWNER_ADMIN` at the backend dependency
+  boundary. Driver and Supervisor requests fail with `403` even if a client
+  calls the route directly.
+- List, detail, edit, and status queries are scoped to the authenticated
+  company. Foreign UUIDs return tenant-scoped `404` responses and client input
+  cannot select a company.
+- Asset codes and non-null registrations remain company-unique. Registration
+  is normalized server-side, rental ownership rules are validated in the
+  domain service, and every lifecycle mutation writes an audit entry.
+- Deactivation is rejected for an effective assignment or active duty session.
+  No hard-delete route exists, so operational and verification history remains
+  reachable through the original asset UUID.
+
 ## Phase 4 driver controls
 
 - Driver routes require a live authenticated `DRIVER` membership. The current
@@ -80,9 +95,13 @@ controls.
 - Evidence uploads allow only configured image MIME types and a bounded byte
   size. Object storage is private; the API returns an opaque server key rather
   than a public URL.
-- The mobile queue writes event data before attempting network sync, never logs
-  access or refresh tokens, and refreshes an expired access token at most once
-  before retaining the event for a later retry.
+- The mobile queue writes event data before attempting network sync and never
+  logs access or refresh tokens. The shared authenticated client refreshes an
+  expired access token at most once, persists rotated credentials in platform
+  secure storage, and retries the interrupted Owner, Supervisor, or Driver
+  request once. Concurrent stale requests share the same refresh. Invalid or
+  revoked refresh credentials clear local authentication and return the user to
+  login without exposing internal session state.
 
 ## Phase 5 supervisor controls
 

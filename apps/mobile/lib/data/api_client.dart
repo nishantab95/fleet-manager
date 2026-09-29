@@ -20,6 +20,12 @@ final String defaultApiBaseUrl = isPilotBuild
           ? 'https://api.fleetmanager.example'
           : _configuredApiBaseUrl);
 
+const String sessionExpiredMessage =
+    'Your session has expired. Please sign in again.';
+
+typedef SessionTokensPersistor = Future<void> Function(SessionTokens tokens);
+typedef SessionExpiredHandler = Future<void> Function();
+
 abstract class DriverRemoteApi {
   Future<void> registerDevice({required String installationIdentifier});
 
@@ -36,6 +42,24 @@ abstract class DriverRemoteApi {
 
 abstract class DriverDutyLookup {
   Future<DriverDutyState> currentDuty();
+}
+
+abstract class OwnerAssetApi {
+  Future<List<OwnerAsset>> ownerAssets({
+    String? status,
+    String? ownershipType,
+    String assetType = 'TIPPER',
+  });
+
+  Future<OwnerAsset> ownerAsset(String assetId);
+
+  Future<OwnerAsset> createOwnerAsset(OwnerAssetInput input);
+
+  Future<OwnerAsset> updateOwnerAsset(String assetId, OwnerAssetInput input);
+
+  Future<OwnerAsset> deactivateOwnerAsset(String assetId);
+
+  Future<OwnerAsset> reactivateOwnerAsset(String assetId);
 }
 
 class ApiException implements Exception {
@@ -61,18 +85,33 @@ class ApiException implements Exception {
   String toString() => 'ApiException($statusCode): $message';
 }
 
-class ApiClient implements DriverRemoteApi, DriverDutyLookup {
-  ApiClient({String? baseUrl, http.Client? client})
-    : _baseUrl = (baseUrl ?? defaultApiBaseUrl).replaceFirst(RegExp(r'/$'), ''),
-      _client = client ?? http.Client();
+class ApiClient implements DriverRemoteApi, DriverDutyLookup, OwnerAssetApi {
+  ApiClient({
+    String? baseUrl,
+    http.Client? client,
+    SessionTokensPersistor? persistSession,
+  }) : _baseUrl = (baseUrl ?? defaultApiBaseUrl).replaceFirst(
+         RegExp(r'/$'),
+         '',
+       ),
+       _client = client ?? http.Client(),
+       _persistSession = persistSession;
 
   String _baseUrl;
   final http.Client _client;
+  final SessionTokensPersistor? _persistSession;
   SessionTokens? _tokens;
+  Future<SessionTokens>? _refreshInFlight;
+  Future<void>? _expirationInFlight;
+  SessionExpiredHandler? _sessionExpiredHandler;
 
   void setSession(SessionTokens tokens) => _tokens = tokens;
 
   SessionTokens? get session => _tokens;
+
+  void setSessionExpiredHandler(SessionExpiredHandler? handler) {
+    _sessionExpiredHandler = handler;
+  }
 
   String get baseUrl => _baseUrl;
 
@@ -143,15 +182,37 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup {
   }
 
   Future<SessionTokens> refreshSession() async {
+    final activeRefresh = _refreshInFlight;
+    if (activeRefresh != null) return activeRefresh;
+
+    final refresh = _performSessionRefresh();
+    _refreshInFlight = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (identical(_refreshInFlight, refresh)) _refreshInFlight = null;
+    }
+  }
+
+  Future<SessionTokens> _performSessionRefresh() async {
     final refreshToken = _tokens?.refreshToken;
     if (refreshToken == null) {
-      throw const ApiException(401, 'session is missing');
+      await _expireSession();
+      throw const ApiException(401, sessionExpiredMessage);
     }
-    final body = await _post('/api/v1/auth/refresh', {
-      'refresh_token': refreshToken,
-    });
+    late final Map<String, dynamic> body;
+    try {
+      body = await _post('/api/v1/auth/refresh', {
+        'refresh_token': refreshToken,
+      });
+    } on ApiException catch (error) {
+      if (!error.isUnauthorized) rethrow;
+      await _expireSession();
+      throw const ApiException(401, sessionExpiredMessage);
+    }
     final tokens = SessionTokens.fromJson(body);
     setSession(tokens);
+    await _persistSession?.call(tokens);
     return tokens;
   }
 
@@ -316,6 +377,82 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup {
         .toList();
   }
 
+  @override
+  Future<List<OwnerAsset>> ownerAssets({
+    String? status,
+    String? ownershipType,
+    String assetType = 'TIPPER',
+  }) async {
+    final query = <String, String>{
+      'asset_type': assetType,
+      if (status != null) 'status': status,
+      if (ownershipType != null) 'ownership_type': ownershipType,
+    };
+    final suffix =
+        '?${query.entries.map((entry) => '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}').join('&')}';
+    final response = await _request(
+      'GET',
+      '/api/v1/owner/assets$suffix',
+      authenticated: true,
+    );
+    return _jsonList(response).map(OwnerAsset.fromJson).toList();
+  }
+
+  @override
+  Future<OwnerAsset> ownerAsset(String assetId) async {
+    final response = await _request(
+      'GET',
+      '/api/v1/owner/assets/$assetId',
+      authenticated: true,
+    );
+    return OwnerAsset.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerAsset> createOwnerAsset(OwnerAssetInput input) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/assets',
+      authenticated: true,
+      body: input.toJson(includeAssetType: true),
+    );
+    return OwnerAsset.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerAsset> updateOwnerAsset(
+    String assetId,
+    OwnerAssetInput input,
+  ) async {
+    final response = await _request(
+      'PATCH',
+      '/api/v1/owner/assets/$assetId',
+      authenticated: true,
+      body: input.toJson(),
+    );
+    return OwnerAsset.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerAsset> deactivateOwnerAsset(String assetId) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/assets/$assetId/deactivate',
+      authenticated: true,
+    );
+    return OwnerAsset.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerAsset> reactivateOwnerAsset(String assetId) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/assets/$assetId/reactivate',
+      authenticated: true,
+    );
+    return OwnerAsset.fromJson(_json(response));
+  }
+
   Future<Uint8List> evidenceBytes(
     String eventId, {
     required String role,
@@ -354,9 +491,22 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup {
   Future<String> uploadEvidence({
     required String clientEventUuid,
     required String evidencePath,
+  }) => _uploadEvidence(
+    clientEventUuid: clientEventUuid,
+    evidencePath: evidencePath,
+    retryAfterRefresh: true,
+  );
+
+  Future<String> _uploadEvidence({
+    required String clientEventUuid,
+    required String evidencePath,
+    required bool retryAfterRefresh,
   }) async {
     final token = _tokens?.accessToken;
-    if (token == null) throw const ApiException(401, 'session is missing');
+    if (token == null) {
+      await _expireSession();
+      throw const ApiException(401, sessionExpiredMessage);
+    }
     final mimeType = await evidenceMimeTypeForPath(evidencePath);
     final request =
         http.MultipartRequest(
@@ -377,6 +527,18 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup {
       materialized = await http.Response.fromStream(response);
     } on SocketException catch (error) {
       throw ApiException(503, error.message);
+    }
+    if (materialized.statusCode == 401) {
+      if (retryAfterRefresh) {
+        if (_tokens?.accessToken == token) await refreshSession();
+        return _uploadEvidence(
+          clientEventUuid: clientEventUuid,
+          evidencePath: evidencePath,
+          retryAfterRefresh: false,
+        );
+      }
+      await _expireSession();
+      throw const ApiException(401, sessionExpiredMessage);
     }
     _check(materialized);
     return (_json(materialized))['object_reference'] as String;
@@ -416,11 +578,17 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup {
     String path, {
     Map<String, dynamic>? body,
     bool authenticated = false,
+    bool retryAfterRefresh = true,
   }) async {
     final headers = <String, String>{'Content-Type': 'application/json'};
+    String? requestAccessToken;
     if (authenticated) {
       final token = _tokens?.accessToken;
-      if (token == null) throw const ApiException(401, 'session is missing');
+      if (token == null) {
+        await _expireSession();
+        throw const ApiException(401, sessionExpiredMessage);
+      }
+      requestAccessToken = token;
       headers['Authorization'] = 'Bearer $token';
     }
     final encoded = body == null ? null : jsonEncode(body);
@@ -430,11 +598,47 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup {
         ..body = encoded ?? '';
       final streamed = await _client.send(request);
       final response = await http.Response.fromStream(streamed);
+      if (authenticated && response.statusCode == 401) {
+        if (retryAfterRefresh) {
+          if (_tokens?.accessToken == requestAccessToken) {
+            await refreshSession();
+          }
+          return await _request(
+            method,
+            path,
+            body: body,
+            authenticated: true,
+            retryAfterRefresh: false,
+          );
+        }
+        await _expireSession();
+        throw const ApiException(401, sessionExpiredMessage);
+      }
       _check(response);
       return response;
     } on SocketException catch (error) {
       throw ApiException(503, error.message);
     }
+  }
+
+  Future<void> _expireSession() async {
+    clearSession();
+    final activeExpiration = _expirationInFlight;
+    if (activeExpiration != null) return activeExpiration;
+
+    final expiration = _notifySessionExpired();
+    _expirationInFlight = expiration;
+    try {
+      await expiration;
+    } finally {
+      if (identical(_expirationInFlight, expiration)) {
+        _expirationInFlight = null;
+      }
+    }
+  }
+
+  Future<void> _notifySessionExpired() async {
+    await _sessionExpiredHandler?.call();
   }
 
   Uri _uri(String path) => Uri.parse('$_baseUrl$path');

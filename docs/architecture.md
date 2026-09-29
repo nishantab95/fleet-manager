@@ -109,10 +109,14 @@ token to localStorage.
 The driver client captures exactly four event types. It stores an immutable
 assignment snapshot and client event UUID in a local Drift queue before any
 network call. Sync uploads required private evidence first, submits the event
-envelope second, refreshes an access token at most once per attempt, and keeps
-retryable failures in the queue with bounded delay. Secure storage holds mobile
-session tokens and the installation identifier; event payloads do not contain
-company IDs supplied by the user.
+envelope second, and keeps retryable failures in the queue with bounded delay.
+The shared mobile API client handles Driver, Supervisor, and Owner authentication:
+one access-token `401` starts one single-flight refresh, persists rotated tokens
+to secure storage, and retries the original request once. A failed refresh or a
+second `401` clears local authentication and returns the nested UI to login;
+requests never loop. Secure storage holds mobile session tokens and the
+installation identifier; event payloads do not contain company IDs supplied by
+the user.
 
 The backend derives the assignment from the authenticated driver and event
 timestamp. It registers an installation-scoped device, enforces the
@@ -256,3 +260,26 @@ Evidence MIME is derived from the file signature and checked against any known
 extension before upload. The client sends only `image/jpeg`, `image/png`, or
 `image/webp`; the backend remains responsible for its existing MIME, size, and
 signature validation.
+
+## Phase 1B.1 Owner Fleet management boundary
+
+Owner Fleet management is a dedicated `/api/v1/owner/assets` surface rather
+than unrestricted generic administration. Every route requires an active
+`OWNER_ADMIN` membership and derives company scope from that authenticated
+membership. Driver and Supervisor sessions receive `403`, while foreign asset
+identifiers resolve to the same tenant-scoped `404` used by other management
+services.
+
+Creation is intentionally limited to `TIPPER` in this phase. Owned and rented
+tippers share the same canonical `FleetAsset` record and operational
+capabilities; ownership never selects a different Driver workflow. Rented
+assets require a rental party, while changing an asset to owned clears all
+rental-only fields. Edits update the existing UUID so assignments, duty
+sessions, events, evidence, verification history, and reports remain linked.
+
+Deactivation is a status transition, never a delete. It is rejected while the
+asset has an effective assignment or active duty session. The mobile Owner
+Fleet tab consumes this API through one reusable, type-aware card and
+virtualized scrolling. Assignment identity is read-only here; assignment
+mutation remains Phase 1B.2. The PC Fleet CRUD UI is intentionally deferred to
+avoid creating a second incomplete management surface in this phase.

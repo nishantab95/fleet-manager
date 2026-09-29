@@ -10,7 +10,7 @@ import 'domain/role_models.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final sessionStore = SecureSessionStore();
-  final api = ApiClient();
+  final api = ApiClient(persistSession: sessionStore.save);
   if (isPilotBuild) {
     final pilotBaseUrl = await sessionStore.readPilotBaseUrl();
     if (pilotBaseUrl != null && pilotBaseUrl.isNotEmpty) {
@@ -29,10 +29,6 @@ Future<void> main() async {
     database: database,
     remote: api,
     installationIdentifier: installationIdentifier,
-    refreshSession: () async {
-      final refreshed = await api.refreshSession();
-      await sessionStore.save(refreshed);
-    },
   );
   runApp(
     FleetManagerApp(

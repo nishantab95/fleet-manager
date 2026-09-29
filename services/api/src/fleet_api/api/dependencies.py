@@ -26,6 +26,7 @@ from fleet_api.domain.errors import (
     RoleViolationError,
     TenantConsistencyError,
 )
+from fleet_api.domain.owner_assets import OwnerAssetService
 from fleet_api.storage.objects import ObjectStorage, build_object_storage
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -115,6 +116,18 @@ def get_admin_service(
         context,
         request_id=request.headers.get("x-request-id"),
         phone_default_region=settings.phone_default_region,
+    )
+
+
+def get_owner_asset_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> OwnerAssetService:
+    return OwnerAssetService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
     )
 
 

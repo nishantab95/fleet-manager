@@ -350,6 +350,133 @@ class OwnerDutyReport {
       );
 }
 
+class OwnerAssetAssignment {
+  const OwnerAssetAssignment({
+    required this.assignmentId,
+    required this.siteId,
+    required this.siteName,
+    required this.driverMembershipId,
+    required this.driverName,
+  });
+
+  final String assignmentId;
+  final String siteId;
+  final String siteName;
+  final String driverMembershipId;
+  final String driverName;
+
+  factory OwnerAssetAssignment.fromJson(Map<String, dynamic> json) =>
+      OwnerAssetAssignment(
+        assignmentId: '${json['assignment_id']}',
+        siteId: '${json['site_id']}',
+        siteName: '${json['site_name'] ?? 'Site'}',
+        driverMembershipId: '${json['driver_membership_id']}',
+        driverName: '${json['driver_name'] ?? 'Driver'}',
+      );
+}
+
+class OwnerAsset {
+  const OwnerAsset({
+    required this.id,
+    required this.assetCode,
+    required this.assetType,
+    required this.ownershipType,
+    required this.registrationNumber,
+    required this.shortName,
+    required this.manufacturer,
+    required this.model,
+    required this.status,
+    required this.rentalPartyName,
+    required this.rentalStartDate,
+    required this.rentalEndDate,
+    required this.hasActiveAssignment,
+    required this.activeAssignment,
+  });
+
+  final String id;
+  final String assetCode;
+  final String assetType;
+  final String ownershipType;
+  final String? registrationNumber;
+  final String? shortName;
+  final String? manufacturer;
+  final String? model;
+  final String status;
+  final String? rentalPartyName;
+  final DateTime? rentalStartDate;
+  final DateTime? rentalEndDate;
+  final bool hasActiveAssignment;
+  final OwnerAssetAssignment? activeAssignment;
+
+  bool get isOwned => ownershipType == 'OWNED';
+  bool get isRented => ownershipType == 'RENTED';
+  bool get isActive => status == 'ACTIVE';
+
+  factory OwnerAsset.fromJson(Map<String, dynamic> json) {
+    final assignment = json['active_assignment'];
+    return OwnerAsset(
+      id: '${json['id']}',
+      assetCode: '${json['asset_code'] ?? ''}',
+      assetType: '${json['asset_type'] ?? 'TIPPER'}',
+      ownershipType: '${json['ownership_type'] ?? 'OWNED'}',
+      registrationNumber: json['registration_number'] as String?,
+      shortName: json['short_name'] as String?,
+      manufacturer: json['manufacturer'] as String?,
+      model: json['model'] as String?,
+      status: '${json['status'] ?? 'ACTIVE'}',
+      rentalPartyName: json['rental_party_name'] as String?,
+      rentalStartDate: _date(json['rental_start_date']),
+      rentalEndDate: _date(json['rental_end_date']),
+      hasActiveAssignment: json['has_active_assignment'] == true,
+      activeAssignment: assignment is Map<String, dynamic>
+          ? OwnerAssetAssignment.fromJson(assignment)
+          : null,
+    );
+  }
+}
+
+class OwnerAssetInput {
+  const OwnerAssetInput({
+    required this.assetCode,
+    required this.registrationNumber,
+    required this.shortName,
+    required this.ownershipType,
+    this.manufacturer,
+    this.model,
+    this.rentalPartyName,
+    this.rentalStartDate,
+    this.rentalEndDate,
+  });
+
+  final String assetCode;
+  final String registrationNumber;
+  final String? shortName;
+  final String ownershipType;
+  final String? manufacturer;
+  final String? model;
+  final String? rentalPartyName;
+  final DateTime? rentalStartDate;
+  final DateTime? rentalEndDate;
+
+  Map<String, dynamic> toJson({bool includeAssetType = false}) =>
+      <String, dynamic>{
+        if (includeAssetType) 'asset_type': 'TIPPER',
+        'asset_code': assetCode,
+        'registration_number': registrationNumber,
+        'short_name': shortName,
+        'ownership_type': ownershipType,
+        'manufacturer': manufacturer,
+        'model': model,
+        'rental_party_name': ownershipType == 'RENTED' ? rentalPartyName : null,
+        'rental_start_date': ownershipType == 'RENTED'
+            ? _wireDate(rentalStartDate)
+            : null,
+        'rental_end_date': ownershipType == 'RENTED'
+            ? _wireDate(rentalEndDate)
+            : null,
+      };
+}
+
 DateTime? _date(Object? value) =>
     value is String ? DateTime.tryParse(value) : null;
 double? _number(Object? value) => switch (value) {
@@ -363,6 +490,8 @@ int _int(Object? value) => switch (value) {
   String v => int.tryParse(v) ?? 0,
   _ => 0,
 };
+
+String? _wireDate(DateTime? value) => value?.toIso8601String().substring(0, 10);
 
 // Kept as a named type so the evidence viewer can expose its authenticated bytes
 // without ever exposing object-storage URLs to the UI.
