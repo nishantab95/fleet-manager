@@ -49,7 +49,7 @@ class _OwnerFleetScreenState extends State<OwnerFleetScreen> {
       });
     }
     try {
-      final assets = await widget.api.ownerAssets(assetType: 'TIPPER');
+      final assets = await widget.api.ownerAssets();
       if (!mounted) return;
       setState(() => _assets = assets);
     } on ApiException catch (error) {
@@ -99,6 +99,16 @@ class _OwnerFleetScreenState extends State<OwnerFleetScreen> {
       ),
     );
     if (saved != null) await _load();
+  }
+
+  Future<void> _assign(OwnerAsset asset) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) =>
+            OwnerAssetDeploymentScreen(api: widget.api, asset: asset),
+      ),
+    );
+    if (changed == true) await _load();
   }
 
   Future<void> _view(OwnerAsset asset) async {
@@ -232,6 +242,7 @@ class _OwnerFleetScreenState extends State<OwnerFleetScreen> {
                     asset: asset,
                     onView: () => _view(asset),
                     onEdit: () => _edit(asset),
+                    onAssign: () => _assign(asset),
                   );
                 },
               ),
@@ -272,16 +283,19 @@ class OwnerAssetCard extends StatelessWidget {
     required this.asset,
     required this.onView,
     required this.onEdit,
+    required this.onAssign,
     super.key,
   });
 
   final OwnerAsset asset;
   final VoidCallback onView;
   final VoidCallback onEdit;
+  final VoidCallback onAssign;
 
   @override
   Widget build(BuildContext context) {
     final assignment = asset.activeAssignment;
+    final deployment = asset.currentDeployment;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       clipBehavior: Clip.antiAlias,
@@ -322,15 +336,20 @@ class OwnerAssetCard extends StatelessWidget {
                 asset.rentalPartyName!,
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-            if (assignment != null) ...[
-              Text(assignment.siteName),
-              Text('Driver: ${assignment.driverName}'),
-            ] else
-              const Text('No active assignment'),
+            Text('Site: ${deployment?.siteName ?? 'Not assigned'}'),
+            Text('Driver: ${assignment?.driverName ?? 'Unassigned'}'),
             const SizedBox(height: 10),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                if (asset.isActive && deployment == null) ...[
+                  OutlinedButton(
+                    key: Key('assign-site-${asset.id}'),
+                    onPressed: onAssign,
+                    child: const Text('ASSIGN TO SITE'),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 OutlinedButton(onPressed: onView, child: const Text('VIEW')),
                 const SizedBox(width: 8),
                 FilledButton.tonal(
@@ -722,9 +741,40 @@ class _OwnerAssetDetailScreenState extends State<OwnerAssetDetailScreen> {
     }
   }
 
+  Future<void> _changeDeployment() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) =>
+            OwnerAssetDeploymentScreen(api: widget.api, asset: _asset),
+      ),
+    );
+    if (changed == true) await _reload();
+  }
+
+  Future<void> _removeDeployment() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.api.removeOwnerAssetDeployment(_asset.id);
+      await _reload();
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reload() async {
+    final updated = await widget.api.ownerAsset(_asset.id);
+    if (mounted) setState(() => _asset = updated);
+  }
+
   @override
   Widget build(BuildContext context) {
     final assignment = _asset.activeAssignment;
+    final deployment = _asset.currentDeployment;
     return Scaffold(
       appBar: AppBar(title: const Text('ASSET DETAIL')),
       body: ListView(
@@ -762,7 +812,42 @@ class _OwnerAssetDetailScreenState extends State<OwnerAssetDetailScreen> {
             },
           ),
           _DetailSection(
-            title: 'Current assignment',
+            title: 'DEPLOYMENT',
+            rows: deployment == null
+                ? const {'Current Site': 'Not assigned'}
+                : {
+                    'Current Site': deployment.siteName,
+                    'Since': _dateText(deployment.startsAt),
+                  },
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.tonal(
+                  key: const Key('asset-deployment-action'),
+                  onPressed: _busy || !_asset.isActive
+                      ? null
+                      : _changeDeployment,
+                  child: Text(
+                    deployment == null ? 'ASSIGN TO SITE' : 'MOVE SITE',
+                  ),
+                ),
+              ),
+              if (deployment != null) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton(
+                    key: const Key('remove-site-deployment'),
+                    onPressed: _busy ? null : _removeDeployment,
+                    child: const Text('REMOVE FROM SITE'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          _DetailSection(
+            title: 'Current Driver assignment',
             rows: assignment == null
                 ? const {'Status': 'No active assignment'}
                 : {
@@ -796,6 +881,155 @@ class _OwnerAssetDetailScreenState extends State<OwnerAssetDetailScreen> {
       ),
     );
   }
+}
+
+class OwnerAssetDeploymentScreen extends StatefulWidget {
+  const OwnerAssetDeploymentScreen({
+    required this.api,
+    required this.asset,
+    this.fixedSite,
+    super.key,
+  });
+
+  final OwnerAssetApi api;
+  final OwnerAsset asset;
+  final OwnerManagedSite? fixedSite;
+
+  @override
+  State<OwnerAssetDeploymentScreen> createState() =>
+      _OwnerAssetDeploymentScreenState();
+}
+
+class _OwnerAssetDeploymentScreenState
+    extends State<OwnerAssetDeploymentScreen> {
+  List<OwnerManagedSite> _sites = const [];
+  String? _selectedSite;
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedSite = widget.fixedSite?.id;
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final sites = await widget.api.ownerDeploymentSites();
+      if (mounted) {
+        setState(() {
+          _sites = sites
+              .where(
+                (site) =>
+                    site.isActive &&
+                    site.id != widget.asset.currentDeployment?.siteId,
+              )
+              .toList();
+          _loading = false;
+        });
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = error.message;
+        });
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    final siteId = _selectedSite;
+    if (siteId == null) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.api.deployOwnerAsset(widget.asset.id, siteId);
+      if (mounted) Navigator.pop(context, true);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: Text(
+        widget.asset.currentDeployment == null ? 'ASSIGN TO SITE' : 'MOVE SITE',
+      ),
+    ),
+    body: ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('Asset', style: Theme.of(context).textTheme.labelLarge),
+        Text(
+          '${widget.asset.assetCode} / '
+          '${widget.asset.registrationNumber ?? widget.asset.shortName ?? widget.asset.assetCode}',
+          key: const Key('deployment-asset'),
+        ),
+        const SizedBox(height: 18),
+        if (_loading)
+          const LinearProgressIndicator()
+        else if (widget.fixedSite != null)
+          InputDecorator(
+            decoration: const InputDecoration(labelText: 'Site'),
+            child: Text(widget.fixedSite!.name),
+          )
+        else
+          DropdownButtonFormField<String>(
+            key: const Key('deployment-site'),
+            initialValue: _selectedSite,
+            decoration: const InputDecoration(labelText: 'Site'),
+            items: _sites
+                .map(
+                  (site) =>
+                      DropdownMenuItem(value: site.id, child: Text(site.name)),
+                )
+                .toList(),
+            onChanged: (value) => setState(() => _selectedSite = value),
+          ),
+        if (!_loading && _sites.isEmpty && widget.fixedSite == null)
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: Text('No active destination Sites are available.'),
+          ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(
+              _error!,
+              key: const Key('deployment-error'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _saving ? null : () => Navigator.pop(context),
+                child: const Text('CANCEL'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton(
+                key: const Key('confirm-deployment'),
+                onPressed: _saving || _selectedSite == null ? null : _save,
+                child: Text(_saving ? 'SAVING…' : 'ASSIGN'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
 }
 
 class _DetailSection extends StatelessWidget {

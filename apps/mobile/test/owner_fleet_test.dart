@@ -120,6 +120,72 @@ void main() {
     expect(find.text('DEACTIVATE'), findsOneWidget);
   });
 
+  testWidgets('fleet cards show deployment and assign an undeployed asset', (
+    tester,
+  ) async {
+    final api = _FakeOwnerAssetApi([_asset(1), _asset(2, deployed: false)]);
+    await _pumpFleet(tester, api);
+
+    expect(find.text('Site: Pilot Site'), findsOneWidget);
+    expect(find.text('Driver: Ramesh'), findsOneWidget);
+    expect(find.text('Site: Not assigned'), findsOneWidget);
+    expect(find.text('Driver: Unassigned'), findsOneWidget);
+
+    await tester.drag(
+      find.byKey(const Key('owner-fleet-scroll')),
+      const Offset(0, -350),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('assign-site-2')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('deployment-site')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pilot Site').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-deployment')));
+    await tester.pumpAndSettle();
+
+    expect(api.deployedAssetIds, ['2']);
+    expect(find.text('Site: Pilot Site'), findsNWidgets(2));
+  });
+
+  testWidgets('asset detail moves and removes its Site deployment', (
+    tester,
+  ) async {
+    final api = _FakeOwnerAssetApi([_asset(4, deployed: true)]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OwnerAssetDetailScreen(api: api, asset: api.assets.single),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('asset-deployment-action')),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byKey(const Key('asset-deployment-action')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('deployment-site')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Second Site').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-deployment')));
+    await tester.pumpAndSettle();
+    expect(api.deployedSiteIds.last, 'site-2');
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('remove-site-deployment')),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byKey(const Key('remove-site-deployment')));
+    await tester.pumpAndSettle();
+    expect(api.removedAssetIds, ['4']);
+    expect(find.text('Not assigned'), findsWidgets);
+  });
+
   testWidgets('fleet and form show API errors', (tester) async {
     final api = _FakeOwnerAssetApi([])..listError = 'Fleet service unavailable';
     await _pumpFleet(tester, api);
@@ -178,6 +244,7 @@ OwnerAsset _asset(
   String ownership = 'OWNED',
   String status = 'ACTIVE',
   String? rentalParty,
+  bool? deployed,
 }) => OwnerAsset.fromJson({
   'id': '$index',
   'asset_code': 'TIPPER-$index',
@@ -191,6 +258,16 @@ OwnerAsset _asset(
   'rental_party_name': rentalParty,
   'rental_start_date': ownership == 'RENTED' ? '2026-09-01' : null,
   'rental_end_date': null,
+  'current_deployment': (deployed ?? index == 1)
+      ? {
+          'id': 'deployment-$index',
+          'asset_id': '$index',
+          'site_id': 'site-1',
+          'site_name': 'Pilot Site',
+          'starts_at': '2026-09-29T00:00:00Z',
+          'ends_at': null,
+        }
+      : null,
   'has_active_assignment': index == 1,
   'active_assignment': index == 1
       ? {
@@ -214,12 +291,15 @@ class _FakeOwnerAssetApi implements OwnerAssetApi {
   String? saveError;
   int deactivated = 0;
   int reactivated = 0;
+  final List<String> deployedAssetIds = [];
+  final List<String> deployedSiteIds = [];
+  final List<String> removedAssetIds = [];
 
   @override
   Future<List<OwnerAsset>> ownerAssets({
     String? status,
     String? ownershipType,
-    String assetType = 'TIPPER',
+    String? assetType,
   }) async {
     if (listError != null) throw ApiException(503, listError!);
     return List<OwnerAsset>.of(assets);
@@ -280,6 +360,56 @@ class _FakeOwnerAssetApi implements OwnerAssetApi {
     );
   }
 
+  @override
+  Future<List<OwnerManagedSite>> ownerDeploymentSites() async => [
+    _site('site-1', 'Pilot Site'),
+    _site('site-2', 'Second Site'),
+  ];
+
+  @override
+  Future<List<SiteDeployedAsset>> ownerSiteAssets(String siteId) async => [];
+
+  @override
+  Future<AssetSiteDeployment> deployOwnerAsset(
+    String assetId,
+    String siteId,
+  ) async {
+    deployedAssetIds.add(assetId);
+    deployedSiteIds.add(siteId);
+    final index = assets.indexWhere((asset) => asset.id == assetId);
+    final existing = assets[index];
+    final site = (await ownerDeploymentSites()).firstWhere(
+      (item) => item.id == siteId,
+    );
+    final deployment = AssetSiteDeployment.fromJson({
+      'id': 'deployment-${deployedAssetIds.length}',
+      'asset_id': assetId,
+      'site_id': siteId,
+      'site_name': site.name,
+      'starts_at': '2026-09-29T00:00:00Z',
+      'ends_at': null,
+    });
+    assets[index] = _copyAsset(existing, deployment: deployment);
+    return deployment;
+  }
+
+  @override
+  Future<AssetSiteDeployment> removeOwnerAssetDeployment(String assetId) async {
+    removedAssetIds.add(assetId);
+    final index = assets.indexWhere((asset) => asset.id == assetId);
+    final existing = assets[index];
+    final previous = existing.currentDeployment!;
+    assets[index] = _copyAsset(existing, deployment: null);
+    return AssetSiteDeployment(
+      id: previous.id,
+      assetId: assetId,
+      siteId: previous.siteId,
+      siteName: previous.siteName,
+      startsAt: previous.startsAt,
+      endsAt: DateTime(2026, 9, 30),
+    );
+  }
+
   OwnerAsset _statusAsset(OwnerAsset asset, String status) =>
       OwnerAsset.fromJson({
         'id': asset.id,
@@ -294,7 +424,57 @@ class _FakeOwnerAssetApi implements OwnerAssetApi {
         'rental_party_name': asset.rentalPartyName,
         'rental_start_date': asset.rentalStartDate?.toIso8601String(),
         'rental_end_date': asset.rentalEndDate?.toIso8601String(),
+        'current_deployment': asset.currentDeployment == null
+            ? null
+            : _deploymentJson(asset.currentDeployment!),
         'has_active_assignment': false,
         'active_assignment': null,
       });
 }
+
+OwnerManagedSite _site(String id, String name) => OwnerManagedSite.fromJson({
+  'id': id,
+  'name': name,
+  'code': id.toUpperCase(),
+  'status': 'ACTIVE',
+  'supervisors': <dynamic>[],
+  'asset_count': 0,
+});
+
+OwnerAsset _copyAsset(
+  OwnerAsset asset, {
+  required AssetSiteDeployment? deployment,
+}) => OwnerAsset.fromJson({
+  'id': asset.id,
+  'asset_code': asset.assetCode,
+  'asset_type': asset.assetType,
+  'ownership_type': asset.ownershipType,
+  'registration_number': asset.registrationNumber,
+  'short_name': asset.shortName,
+  'manufacturer': asset.manufacturer,
+  'model': asset.model,
+  'status': asset.status,
+  'rental_party_name': asset.rentalPartyName,
+  'rental_start_date': asset.rentalStartDate?.toIso8601String(),
+  'rental_end_date': asset.rentalEndDate?.toIso8601String(),
+  'current_deployment': deployment == null ? null : _deploymentJson(deployment),
+  'has_active_assignment': asset.hasActiveAssignment,
+  'active_assignment': asset.activeAssignment == null
+      ? null
+      : {
+          'assignment_id': asset.activeAssignment!.assignmentId,
+          'site_id': asset.activeAssignment!.siteId,
+          'site_name': asset.activeAssignment!.siteName,
+          'driver_membership_id': asset.activeAssignment!.driverMembershipId,
+          'driver_name': asset.activeAssignment!.driverName,
+        },
+});
+
+Map<String, dynamic> _deploymentJson(AssetSiteDeployment deployment) => {
+  'id': deployment.id,
+  'asset_id': deployment.assetId,
+  'site_id': deployment.siteId,
+  'site_name': deployment.siteName,
+  'starts_at': deployment.startsAt?.toIso8601String(),
+  'ends_at': deployment.endsAt?.toIso8601String(),
+};

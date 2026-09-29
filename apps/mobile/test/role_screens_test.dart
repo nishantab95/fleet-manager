@@ -18,8 +18,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('EMERGENCIES'), findsOneWidget);
-      expect(find.text('SITES / TIPPERS'), findsOneWidget);
-      expect(find.text('PILOT-12'), findsOneWidget);
+      expect(find.text('SITES / ASSETS'), findsOneWidget);
+      expect(find.text('PILOT-12'), findsWidgets);
+      expect(find.text('EXC-07'), findsOneWidget);
+      expect(find.text('Unassigned'), findsOneWidget);
       expect(find.text('OPEN EMERGENCIES'), findsOneWidget);
       expect(find.text('ACKNOWLEDGE'), findsOneWidget);
     },
@@ -38,10 +40,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('1 pending'), findsOneWidget);
-      await tester.tap(find.text('PILOT-12'));
+      expect(find.text('1 pending'), findsNWidgets(2));
+      await tester.tap(find.text('PILOT-12').last);
       await tester.pumpAndSettle();
-      expect(find.text('1 pending'), findsOneWidget);
+      expect(find.text('1 pending'), findsNWidgets(2));
       await tester.tap(find.text('APPROVE'));
       await tester.pumpAndSettle();
 
@@ -106,7 +108,7 @@ class _FakeRoleApi extends ApiClient {
   Future<List<OwnerAsset>> ownerAssets({
     String? status,
     String? ownershipType,
-    String assetType = 'TIPPER',
+    String? assetType,
   }) async => [
     OwnerAsset.fromJson({
       'id': 'pilot-asset',
@@ -152,6 +154,52 @@ class _FakeRoleApi extends ApiClient {
 
   @override
   Future<List<SupervisorSite>> supervisorSites() async => [_site];
+
+  @override
+  Future<List<SiteDeployedAsset>> supervisorSiteAssets(String siteId) async => [
+    SiteDeployedAsset.fromJson({
+      'asset_id': 'pilot-asset',
+      'asset_code': 'TIPPER-12',
+      'asset_type': 'TIPPER',
+      'ownership_type': 'OWNED',
+      'registration_number': 'PILOT-12',
+      'short_name': 'Tipper 12',
+      'status': 'ACTIVE',
+      'current_deployment': {
+        'id': 'deployment-1',
+        'asset_id': 'pilot-asset',
+        'site_id': siteId,
+        'site_name': 'Pilot Site',
+        'starts_at': '2026-09-25T05:00:00Z',
+        'ends_at': null,
+      },
+      'driver_membership_id': 'driver-1',
+      'driver_name': 'Pilot Driver',
+      'duty_status': 'ACTIVE',
+      'pending_review_count': 1,
+    }),
+    SiteDeployedAsset.fromJson({
+      'asset_id': 'excavator-7',
+      'asset_code': 'EXCAVATOR-07',
+      'asset_type': 'EXCAVATOR',
+      'ownership_type': 'RENTED',
+      'registration_number': 'EXC-07',
+      'short_name': 'Excavator 7',
+      'status': 'ACTIVE',
+      'current_deployment': {
+        'id': 'deployment-2',
+        'asset_id': 'excavator-7',
+        'site_id': siteId,
+        'site_name': 'Pilot Site',
+        'starts_at': '2026-09-26T05:00:00Z',
+        'ends_at': null,
+      },
+      'driver_membership_id': null,
+      'driver_name': null,
+      'duty_status': null,
+      'pending_review_count': 0,
+    }),
+  ];
 
   @override
   Future<List<SupervisorEvent>> supervisorEvents(

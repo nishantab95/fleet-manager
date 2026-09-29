@@ -213,3 +213,22 @@ local duty, and the server independently rejects an active duty for the old
 binding. Installation identifiers are unique only within a company, preventing
 an identifier learned in another tenant from claiming that tenant's device.
 Tokens and OTP values are never written to handover audit records.
+
+## Fleet Asset deployment controls
+
+- Deployment reads and mutations require an active `OWNER_ADMIN` membership;
+  company identifiers are never accepted from the client. Foreign asset and
+  Site identifiers resolve through tenant-scoped lookups.
+- The server requires both the asset and target Site to be active. PostgreSQL
+  uniqueness and exclusion constraints protect the one-current, non-overlapping
+  deployment invariant during concurrent requests.
+- Move and remove operations lock the current relationship and reject active
+  Assignments or duties. Site and asset deactivation require explicit removal,
+  preventing a hidden live placement.
+- Supervisor asset lists require existing same-company Site access and expose
+  only active assets currently deployed to that Site. Driver sessions cannot
+  call Owner deployment mutations.
+- Deploy, move, and remove operations write `ASSET_DEPLOYED_TO_SITE`,
+  `ASSET_MOVED_SITE`, and `ASSET_REMOVED_FROM_SITE` audit entries with old and
+  new Site identifiers. Credentials, tokens, evidence bytes, and local runtime
+  data are never recorded.

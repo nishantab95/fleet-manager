@@ -181,6 +181,24 @@ append-only and requires an owner reason.
 29. Supervisor-to-Site access is tenant-consistent and unique per pair. New
     access requires both an active Site and an active Supervisor membership;
     grant and revoke actions are audited.
+30. `AssetSiteDeployment` is the effective-dated source of truth for physical
+    Fleet Asset placement. An asset has at most one current deployment and its
+    deployment intervals may not overlap; closed rows are retained as history.
+31. Deployment and Assignment are independent relationships. An active asset
+    may be deployed without a Driver or Supervisor, but any effective Assignment
+    must use the same Site as the asset's deployment.
+32. Only active assets may be deployed to active Sites. A move or removal is
+    rejected while the asset has an effective Assignment or active duty, and a
+    Site or asset with a current deployment must be explicitly cleared before
+    deactivation.
+33. Supervisor Site asset visibility is derived from current deployment and
+    `SupervisorSiteAccess`, not from event existence. Authorized Supervisors see
+    active deployed assets with nullable Driver/duty data; unauthorized Sites
+    remain inaccessible.
+34. Migration from Assignment history copies every historical interval into
+    deployment history without rewriting Assignment, duty, event, evidence, or
+    reporting ownership. Driver capture and report aggregation remain based on
+    their existing Assignment relationships.
 
 ## PC V1 emergency contract
 

@@ -31,6 +31,7 @@ class SupervisorHomeScreen extends StatefulWidget {
 class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
   List<SupervisorSite> _sites = const [];
   List<SupervisorEvent> _events = const [];
+  Map<String, List<SiteDeployedAsset>> _assetsBySite = const {};
   bool _loading = true;
   bool _offline = false;
   String? _error;
@@ -54,13 +55,19 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
     if (mounted) setState(() => _loading = true);
     try {
       final sites = await widget.api.supervisorSites();
-      final eventLists = await Future.wait(
-        sites.map((site) => widget.api.supervisorEvents(site.id)),
+      final siteData = await Future.wait(
+        sites.map(
+          (site) async => (
+            siteId: site.id,
+            events: await widget.api.supervisorEvents(site.id),
+            assets: await widget.api.supervisorSiteAssets(site.id),
+          ),
+        ),
       );
       if (!mounted) return;
       setState(() {
         _sites = sites;
-        _events = eventLists.expand((items) => items).toList()
+        _events = siteData.expand((item) => item.events).toList()
           ..sort((a, b) {
             if (a.isOpenEmergency != b.isOpenEmergency) {
               return a.isOpenEmergency ? -1 : 1;
@@ -69,6 +76,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
               a.deviceCreatedAt ?? DateTime(1970),
             );
           });
+        _assetsBySite = {for (final item in siteData) item.siteId: item.assets};
         _error = null;
         _offline = false;
       });
@@ -233,13 +241,14 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
                 ),
             const SizedBox(height: 18),
             Text(
-              'SITES / TIPPERS',
+              'SITES / ASSETS',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
             for (final site in _sites)
               _SiteTippers(
                 site: site,
+                assets: _assetsBySite[site.id] ?? const [],
                 events: _events
                     .where((event) => event.siteId == site.id)
                     .toList(),
@@ -269,6 +278,7 @@ class _SiteTippers extends StatelessWidget {
   const _SiteTippers({
     required this.site,
     required this.events,
+    required this.assets,
     required this.onVerify,
     required this.onCall,
     required this.onEvidence,
@@ -276,6 +286,7 @@ class _SiteTippers extends StatelessWidget {
 
   final SupervisorSite site;
   final List<SupervisorEvent> events;
+  final List<SiteDeployedAsset> assets;
   final Future<void> Function(SupervisorEvent event, String decision) onVerify;
   final Future<void> Function(String? phone) onCall;
   final Future<void> Function(SupervisorEvent event) onEvidence;
@@ -295,14 +306,36 @@ class _SiteTippers extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.w700),
         ),
         subtitle: Text(
-          '${grouped.length} tipper(s) · ${supervisorReviewPendingCount(events)} pending',
+          '${assets.length} asset(s) · ${supervisorReviewPendingCount(events)} pending',
         ),
         children: [
-          if (grouped.isEmpty)
+          if (assets.isEmpty)
             const Padding(
               padding: EdgeInsets.all(16),
-              child: Text('No operational events for this site.'),
+              child: Text('No assets are deployed to this Site.'),
             ),
+          if (assets.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'ASSETS',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ),
+            ),
+          for (final asset in assets)
+            ListTile(
+              key: Key('supervisor-site-asset-${asset.assetId}'),
+              leading: const Icon(Icons.local_shipping_outlined),
+              title: Text(asset.registrationNumber ?? asset.assetCode),
+              subtitle: Text(asset.driverName ?? 'Unassigned'),
+              trailing: asset.pendingReviewCount > 0
+                  ? Chip(label: Text('${asset.pendingReviewCount} pending'))
+                  : null,
+            ),
+          if (grouped.isNotEmpty) const Divider(height: 24),
           for (final entry in grouped.entries)
             _TipperGroup(
               registration: entry.key,
@@ -629,7 +662,11 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
           OwnerFleetScreen(api: widget.api, onUnauthorized: widget.onSignOut),
           OwnerPeopleScreen(api: widget.api, onUnauthorized: widget.onSignOut),
           _OwnerTippersBody(tippers: _tippers, onEvidence: _showEvidence),
-          OwnerSitesScreen(api: widget.api, onUnauthorized: widget.onSignOut),
+          OwnerSitesScreen(
+            api: widget.api,
+            assetApi: widget.api,
+            onUnauthorized: widget.onSignOut,
+          ),
           _OwnerAlertsBody(alerts: _alerts, onEvidence: _showEvidence),
           _OwnerReportsBody(
             date: _date,

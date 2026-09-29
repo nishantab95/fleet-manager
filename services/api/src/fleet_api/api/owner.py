@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import get_owner_asset_service
 from fleet_api.api.schemas import (
+    AssetSiteDeploymentResponse,
     OwnerAssetAssignmentResponse,
     OwnerAssetCreateRequest,
     OwnerAssetResponse,
@@ -41,6 +42,7 @@ def _fail(db: Session, exc: DomainError) -> NoReturn:
 
 def _response(view: OwnerAssetView) -> OwnerAssetResponse:
     assignment = view.active_assignment
+    deployment = view.current_deployment
     return OwnerAssetResponse(
         id=view.asset.id,
         asset_code=view.asset.asset_code,
@@ -54,6 +56,18 @@ def _response(view: OwnerAssetView) -> OwnerAssetResponse:
         rental_party_name=view.asset.rental_party_name,
         rental_start_date=view.asset.rental_start_date,
         rental_end_date=view.asset.rental_end_date,
+        current_deployment=(
+            AssetSiteDeploymentResponse(
+                id=deployment.deployment_id,
+                asset_id=view.asset.id,
+                site_id=deployment.site_id,
+                site_name=deployment.site_name,
+                starts_at=deployment.starts_at,
+                ends_at=None,
+            )
+            if deployment is not None
+            else None
+        ),
         has_active_assignment=assignment is not None,
         active_assignment=(
             OwnerAssetAssignmentResponse(

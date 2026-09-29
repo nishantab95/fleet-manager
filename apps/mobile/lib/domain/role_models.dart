@@ -375,6 +375,84 @@ class OwnerAssetAssignment {
       );
 }
 
+class AssetSiteDeployment {
+  const AssetSiteDeployment({
+    required this.id,
+    required this.assetId,
+    required this.siteId,
+    required this.siteName,
+    required this.startsAt,
+    this.endsAt,
+  });
+
+  final String id;
+  final String assetId;
+  final String siteId;
+  final String siteName;
+  final DateTime? startsAt;
+  final DateTime? endsAt;
+
+  bool get isCurrent => endsAt == null;
+
+  factory AssetSiteDeployment.fromJson(Map<String, dynamic> json) =>
+      AssetSiteDeployment(
+        id: '${json['id']}',
+        assetId: '${json['asset_id']}',
+        siteId: '${json['site_id']}',
+        siteName: '${json['site_name'] ?? 'Site'}',
+        startsAt: _date(json['starts_at']),
+        endsAt: _date(json['ends_at']),
+      );
+}
+
+class SiteDeployedAsset {
+  const SiteDeployedAsset({
+    required this.assetId,
+    required this.assetCode,
+    required this.assetType,
+    required this.ownershipType,
+    required this.registrationNumber,
+    required this.shortName,
+    required this.status,
+    required this.currentDeployment,
+    required this.driverMembershipId,
+    required this.driverName,
+    required this.dutyStatus,
+    required this.pendingReviewCount,
+  });
+
+  final String assetId;
+  final String assetCode;
+  final String assetType;
+  final String ownershipType;
+  final String? registrationNumber;
+  final String? shortName;
+  final String status;
+  final AssetSiteDeployment currentDeployment;
+  final String? driverMembershipId;
+  final String? driverName;
+  final String? dutyStatus;
+  final int pendingReviewCount;
+
+  factory SiteDeployedAsset.fromJson(Map<String, dynamic> json) =>
+      SiteDeployedAsset(
+        assetId: '${json['asset_id']}',
+        assetCode: '${json['asset_code'] ?? ''}',
+        assetType: '${json['asset_type'] ?? ''}',
+        ownershipType: '${json['ownership_type'] ?? ''}',
+        registrationNumber: json['registration_number'] as String?,
+        shortName: json['short_name'] as String?,
+        status: '${json['status'] ?? 'ACTIVE'}',
+        currentDeployment: AssetSiteDeployment.fromJson(
+          json['current_deployment'] as Map<String, dynamic>,
+        ),
+        driverMembershipId: json['driver_membership_id'] as String?,
+        driverName: json['driver_name'] as String?,
+        dutyStatus: json['duty_status'] as String?,
+        pendingReviewCount: _int(json['pending_review_count']),
+      );
+}
+
 class OwnerAsset {
   const OwnerAsset({
     required this.id,
@@ -389,6 +467,7 @@ class OwnerAsset {
     required this.rentalPartyName,
     required this.rentalStartDate,
     required this.rentalEndDate,
+    required this.currentDeployment,
     required this.hasActiveAssignment,
     required this.activeAssignment,
   });
@@ -405,6 +484,7 @@ class OwnerAsset {
   final String? rentalPartyName;
   final DateTime? rentalStartDate;
   final DateTime? rentalEndDate;
+  final AssetSiteDeployment? currentDeployment;
   final bool hasActiveAssignment;
   final OwnerAssetAssignment? activeAssignment;
 
@@ -414,6 +494,7 @@ class OwnerAsset {
 
   factory OwnerAsset.fromJson(Map<String, dynamic> json) {
     final assignment = json['active_assignment'];
+    final deployment = json['current_deployment'];
     return OwnerAsset(
       id: '${json['id']}',
       assetCode: '${json['asset_code'] ?? ''}',
@@ -427,6 +508,9 @@ class OwnerAsset {
       rentalPartyName: json['rental_party_name'] as String?,
       rentalStartDate: _date(json['rental_start_date']),
       rentalEndDate: _date(json['rental_end_date']),
+      currentDeployment: deployment is Map<String, dynamic>
+          ? AssetSiteDeployment.fromJson(deployment)
+          : null,
       hasActiveAssignment: json['has_active_assignment'] == true,
       activeAssignment: assignment is Map<String, dynamic>
           ? OwnerAssetAssignment.fromJson(assignment)

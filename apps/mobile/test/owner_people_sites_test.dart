@@ -57,6 +57,74 @@ void main() {
     expect(find.byKey(const Key('site-supervisor')), findsOneWidget);
   });
 
+  testWidgets(
+    'site detail lists deployed assets and deploys an available asset',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _FakePeopleSitesApi(
+        sites: [_site(1, assetCount: 20)],
+        assets: [_asset(21)],
+        siteAssets: [
+          for (var index = 1; index <= 20; index++) _siteAsset(index),
+        ],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: OwnerSitesScreen(api: api, assetApi: api),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('site-site-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('ASSETS — 20'), findsOneWidget);
+      expect(find.byKey(const Key('site-asset-asset-1')), findsOneWidget);
+      expect(find.textContaining('Driver: Unassigned'), findsWidgets);
+
+      await tester.tap(find.byKey(const Key('deploy-site-asset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('site-deploy-asset-selector')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ASSET-21 / REG-21').last);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('confirm-site-deploy')))
+            .onPressed,
+        isNotNull,
+      );
+      await tester.tap(find.byKey(const Key('confirm-site-deploy')));
+      await tester.pumpAndSettle();
+
+      expect(api.lastDeployment, ('asset-21', 'site-1'));
+      expect(find.text('ASSETS — 21'), findsOneWidget);
+      expect(find.byKey(const Key('site-asset-asset-21')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('five sites summarize one hundred deployed assets', (
+    tester,
+  ) async {
+    final api = _FakePeopleSitesApi(
+      sites: [
+        for (var index = 1; index <= 5; index++) _site(index, assetCount: 20),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: OwnerSitesScreen(api: api)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('20 active assets'), findsNWidgets(5));
+    expect(tester.takeException(), isNull);
+  });
+
   test('people and site mutations retry after shared token refresh', () async {
     var refreshes = 0;
     var protectedCalls = 0;
@@ -124,11 +192,19 @@ void main() {
   });
 }
 
-class _FakePeopleSitesApi implements OwnerPeopleSiteApi {
-  _FakePeopleSitesApi({this.people = const [], this.sites = const []});
+class _FakePeopleSitesApi implements OwnerPeopleSiteApi, OwnerAssetApi {
+  _FakePeopleSitesApi({
+    this.people = const [],
+    this.sites = const [],
+    this.assets = const [],
+    this.siteAssets = const [],
+  });
 
   List<OwnerPerson> people;
   List<OwnerManagedSite> sites;
+  List<OwnerAsset> assets;
+  List<SiteDeployedAsset> siteAssets;
+  (String, String)? lastDeployment;
 
   @override
   Future<List<OwnerPerson>> ownerPeople() async => people;
@@ -179,6 +255,80 @@ class _FakePeopleSitesApi implements OwnerPeopleSiteApi {
     String siteId,
     String membershipId,
   ) async => _site(999);
+
+  @override
+  Future<List<OwnerAsset>> ownerAssets({
+    String? status,
+    String? ownershipType,
+    String? assetType,
+  }) async => assets;
+
+  @override
+  Future<OwnerAsset> ownerAsset(String assetId) async =>
+      assets.firstWhere((asset) => asset.id == assetId);
+
+  @override
+  Future<OwnerAsset> createOwnerAsset(OwnerAssetInput input) async =>
+      _asset(999);
+
+  @override
+  Future<OwnerAsset> updateOwnerAsset(
+    String assetId,
+    OwnerAssetInput input,
+  ) async => ownerAsset(assetId);
+
+  @override
+  Future<OwnerAsset> deactivateOwnerAsset(String assetId) =>
+      ownerAsset(assetId);
+
+  @override
+  Future<OwnerAsset> reactivateOwnerAsset(String assetId) =>
+      ownerAsset(assetId);
+
+  @override
+  Future<List<OwnerManagedSite>> ownerDeploymentSites() async => sites;
+
+  @override
+  Future<List<SiteDeployedAsset>> ownerSiteAssets(String siteId) async =>
+      siteAssets
+          .where((asset) => asset.currentDeployment.siteId == siteId)
+          .toList();
+
+  @override
+  Future<AssetSiteDeployment> deployOwnerAsset(
+    String assetId,
+    String siteId,
+  ) async {
+    lastDeployment = (assetId, siteId);
+    final asset = assets.firstWhere((value) => value.id == assetId);
+    final deployment = _deployment(assetId, siteId);
+    siteAssets = [
+      ...siteAssets,
+      SiteDeployedAsset(
+        assetId: asset.id,
+        assetCode: asset.assetCode,
+        assetType: asset.assetType,
+        ownershipType: asset.ownershipType,
+        registrationNumber: asset.registrationNumber,
+        shortName: asset.shortName,
+        status: asset.status,
+        currentDeployment: deployment,
+        driverMembershipId: null,
+        driverName: null,
+        dutyStatus: null,
+        pendingReviewCount: 0,
+      ),
+    ];
+    assets = assets.where((value) => value.id != assetId).toList();
+    return deployment;
+  }
+
+  @override
+  Future<AssetSiteDeployment> removeOwnerAssetDeployment(
+    String assetId,
+  ) async => siteAssets
+      .firstWhere((asset) => asset.assetId == assetId)
+      .currentDeployment;
 }
 
 OwnerPerson _person(
@@ -203,10 +353,19 @@ Map<String, dynamic> _personJson(
   'has_active_duty': false,
 };
 
-OwnerManagedSite _site(int index, {String status = 'ACTIVE'}) =>
-    OwnerManagedSite.fromJson(_siteJson(index, status: status));
+OwnerManagedSite _site(
+  int index, {
+  String status = 'ACTIVE',
+  int assetCount = 0,
+}) => OwnerManagedSite.fromJson(
+  _siteJson(index, status: status, assetCount: assetCount),
+);
 
-Map<String, dynamic> _siteJson(int index, {String status = 'ACTIVE'}) => {
+Map<String, dynamic> _siteJson(
+  int index, {
+  String status = 'ACTIVE',
+  int assetCount = 0,
+}) => {
   'id': 'site-$index',
   'name': 'Site $index',
   'code': 'S-$index',
@@ -215,5 +374,57 @@ Map<String, dynamic> _siteJson(int index, {String status = 'ACTIVE'}) => {
   'longitude': null,
   'status': status,
   'supervisors': <dynamic>[],
-  'asset_count': 0,
+  'asset_count': assetCount,
 };
+
+AssetSiteDeployment _deployment(String assetId, String siteId) =>
+    AssetSiteDeployment.fromJson({
+      'id': 'deployment-$assetId-$siteId',
+      'asset_id': assetId,
+      'site_id': siteId,
+      'site_name': sitesLabel(siteId),
+      'starts_at': '2026-09-29T08:00:00Z',
+      'ends_at': null,
+    });
+
+String sitesLabel(String siteId) => 'Site ${siteId.replaceFirst('site-', '')}';
+
+OwnerAsset _asset(int index) => OwnerAsset.fromJson({
+  'id': 'asset-$index',
+  'asset_code': 'ASSET-$index',
+  'asset_type': index.isEven ? 'TIPPER' : 'EXCAVATOR',
+  'ownership_type': index.isEven ? 'OWNED' : 'RENTED',
+  'registration_number': 'REG-$index',
+  'short_name': 'Asset $index',
+  'manufacturer': null,
+  'model': null,
+  'status': 'ACTIVE',
+  'rental_party_name': index.isEven ? null : 'Rental Partner',
+  'rental_start_date': index.isEven ? null : '2026-09-01',
+  'rental_end_date': null,
+  'current_deployment': null,
+  'has_active_assignment': false,
+  'active_assignment': null,
+});
+
+SiteDeployedAsset _siteAsset(int index) => SiteDeployedAsset.fromJson({
+  'asset_id': 'asset-$index',
+  'asset_code': 'ASSET-$index',
+  'asset_type': index.isEven ? 'TIPPER' : 'EXCAVATOR',
+  'ownership_type': index.isEven ? 'OWNED' : 'RENTED',
+  'registration_number': 'REG-$index',
+  'short_name': 'Asset $index',
+  'status': 'ACTIVE',
+  'current_deployment': {
+    'id': 'deployment-$index-1',
+    'asset_id': 'asset-$index',
+    'site_id': 'site-1',
+    'site_name': 'Site 1',
+    'starts_at': '2026-09-29T08:00:00Z',
+    'ends_at': null,
+  },
+  'driver_membership_id': index == 1 ? 'driver-1' : null,
+  'driver_name': index == 1 ? 'Driver One' : null,
+  'duty_status': index == 1 ? 'ACTIVE' : null,
+  'pending_review_count': 0,
+});

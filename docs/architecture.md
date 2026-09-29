@@ -323,3 +323,28 @@ sync diagnostics by normalized server URL, company ID, and membership ID.
 Unscoped code-8 data is preserved and claimed by the server-reported previous
 binding before a handover. A different Driver never reads or submits another
 Driver's scoped records.
+
+## Phase 1B.2B Fleet Asset deployment boundary
+
+`AssetSiteDeployment` is the canonical, effective-dated relationship between a
+Fleet Asset and a Site. It is separate from `Assignment`: a Site placement may
+exist without a Driver, while Assignment continues to describe the operational
+Driver/Supervisor relationship. PostgreSQL enforces non-overlapping deployment
+intervals and at most one current deployment for an asset. Migration
+`0013_asset_site_deployments` backfills current and historical placement from
+existing Assignment history without changing Assignment, event, duty, evidence,
+or report rows.
+
+The Owner deployment service exposes current placement, history, deploy/move,
+remove, and Site asset-list operations. Company scope comes only from the
+authenticated Owner membership. Initial deployment selects only an active Site;
+Driver and Supervisor selection remain separate. Moving or removing an asset is
+blocked while an effective Assignment or active duty exists, and an effective
+Assignment can be created only when its Site agrees with the deployment.
+
+Owner Fleet cards and detail views show Site and Driver independently. Owner
+Site detail provides the alternate Site-first deployment flow. Supervisor Site
+views read the same relationship, so every active deployed asset is visible to
+an authorized Supervisor even when it has no Driver and no events. Event review
+and Driver reporting remain Assignment-based and retain their existing totals
+and behavior.

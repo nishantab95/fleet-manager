@@ -121,6 +121,55 @@ void main() {
     expect(counts, {'protected': 2, 'refresh': 1});
   });
 
+  test('Owner deployment mutation uses shared refresh and retry', () async {
+    final counts = <String, int>{};
+    final api = _refreshingApi(
+      role: 'OWNER_ADMIN',
+      protectedPath: '/api/v1/owner/assets/asset-1/deployment',
+      successBody: jsonEncode(_deploymentJson()),
+      counts: counts,
+    );
+
+    final deployment = await api.deployOwnerAsset('asset-1', 'site-1');
+
+    expect(deployment.assetId, 'asset-1');
+    expect(deployment.siteId, 'site-1');
+    expect(counts, {'protected': 2, 'refresh': 1});
+  });
+
+  test(
+    'Supervisor deployed asset request uses shared refresh and retry',
+    () async {
+      final counts = <String, int>{};
+      final api = _refreshingApi(
+        role: 'SUPERVISOR',
+        protectedPath: '/api/v1/supervisor/sites/site-1/assets',
+        successBody: jsonEncode([
+          {
+            'asset_id': 'asset-1',
+            'asset_code': 'TIPPER-1',
+            'asset_type': 'TIPPER',
+            'ownership_type': 'OWNED',
+            'registration_number': 'REG-1',
+            'short_name': 'Tipper 1',
+            'status': 'ACTIVE',
+            'current_deployment': _deploymentJson(),
+            'driver_membership_id': null,
+            'driver_name': null,
+            'duty_status': null,
+            'pending_review_count': 0,
+          },
+        ]),
+        counts: counts,
+      );
+
+      final assets = await api.supervisorSiteAssets('site-1');
+
+      expect(assets.single.driverName, isNull);
+      expect(counts, {'protected': 2, 'refresh': 1});
+    },
+  );
+
   test('Driver ordinary request refreshes and retries once', () async {
     final counts = <String, int>{};
     final api = _refreshingApi(
@@ -306,6 +355,15 @@ SessionTokens _tokens({
 
 http.Response _tokenResponse(SessionTokens tokens) =>
     http.Response(jsonEncode(tokens.toJson()), 200);
+
+Map<String, dynamic> _deploymentJson() => {
+  'id': 'deployment-1',
+  'asset_id': 'asset-1',
+  'site_id': 'site-1',
+  'site_name': 'Pilot Site',
+  'starts_at': '2026-09-29T08:00:00Z',
+  'ends_at': null,
+};
 
 Future<ApiException> _apiError(Future<Object?> request) async {
   try {

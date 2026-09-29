@@ -26,6 +26,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.domain.audit import write_audit_log
+from fleet_api.domain.deployments import DeployedAssetView, list_current_site_assets
 from fleet_api.domain.enums import EmergencyStatus, OperationalEventType, VerificationStatus
 from fleet_api.domain.errors import (
     ConflictError,
@@ -113,6 +114,14 @@ class SupervisorService:
                 )
                 .order_by(Site.name, Site.id)
             ).all()
+        )
+
+    def list_site_assets(self, site_id: UUID) -> list[DeployedAssetView]:
+        self._site(site_id)
+        return list_current_site_assets(
+            self.session,
+            company_id=self.context.company.id,
+            site_id=site_id,
         )
 
     def _event_query(

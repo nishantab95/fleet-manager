@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import get_app_settings, get_object_storage, require_supervisor
 from fleet_api.api.schemas import (
+    AssetSiteDeploymentResponse,
+    SiteDeployedAssetResponse,
     SupervisorBatchVerificationRequest,
     SupervisorBatchVerificationResponse,
     SupervisorCompletenessResponse,
@@ -115,6 +117,44 @@ def list_supervisor_sites(
                 status=site.status,
             )
             for site in _service(db, context).list_sites()
+        ]
+    except DomainError as exc:
+        _fail(exc)
+
+
+@router.get(
+    "/sites/{site_id}/assets",
+    response_model=list[SiteDeployedAssetResponse],
+)
+def list_supervisor_site_assets(
+    site_id: UUID,
+    context: Annotated[AuthContext, Depends(require_supervisor)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[SiteDeployedAssetResponse]:
+    try:
+        return [
+            SiteDeployedAssetResponse(
+                asset_id=view.asset.id,
+                asset_code=view.asset.asset_code,
+                asset_type=view.asset.asset_type,
+                ownership_type=view.asset.ownership_type,
+                registration_number=view.asset.registration_number,
+                short_name=view.asset.short_name,
+                status=view.asset.status,
+                current_deployment=AssetSiteDeploymentResponse(
+                    id=view.deployment.id,
+                    asset_id=view.asset.id,
+                    site_id=view.deployment.site_id,
+                    site_name=view.site_name,
+                    starts_at=view.deployment.starts_at,
+                    ends_at=view.deployment.ends_at,
+                ),
+                driver_membership_id=view.driver_membership_id,
+                driver_name=view.driver_name,
+                duty_status=view.duty_status,
+                pending_review_count=view.pending_review_count,
+            )
+            for view in _service(db, context).list_site_assets(site_id)
         ]
     except DomainError as exc:
         _fail(exc)

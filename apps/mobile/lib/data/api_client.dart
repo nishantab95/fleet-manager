@@ -71,7 +71,7 @@ abstract class OwnerAssetApi {
   Future<List<OwnerAsset>> ownerAssets({
     String? status,
     String? ownershipType,
-    String assetType = 'TIPPER',
+    String? assetType,
   });
 
   Future<OwnerAsset> ownerAsset(String assetId);
@@ -83,6 +83,14 @@ abstract class OwnerAssetApi {
   Future<OwnerAsset> deactivateOwnerAsset(String assetId);
 
   Future<OwnerAsset> reactivateOwnerAsset(String assetId);
+
+  Future<List<OwnerManagedSite>> ownerDeploymentSites();
+
+  Future<List<SiteDeployedAsset>> ownerSiteAssets(String siteId);
+
+  Future<AssetSiteDeployment> deployOwnerAsset(String assetId, String siteId);
+
+  Future<AssetSiteDeployment> removeOwnerAssetDeployment(String assetId);
 }
 
 abstract class OwnerPeopleSiteApi {
@@ -431,10 +439,10 @@ class ApiClient
   Future<List<OwnerAsset>> ownerAssets({
     String? status,
     String? ownershipType,
-    String assetType = 'TIPPER',
+    String? assetType,
   }) async {
     final query = <String, String>{
-      'asset_type': assetType,
+      if (assetType != null) 'asset_type': assetType,
       if (status != null) 'status': status,
       if (ownershipType != null) 'ownership_type': ownershipType,
     };
@@ -501,6 +509,52 @@ class ApiClient
       authenticated: true,
     );
     return OwnerAsset.fromJson(_json(response));
+  }
+
+  @override
+  Future<List<OwnerManagedSite>> ownerDeploymentSites() => ownerSites();
+
+  @override
+  Future<List<SiteDeployedAsset>> ownerSiteAssets(String siteId) async {
+    final response = await _request(
+      'GET',
+      '/api/v1/owner/sites/$siteId/assets',
+      authenticated: true,
+    );
+    return _jsonList(response).map(SiteDeployedAsset.fromJson).toList();
+  }
+
+  @override
+  Future<AssetSiteDeployment> deployOwnerAsset(
+    String assetId,
+    String siteId,
+  ) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/assets/$assetId/deployment',
+      authenticated: true,
+      body: {'site_id': siteId},
+    );
+    return AssetSiteDeployment.fromJson(_json(response));
+  }
+
+  @override
+  Future<AssetSiteDeployment> removeOwnerAssetDeployment(String assetId) async {
+    final response = await _request(
+      'DELETE',
+      '/api/v1/owner/assets/$assetId/deployment',
+      authenticated: true,
+    );
+    return AssetSiteDeployment.fromJson(_json(response));
+  }
+
+  Future<List<SiteDeployedAsset>> supervisorSiteAssets(String siteId) async {
+    final response = await _request(
+      'GET',
+      '/api/v1/supervisor/sites/$siteId/assets',
+      authenticated: true,
+    );
+    return _jsonList(response).map(SiteDeployedAsset.fromJson).toList();
   }
 
   @override

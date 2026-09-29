@@ -182,6 +182,34 @@ class OwnerAssetAssignmentResponse(BaseModel):
     driver_name: str
 
 
+class AssetSiteDeploymentResponse(BaseModel):
+    id: UUID
+    asset_id: UUID
+    site_id: UUID
+    site_name: str
+    starts_at: datetime
+    ends_at: datetime | None
+
+
+class AssetDeploymentRequest(BaseModel):
+    site_id: UUID
+
+
+class SiteDeployedAssetResponse(BaseModel):
+    asset_id: UUID
+    asset_code: str
+    asset_type: FleetAssetType
+    ownership_type: AssetOwnershipType
+    registration_number: str | None
+    short_name: str | None
+    status: FleetAssetStatus
+    current_deployment: AssetSiteDeploymentResponse
+    driver_membership_id: UUID | None
+    driver_name: str | None
+    duty_status: str | None
+    pending_review_count: int
+
+
 class OwnerAssetResponse(BaseModel):
     id: UUID
     asset_code: str
@@ -195,6 +223,7 @@ class OwnerAssetResponse(BaseModel):
     rental_party_name: str | None
     rental_start_date: date | None
     rental_end_date: date | None
+    current_deployment: AssetSiteDeploymentResponse | None
     has_active_assignment: bool
     active_assignment: OwnerAssetAssignmentResponse | None
 

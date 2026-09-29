@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, aliased
 
 from fleet_api.auth.service import AuthContext
 from fleet_api.db.models import (
+    AssetSiteDeployment,
     Assignment,
     CompanyMembership,
     DutySession,
@@ -43,8 +44,17 @@ class ActiveAssetAssignment:
 
 
 @dataclass(frozen=True)
+class ActiveAssetDeployment:
+    deployment_id: UUID
+    site_id: UUID
+    site_name: str
+    starts_at: datetime
+
+
+@dataclass(frozen=True)
 class OwnerAssetView:
     asset: FleetAsset
+    current_deployment: ActiveAssetDeployment | None
     active_assignment: ActiveAssetAssignment | None
 
 
@@ -109,11 +119,46 @@ class OwnerAssetService:
 
     def _view_query(
         self, *, now: datetime
-    ) -> Select[tuple[FleetAsset, Assignment, Site, CompanyMembership, User]]:
+    ) -> Select[
+        tuple[
+            FleetAsset,
+            AssetSiteDeployment,
+            Site,
+            Assignment,
+            Site,
+            CompanyMembership,
+            User,
+        ]
+    ]:
+        deployment_site = aliased(Site)
+        assignment_site = aliased(Site)
         driver_membership = aliased(CompanyMembership)
         driver_user = aliased(User)
         return (
-            select(FleetAsset, Assignment, Site, driver_membership, driver_user)
+            select(
+                FleetAsset,
+                AssetSiteDeployment,
+                deployment_site,
+                Assignment,
+                assignment_site,
+                driver_membership,
+                driver_user,
+            )
+            .outerjoin(
+                AssetSiteDeployment,
+                and_(
+                    AssetSiteDeployment.company_id == FleetAsset.company_id,
+                    AssetSiteDeployment.asset_id == FleetAsset.id,
+                    AssetSiteDeployment.ends_at.is_(None),
+                ),
+            )
+            .outerjoin(
+                deployment_site,
+                and_(
+                    deployment_site.company_id == AssetSiteDeployment.company_id,
+                    deployment_site.id == AssetSiteDeployment.site_id,
+                ),
+            )
             .outerjoin(
                 Assignment,
                 and_(
@@ -124,10 +169,10 @@ class OwnerAssetService:
                 ),
             )
             .outerjoin(
-                Site,
+                assignment_site,
                 and_(
-                    Site.company_id == Assignment.company_id,
-                    Site.id == Assignment.site_id,
+                    assignment_site.company_id == Assignment.company_id,
+                    assignment_site.id == Assignment.site_id,
                 ),
             )
             .outerjoin(
@@ -142,21 +187,42 @@ class OwnerAssetService:
 
     @staticmethod
     def _to_view(row: tuple[object, ...]) -> OwnerAssetView:
-        asset, assignment, site, membership, user = row
+        (
+            asset,
+            deployment,
+            deployment_site,
+            assignment,
+            assignment_site,
+            membership,
+            user,
+        ) = row
         assert isinstance(asset, FleetAsset)
+        current_deployment = None
+        if isinstance(deployment, AssetSiteDeployment):
+            assert isinstance(deployment_site, Site)
+            current_deployment = ActiveAssetDeployment(
+                deployment_id=deployment.id,
+                site_id=deployment_site.id,
+                site_name=deployment_site.name,
+                starts_at=deployment.starts_at,
+            )
         active_assignment = None
         if isinstance(assignment, Assignment):
-            assert isinstance(site, Site)
+            assert isinstance(assignment_site, Site)
             assert isinstance(membership, CompanyMembership)
             assert isinstance(user, User)
             active_assignment = ActiveAssetAssignment(
                 assignment_id=assignment.id,
-                site_id=site.id,
-                site_name=site.name,
+                site_id=assignment_site.id,
+                site_name=assignment_site.name,
                 driver_membership_id=membership.id,
                 driver_name=membership.display_name or user.display_name,
             )
-        return OwnerAssetView(asset=asset, active_assignment=active_assignment)
+        return OwnerAssetView(
+            asset=asset,
+            current_deployment=current_deployment,
+            active_assignment=active_assignment,
+        )
 
     def list_assets(
         self,
@@ -186,7 +252,6 @@ class OwnerAssetService:
             self._view_query(now=datetime.now(UTC)).where(
                 FleetAsset.id == asset_id,
                 FleetAsset.company_id == self.company_id,
-                FleetAsset.asset_type == FleetAssetType.TIPPER,
             )
         ).first()
         if row is None:
@@ -295,7 +360,9 @@ class OwnerAssetService:
             asset=asset,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(asset=asset, active_assignment=None)
+        return OwnerAssetView(
+            asset=asset, current_deployment=None, active_assignment=None
+        )
 
     def update_asset(
         self,
@@ -381,7 +448,11 @@ class OwnerAssetService:
             old_values=old_values,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(asset=asset, active_assignment=view.active_assignment)
+        return OwnerAssetView(
+            asset=asset,
+            current_deployment=view.current_deployment,
+            active_assignment=view.active_assignment,
+        )
 
     def deactivate_asset(self, asset_id: UUID) -> OwnerAssetView:
         view = self.get_asset(asset_id)
@@ -403,6 +474,8 @@ class OwnerAssetService:
             raise ConflictError(
                 "Asset cannot be deactivated while it has an active duty session."
             )
+        if view.current_deployment is not None:
+            raise ConflictError("Asset must be removed from its Site before deactivation.")
         old_values = self._values(asset)
         asset.status = FleetAssetStatus.INACTIVE
         self.session.flush()
@@ -412,7 +485,9 @@ class OwnerAssetService:
             old_values=old_values,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(asset=asset, active_assignment=None)
+        return OwnerAssetView(
+            asset=asset, current_deployment=None, active_assignment=None
+        )
 
     def reactivate_asset(self, asset_id: UUID) -> OwnerAssetView:
         view = self.get_asset(asset_id)
@@ -428,4 +503,6 @@ class OwnerAssetService:
             old_values=old_values,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(asset=asset, active_assignment=None)
+        return OwnerAssetView(
+            asset=asset, current_deployment=None, active_assignment=None
+        )

@@ -337,9 +337,15 @@ class _PersonFormState extends State<_PersonForm> {
 }
 
 class OwnerSitesScreen extends StatefulWidget {
-  const OwnerSitesScreen({required this.api, this.onUnauthorized, super.key});
+  const OwnerSitesScreen({
+    required this.api,
+    this.assetApi,
+    this.onUnauthorized,
+    super.key,
+  });
 
   final OwnerPeopleSiteApi api;
+  final OwnerAssetApi? assetApi;
   final OwnerUnauthorized? onUnauthorized;
 
   @override
@@ -420,6 +426,7 @@ class _OwnerSitesScreenState extends State<OwnerSitesScreen> {
       MaterialPageRoute(
         builder: (_) => OwnerSiteDetailScreen(
           api: widget.api,
+          assetApi: widget.assetApi,
           site: site,
           supervisors: _people
               .where((person) => person.isSupervisor && person.isActive)
@@ -667,10 +674,12 @@ class OwnerSiteDetailScreen extends StatefulWidget {
     required this.api,
     required this.site,
     required this.supervisors,
+    this.assetApi,
     super.key,
   });
 
   final OwnerPeopleSiteApi api;
+  final OwnerAssetApi? assetApi;
   final OwnerManagedSite site;
   final List<OwnerPerson> supervisors;
 
@@ -682,12 +691,63 @@ class _OwnerSiteDetailScreenState extends State<OwnerSiteDetailScreen> {
   late OwnerManagedSite _site;
   String? _selectedSupervisor;
   bool _saving = false;
+  bool _loadingAssets = false;
+  List<SiteDeployedAsset> _assets = const [];
+  List<OwnerAsset> _deployableAssets = const [];
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _site = widget.site;
+    _loadAssets();
+  }
+
+  Future<void> _loadAssets() async {
+    final api = widget.assetApi;
+    if (api == null) return;
+    setState(() => _loadingAssets = true);
+    try {
+      final values = await Future.wait([
+        api.ownerSiteAssets(_site.id),
+        api.ownerAssets(status: 'ACTIVE'),
+      ]);
+      if (mounted) {
+        setState(() {
+          _assets = values[0] as List<SiteDeployedAsset>;
+          _deployableAssets = (values[1] as List<OwnerAsset>)
+              .where((asset) => asset.currentDeployment == null)
+              .toList();
+        });
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _loadingAssets = false);
+    }
+  }
+
+  Future<void> _deployAsset() async {
+    final api = widget.assetApi;
+    if (api == null) return;
+    final selected = await showDialog<OwnerAsset>(
+      context: context,
+      builder: (_) =>
+          _DeployAssetToSiteDialog(assets: _deployableAssets, site: _site),
+    );
+    if (selected == null) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await api.deployOwnerAsset(selected.id, _site.id);
+      await _loadAssets();
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   List<OwnerPerson> get _available => widget.supervisors
@@ -743,8 +803,6 @@ class _OwnerSiteDetailScreenState extends State<OwnerSiteDetailScreen> {
         if (_site.locationDescription != null) Text(_site.locationDescription!),
         if (_site.latitude != null && _site.longitude != null)
           Text('${_site.latitude}, ${_site.longitude}'),
-        const SizedBox(height: 12),
-        Text('${_site.assetCount} active assets (read-only)'),
         const Divider(height: 32),
         Text('SUPERVISORS', style: Theme.of(context).textTheme.titleMedium),
         for (final supervisor in _site.supervisors)
@@ -788,6 +846,44 @@ class _OwnerSiteDetailScreenState extends State<OwnerSiteDetailScreen> {
               ),
             ],
           ),
+        const Divider(height: 32),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'ASSETS — ${_assets.length}',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            if (widget.assetApi != null && _site.isActive)
+              FilledButton.icon(
+                key: const Key('deploy-site-asset'),
+                onPressed:
+                    _saving || _loadingAssets || _deployableAssets.isEmpty
+                    ? null
+                    : _deployAsset,
+                icon: const Icon(Icons.add),
+                label: const Text('DEPLOY ASSET'),
+              ),
+          ],
+        ),
+        if (_loadingAssets) const LinearProgressIndicator(),
+        if (!_loadingAssets && _assets.isEmpty)
+          const _EmptyCard(
+            icon: Icons.precision_manufacturing_outlined,
+            text: 'No assets are deployed to this Site.',
+          ),
+        for (final asset in _assets)
+          ListTile(
+            key: Key('site-asset-${asset.assetId}'),
+            leading: const Icon(Icons.local_shipping_outlined),
+            title: Text(asset.registrationNumber ?? asset.assetCode),
+            subtitle: Text(
+              '${asset.shortName ?? asset.assetCode}\n'
+              'Driver: ${asset.driverName ?? 'Unassigned'}',
+            ),
+            isThreeLine: true,
+          ),
         if (_error != null) _ErrorCard(message: _error!, onRetry: () async {}),
         const SizedBox(height: 24),
         OutlinedButton.icon(
@@ -798,6 +894,69 @@ class _OwnerSiteDetailScreenState extends State<OwnerSiteDetailScreen> {
         ),
       ],
     ),
+  );
+}
+
+class _DeployAssetToSiteDialog extends StatefulWidget {
+  const _DeployAssetToSiteDialog({required this.assets, required this.site});
+
+  final List<OwnerAsset> assets;
+  final OwnerManagedSite site;
+
+  @override
+  State<_DeployAssetToSiteDialog> createState() =>
+      _DeployAssetToSiteDialogState();
+}
+
+class _DeployAssetToSiteDialogState extends State<_DeployAssetToSiteDialog> {
+  String? _selected;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('DEPLOY ASSET'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Site: ${widget.site.name}'),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          key: const Key('site-deploy-asset-selector'),
+          initialValue: _selected,
+          decoration: const InputDecoration(
+            labelText: 'Active undeployed asset',
+          ),
+          items: widget.assets
+              .map(
+                (asset) => DropdownMenuItem(
+                  value: asset.id,
+                  child: Text(
+                    '${asset.assetCode} / '
+                    '${asset.registrationNumber ?? asset.shortName ?? asset.assetCode}',
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: (value) => setState(() => _selected = value),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('CANCEL'),
+      ),
+      FilledButton(
+        key: const Key('confirm-site-deploy'),
+        onPressed: _selected == null
+            ? null
+            : () => Navigator.pop(
+                context,
+                widget.assets.firstWhere((asset) => asset.id == _selected),
+              ),
+        child: const Text('DEPLOY'),
+      ),
+    ],
   );
 }
 

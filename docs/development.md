@@ -174,6 +174,13 @@ $env:FLEET_TEST_DATABASE_URL="postgresql+psycopg://fleet:fleet@127.0.0.1:5432/fl
 \.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
+Phase 1B.2B adds `0013_asset_site_deployments`. It creates the effective-dated
+Fleet Asset placement table, enforces one current/non-overlapping deployment,
+and backfills Assignment intervals in place. Upgrade the existing Pilot
+database directly; do not reset it. The migration regression test covers both
+current and historical Assignment rows and verifies that their UUIDs and data
+remain unchanged.
+
 The backend test suite uses PostgreSQL and includes reporting, closure,
 tenant-isolation, assignment-transfer, evidence-authorization, timezone, and
 openpyxl workbook checks. The web shell has a lightweight Vitest/jsdom suite:

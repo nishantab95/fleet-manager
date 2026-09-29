@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from fleet_api.auth.phone import normalize_phone
 from fleet_api.auth.service import AuthContext
 from fleet_api.db.models import (
+    AssetSiteDeployment,
     Assignment,
     CompanyMembership,
     DutySession,
@@ -360,13 +361,11 @@ class OwnerPeopleSiteService:
                 )
             )
         ]
-        now = datetime.now(UTC)
         asset_count = self.session.scalar(
-            select(func.count(func.distinct(Assignment.asset_id))).where(
-                Assignment.company_id == self.company_id,
-                Assignment.site_id == site.id,
-                Assignment.starts_at <= now,
-                or_(Assignment.ends_at.is_(None), Assignment.ends_at > now),
+            select(func.count(AssetSiteDeployment.id)).where(
+                AssetSiteDeployment.company_id == self.company_id,
+                AssetSiteDeployment.site_id == site.id,
+                AssetSiteDeployment.ends_at.is_(None),
             )
         )
         return SiteView(site, supervisors, int(asset_count or 0))
@@ -490,6 +489,17 @@ class OwnerPeopleSiteService:
         if site.status == SiteStatus.INACTIVE:
             return self._site_view(site)
         now = datetime.now(UTC)
+        active_deployment = self.session.scalar(
+            select(AssetSiteDeployment.id)
+            .where(
+                AssetSiteDeployment.company_id == self.company_id,
+                AssetSiteDeployment.site_id == site.id,
+                AssetSiteDeployment.ends_at.is_(None),
+            )
+            .limit(1)
+        )
+        if active_deployment is not None:
+            raise ConflictError("Site cannot be deactivated while assets are deployed.")
         active_assignment = self.session.scalar(
             select(Assignment.id)
             .where(

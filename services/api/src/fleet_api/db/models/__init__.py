@@ -5,6 +5,7 @@ from fleet_api.db.models.audit import AuditLog
 from fleet_api.db.models.auth import AuthSession, OtpChallenge
 from fleet_api.db.models.closure import SiteDailyClosure, SiteDailyClosureHistory
 from fleet_api.db.models.company import Company, Site, User
+from fleet_api.db.models.deployment import AssetSiteDeployment
 from fleet_api.db.models.device import Device
 from fleet_api.db.models.duty import DutySession
 from fleet_api.db.models.events import (
@@ -21,6 +22,7 @@ from fleet_api.db.models.membership import CompanyMembership, SupervisorSiteAcce
 
 __all__ = [
     "Assignment",
+    "AssetSiteDeployment",
     "AuditLog",
     "AuthSession",
     "Company",

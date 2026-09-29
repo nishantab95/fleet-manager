@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -279,6 +279,7 @@ def _cleanup_migrated_graph(engine: Engine) -> None:
             "(SELECT id FROM operational_events WHERE company_id = :company_id)",
             "DELETE FROM evidence_objects WHERE company_id = :company_id",
             "DELETE FROM operational_events WHERE company_id = :company_id",
+            "DELETE FROM asset_site_deployments WHERE company_id = :company_id",
             "DELETE FROM assignments WHERE company_id = :company_id",
             "DELETE FROM devices WHERE company_id = :company_id",
             "DELETE FROM company_memberships WHERE company_id = :company_id",
@@ -493,4 +494,170 @@ def test_0012_preserves_people_sites_and_accepts_invited_status(
             )
             connection.execute(
                 text("DELETE FROM companies WHERE id = :id"), {"id": company_id}
+            )
+
+
+def test_0013_backfills_assignment_history_as_asset_site_deployments(
+    postgres_engine: Engine,
+) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("50000000-0000-0000-0000-000000000001")
+    asset_id = UUID("50000000-0000-0000-0000-000000000002")
+    first_site_id = UUID("50000000-0000-0000-0000-000000000003")
+    current_site_id = UUID("50000000-0000-0000-0000-000000000004")
+    driver_user_id = UUID("50000000-0000-0000-0000-000000000005")
+    supervisor_user_id = UUID("50000000-0000-0000-0000-000000000006")
+    driver_id = UUID("50000000-0000-0000-0000-000000000007")
+    supervisor_id = UUID("50000000-0000-0000-0000-000000000008")
+    boundary = datetime(2026, 9, 1, tzinfo=UTC)
+    command.downgrade(config, "0012_owner_people_sites")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'Deployment Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, phone_number, display_name, status) VALUES "
+                    "(:driver_user, '+919100000091', 'Migration Driver', 'ACTIVE'), "
+                    "(:supervisor_user, '+919100000092', 'Migration Supervisor', 'ACTIVE')"
+                ),
+                {
+                    "driver_user": driver_user_id,
+                    "supervisor_user": supervisor_user_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO company_memberships "
+                    "(id, company_id, user_id, role, status, display_name) VALUES "
+                    "(:driver, :company, :driver_user, 'DRIVER', 'ACTIVE', "
+                    "'Migration Driver'), "
+                    "(:supervisor, :company, :supervisor_user, 'SUPERVISOR', "
+                    "'ACTIVE', 'Migration Supervisor')"
+                ),
+                {
+                    "driver": driver_id,
+                    "supervisor": supervisor_id,
+                    "company": company_id,
+                    "driver_user": driver_user_id,
+                    "supervisor_user": supervisor_user_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO sites (id, company_id, name, code, status) VALUES "
+                    "(:first, :company, 'Old Site', 'OLD', 'ACTIVE'), "
+                    "(:current, :company, 'Pilot Site', 'PILOT', 'ACTIVE')"
+                ),
+                {
+                    "first": first_site_id,
+                    "current": current_site_id,
+                    "company": company_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO fleet_assets "
+                    "(id, company_id, asset_type, ownership_type, asset_code, "
+                    "registration_number, short_name, status) VALUES "
+                    "(:asset, :company, 'TIPPER', 'OWNED', 'TIPPER-12', "
+                    "'PILOT12', 'Tipper 12', 'ACTIVE')"
+                ),
+                {"asset": asset_id, "company": company_id},
+            )
+            for assignment_id, site_id, starts_at, ends_at in (
+                (uuid4(), first_site_id, boundary - timedelta(days=30), boundary),
+                (uuid4(), current_site_id, boundary, None),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO assignments "
+                        "(id, company_id, driver_membership_id, "
+                        "supervisor_membership_id, asset_id, site_id, starts_at, "
+                        "ends_at, regular_duty_minutes) VALUES "
+                        "(:id, :company, :driver, :supervisor, :asset, :site, "
+                        ":starts_at, :ends_at, 600)"
+                    ),
+                    {
+                        "id": assignment_id,
+                        "company": company_id,
+                        "driver": driver_id,
+                        "supervisor": supervisor_id,
+                        "asset": asset_id,
+                        "site": site_id,
+                        "starts_at": starts_at,
+                        "ends_at": ends_at,
+                    },
+                )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.begin() as connection:
+            deployments = connection.execute(
+                text(
+                    "SELECT asset_id, site_id, starts_at, ends_at "
+                    "FROM asset_site_deployments WHERE company_id = :company "
+                    "ORDER BY starts_at"
+                ),
+                {"company": company_id},
+            ).mappings().all()
+            assert len(deployments) == 2
+            assert deployments[0]["site_id"] == first_site_id
+            assert deployments[0]["ends_at"] == boundary
+            assert deployments[1]["asset_id"] == asset_id
+            assert deployments[1]["site_id"] == current_site_id
+            assert deployments[1]["ends_at"] is None
+            assert connection.scalar(
+                text(
+                    "SELECT count(*) FROM asset_site_deployments "
+                    "WHERE company_id = :company AND asset_id = :asset "
+                    "AND ends_at IS NULL"
+                ),
+                {"company": company_id, "asset": asset_id},
+            ) == 1
+            assert connection.scalar(
+                text(
+                    "SELECT count(*) FROM assignments "
+                    "WHERE company_id = :company AND asset_id = :asset"
+                ),
+                {"company": company_id, "asset": asset_id},
+            ) == 2
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            params = {"company": company_id}
+            connection.execute(
+                text("DELETE FROM asset_site_deployments WHERE company_id = :company"),
+                params,
+            )
+            connection.execute(
+                text("DELETE FROM assignments WHERE company_id = :company"), params
+            )
+            connection.execute(
+                text("DELETE FROM fleet_assets WHERE company_id = :company"), params
+            )
+            connection.execute(
+                text("DELETE FROM sites WHERE company_id = :company"), params
+            )
+            connection.execute(
+                text("DELETE FROM company_memberships WHERE company_id = :company"),
+                params,
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM users WHERE id IN (:driver_user, :supervisor_user)"
+                ),
+                {
+                    "driver_user": driver_user_id,
+                    "supervisor_user": supervisor_user_id,
+                },
+            )
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :company"), params
             )
