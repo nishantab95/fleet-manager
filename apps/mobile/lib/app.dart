@@ -22,6 +22,9 @@ const appBuild = String.fromEnvironment(
 const maxOdometerKm = 10000000.0;
 const invalidOdometerMessage =
     'KM reading looks invalid. Please check the odometer and enter the correct value.';
+const deviceHandoverBlockedMessage =
+    'This phone still has an active duty or unsynced records for another '
+    'driver. Finish and sync that work before changing driver.';
 
 class DriverAppDependencies {
   const DriverAppDependencies({
@@ -35,6 +38,45 @@ class DriverAppDependencies {
   final SecureSessionStore sessionStore;
   final SyncEngine sync;
   final String installationIdentifier;
+
+  Future<void> registerDriverAccount(SessionTokens tokens) async {
+    try {
+      await api.registerDevice(installationIdentifier: installationIdentifier);
+      await sync.activateAccount(
+        serverIdentity: api.baseUrl,
+        companyId: tokens.companyId,
+        membershipId: tokens.membershipId,
+        claimLegacyData: true,
+      );
+    } on ApiException catch (error) {
+      if (error.code != 'DEVICE_HANDOVER_REQUIRED') rethrow;
+      final oldMembershipId =
+          error.context?['current_membership_id'] as String?;
+      if (oldMembershipId == null || oldMembershipId.isEmpty) rethrow;
+      final safety = await sync.prepareHandover(
+        serverIdentity: api.baseUrl,
+        companyId: tokens.companyId,
+        oldMembershipId: oldMembershipId,
+      );
+      if (!safety.isSafe) {
+        throw const ApiException(
+          409,
+          deviceHandoverBlockedMessage,
+          code: 'LOCAL_DEVICE_HANDOVER_BLOCKED',
+        );
+      }
+      await api.registerDevice(
+        installationIdentifier: installationIdentifier,
+        allowHandover: true,
+        localStateClear: true,
+      );
+      await sync.activateAccount(
+        serverIdentity: api.baseUrl,
+        companyId: tokens.companyId,
+        membershipId: tokens.membershipId,
+      );
+    }
+  }
 }
 
 class FleetManagerApp extends StatelessWidget {
@@ -102,6 +144,7 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
       // Continue to a safe signed-out UI even if secure-storage cleanup fails.
     }
     widget.dependencies.api.clearSession();
+    widget.dependencies.sync.deactivateAccount();
     if (!mounted) return;
     Navigator.of(context).popUntil((route) => route.isFirst);
     setState(() {
@@ -122,13 +165,7 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
       DriverAssignment? assignment;
       var duty = const DriverDutyState.none();
       if (api.session?.role == 'DRIVER') {
-        try {
-          await api.registerDevice(
-            installationIdentifier: widget.dependencies.installationIdentifier,
-          );
-        } on ApiException catch (error) {
-          if (error.isUnauthorized) rethrow;
-        }
+        await widget.dependencies.registerDriverAccount(api.session!);
         try {
           assignment = await api.currentAssignment();
           if (assignment == null) {
@@ -167,8 +204,13 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
       if (error.isUnauthorized) {
         await _sessionExpired();
       } else if (mounted) {
+        if (api.session?.role == 'DRIVER') {
+          await widget.dependencies.sessionStore.clear();
+          api.clearSession();
+          widget.dependencies.sync.deactivateAccount();
+        }
         setState(() {
-          _role = api.session?.role;
+          _role = null;
           _error = error.message;
         });
       }
@@ -224,6 +266,7 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
     }
     await widget.dependencies.sessionStore.clear();
     widget.dependencies.api.clearSession();
+    widget.dependencies.sync.deactivateAccount();
     if (mounted) {
       setState(() {
         _assignment = null;
@@ -338,11 +381,16 @@ class _LoginScreenState extends State<LoginScreen> {
       preSessionToken: _preSessionToken!,
       membershipId: membership.membershipId,
     );
-    await widget.dependencies.sessionStore.save(tokens);
-    if (tokens.role == 'DRIVER') {
-      await widget.dependencies.api.registerDevice(
-        installationIdentifier: widget.dependencies.installationIdentifier,
-      );
+    try {
+      if (tokens.role == 'DRIVER') {
+        await widget.dependencies.registerDriverAccount(tokens);
+      }
+      await widget.dependencies.sessionStore.save(tokens);
+    } on Object {
+      await widget.dependencies.sessionStore.clear();
+      widget.dependencies.api.clearSession();
+      widget.dependencies.sync.deactivateAccount();
+      rethrow;
     }
     await widget.onSignedIn(tokens);
   }

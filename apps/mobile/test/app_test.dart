@@ -252,7 +252,15 @@ void main() {
 
 class _FakeRemote implements DriverRemoteApi {
   @override
-  Future<void> registerDevice({required String installationIdentifier}) async {}
+  Future<DeviceRegistration> registerDevice({
+    required String installationIdentifier,
+    bool allowHandover = false,
+    bool localStateClear = false,
+  }) async => const DeviceRegistration(
+    deviceId: 'test-device-id',
+    membershipId: 'test-membership-id',
+    handedOver: false,
+  );
 
   @override
   Future<String> uploadEvidence({

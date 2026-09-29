@@ -27,7 +27,11 @@ typedef SessionTokensPersistor = Future<void> Function(SessionTokens tokens);
 typedef SessionExpiredHandler = Future<void> Function();
 
 abstract class DriverRemoteApi {
-  Future<void> registerDevice({required String installationIdentifier});
+  Future<DeviceRegistration> registerDevice({
+    required String installationIdentifier,
+    bool allowHandover = false,
+    bool localStateClear = false,
+  });
 
   Future<String> uploadEvidence({
     required String clientEventUuid,
@@ -38,6 +42,25 @@ abstract class DriverRemoteApi {
     required PendingEvent event,
     required String installationIdentifier,
   });
+}
+
+class DeviceRegistration {
+  const DeviceRegistration({
+    required this.deviceId,
+    required this.membershipId,
+    required this.handedOver,
+  });
+
+  final String deviceId;
+  final String membershipId;
+  final bool handedOver;
+
+  factory DeviceRegistration.fromJson(Map<String, dynamic> json) =>
+      DeviceRegistration(
+        deviceId: json['device_id'] as String,
+        membershipId: json['membership_id'] as String,
+        handedOver: json['handed_over'] as bool? ?? false,
+      );
 }
 
 abstract class DriverDutyLookup {
@@ -60,6 +83,28 @@ abstract class OwnerAssetApi {
   Future<OwnerAsset> deactivateOwnerAsset(String assetId);
 
   Future<OwnerAsset> reactivateOwnerAsset(String assetId);
+}
+
+abstract class OwnerPeopleSiteApi {
+  Future<List<OwnerPerson>> ownerPeople();
+  Future<OwnerPerson> inviteOwnerPerson(OwnerPersonInput input);
+  Future<OwnerPerson> updateOwnerPerson(
+    String membershipId,
+    OwnerPersonInput input,
+  );
+  Future<OwnerPerson> setOwnerPersonActive(String membershipId, bool active);
+  Future<List<OwnerManagedSite>> ownerSites();
+  Future<OwnerManagedSite> createOwnerSite(OwnerSiteInput input);
+  Future<OwnerManagedSite> updateOwnerSite(String siteId, OwnerSiteInput input);
+  Future<OwnerManagedSite> setOwnerSiteActive(String siteId, bool active);
+  Future<OwnerManagedSite> grantOwnerSiteSupervisor(
+    String siteId,
+    String membershipId,
+  );
+  Future<OwnerManagedSite> revokeOwnerSiteSupervisor(
+    String siteId,
+    String membershipId,
+  );
 }
 
 class ApiException implements Exception {
@@ -85,7 +130,12 @@ class ApiException implements Exception {
   String toString() => 'ApiException($statusCode): $message';
 }
 
-class ApiClient implements DriverRemoteApi, DriverDutyLookup, OwnerAssetApi {
+class ApiClient
+    implements
+        DriverRemoteApi,
+        DriverDutyLookup,
+        OwnerAssetApi,
+        OwnerPeopleSiteApi {
   ApiClient({
     String? baseUrl,
     http.Client? client,
@@ -453,6 +503,131 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup, OwnerAssetApi {
     return OwnerAsset.fromJson(_json(response));
   }
 
+  @override
+  Future<List<OwnerPerson>> ownerPeople() async {
+    final response = await _request(
+      'GET',
+      '/api/v1/owner/people',
+      authenticated: true,
+    );
+    return _jsonList(response).map(OwnerPerson.fromJson).toList();
+  }
+
+  @override
+  Future<OwnerPerson> inviteOwnerPerson(OwnerPersonInput input) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/people/invite',
+      authenticated: true,
+      body: input.toJson(includePhone: true),
+    );
+    return OwnerPerson.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerPerson> updateOwnerPerson(
+    String membershipId,
+    OwnerPersonInput input,
+  ) async {
+    final response = await _request(
+      'PATCH',
+      '/api/v1/owner/people/$membershipId',
+      authenticated: true,
+      body: input.toJson(),
+    );
+    return OwnerPerson.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerPerson> setOwnerPersonActive(
+    String membershipId,
+    bool active,
+  ) async {
+    final action = active ? 'reactivate' : 'deactivate';
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/people/$membershipId/$action',
+      authenticated: true,
+    );
+    return OwnerPerson.fromJson(_json(response));
+  }
+
+  @override
+  Future<List<OwnerManagedSite>> ownerSites() async {
+    final response = await _request(
+      'GET',
+      '/api/v1/owner/sites',
+      authenticated: true,
+    );
+    return _jsonList(response).map(OwnerManagedSite.fromJson).toList();
+  }
+
+  @override
+  Future<OwnerManagedSite> createOwnerSite(OwnerSiteInput input) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/sites',
+      authenticated: true,
+      body: input.toJson(),
+    );
+    return OwnerManagedSite.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerManagedSite> updateOwnerSite(
+    String siteId,
+    OwnerSiteInput input,
+  ) async {
+    final response = await _request(
+      'PATCH',
+      '/api/v1/owner/sites/$siteId',
+      authenticated: true,
+      body: input.toJson(),
+    );
+    return OwnerManagedSite.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerManagedSite> setOwnerSiteActive(
+    String siteId,
+    bool active,
+  ) async {
+    final action = active ? 'reactivate' : 'deactivate';
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/sites/$siteId/$action',
+      authenticated: true,
+    );
+    return OwnerManagedSite.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerManagedSite> grantOwnerSiteSupervisor(
+    String siteId,
+    String membershipId,
+  ) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/sites/$siteId/supervisors',
+      authenticated: true,
+      body: {'supervisor_membership_id': membershipId},
+    );
+    return OwnerManagedSite.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerManagedSite> revokeOwnerSiteSupervisor(
+    String siteId,
+    String membershipId,
+  ) async {
+    final response = await _request(
+      'DELETE',
+      '/api/v1/owner/sites/$siteId/supervisors/$membershipId',
+      authenticated: true,
+    );
+    return OwnerManagedSite.fromJson(_json(response));
+  }
+
   Future<Uint8List> evidenceBytes(
     String eventId, {
     required String role,
@@ -475,16 +650,23 @@ class ApiClient implements DriverRemoteApi, DriverDutyLookup, OwnerAssetApi {
   }
 
   @override
-  Future<void> registerDevice({required String installationIdentifier}) async {
-    await _request(
+  Future<DeviceRegistration> registerDevice({
+    required String installationIdentifier,
+    bool allowHandover = false,
+    bool localStateClear = false,
+  }) async {
+    final response = await _request(
       'POST',
       '/api/v1/driver/device',
       authenticated: true,
       body: {
         'installation_identifier': installationIdentifier,
         'platform': 'ANDROID',
+        'allow_handover': allowHandover,
+        'local_state_clear': localStateClear,
       },
     );
+    return DeviceRegistration.fromJson(_json(response));
   }
 
   @override

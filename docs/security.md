@@ -177,6 +177,23 @@ backend authorization, and never written to localStorage; the longer-lived
 refresh credential is now HttpOnly/SameSite. The Phase 1 domain services and
 Phase 2 dependencies are not a substitute for endpoint-specific validation.
 
+## Owner People and Sites controls
+
+- Every People, Site, and Supervisor-access route requires `OWNER_ADMIN` and
+  filters by the authenticated company before resolving an identifier.
+- Phone numbers use the existing normalization boundary. An existing global
+  identity may be linked to another company without changing its global name;
+  duplicate same-company role membership returns a conflict.
+- Invited memberships cannot authorize an API request. They become active only
+  after successful OTP verification and explicit membership selection through
+  the existing authentication service.
+- Inactive Sites and memberships cannot receive new operational access.
+  Dependency checks prevent lifecycle transitions that would orphan a live
+  assignment or duty. All accepted mutations write tenant-scoped audit rows.
+- No endpoint accepts credentials, plaintext OTPs, object-storage keys, or
+  environment values as People/Site data. Mobile mutations use the shared
+  access-token refresh-and-retry path.
+
 ## Controlled internal pilot policy
 
 The one-tipper internal pilot may use an explicitly enabled development/test
@@ -186,3 +203,13 @@ forbidden, and HTTPS/TLS plus a real OTP provider are required before broader
 rollout. Evidence MIME/signature, size, private-key, storage, and authorization
 controls are the pilot baseline; malware scanning/content inspection remains a
 required pre-production follow-up.
+
+## Driver device handover safety
+
+Device handover is explicit and company-scoped. The authenticated replacement
+Driver must have an active membership in the same company, the mobile client
+must confirm that the previous account has no unsynced queue/evidence or active
+local duty, and the server independently rejects an active duty for the old
+binding. Installation identifiers are unique only within a company, preventing
+an identifier learned in another tenant from claiming that tenant's device.
+Tokens and OTP values are never written to handover audit records.

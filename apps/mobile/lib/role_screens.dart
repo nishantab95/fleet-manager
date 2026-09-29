@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'data/api_client.dart';
 import 'domain/role_models.dart';
 import 'owner_fleet.dart';
+import 'owner_people_sites.dart';
 
 typedef SignOut = Future<void> Function();
 
@@ -603,6 +604,7 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
     final titles = [
       'Owner dashboard',
       'Fleet',
+      'People',
       'Tippers',
       'Sites',
       'Alerts',
@@ -625,11 +627,9 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
             onRetry: _load,
           ),
           OwnerFleetScreen(api: widget.api, onUnauthorized: widget.onSignOut),
+          OwnerPeopleScreen(api: widget.api, onUnauthorized: widget.onSignOut),
           _OwnerTippersBody(tippers: _tippers, onEvidence: _showEvidence),
-          _OwnerSitesBody(
-            sites: _dashboard?.sites ?? const [],
-            onPickDate: _pickDate,
-          ),
+          OwnerSitesScreen(api: widget.api, onUnauthorized: widget.onSignOut),
           _OwnerAlertsBody(alerts: _alerts, onEvidence: _showEvidence),
           _OwnerReportsBody(
             date: _date,
@@ -652,6 +652,10 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
           NavigationDestination(
             icon: Icon(Icons.local_shipping_outlined),
             label: 'FLEET',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.people_outline),
+            label: 'PEOPLE',
           ),
           NavigationDestination(
             icon: Icon(Icons.list_alt_outlined),
@@ -858,57 +862,6 @@ class _OwnerTippersBody extends StatelessWidget {
                         : null,
                   ),
             ],
-          ),
-        ),
-    ],
-  );
-}
-
-class _OwnerSitesBody extends StatelessWidget {
-  const _OwnerSitesBody({required this.sites, required this.onPickDate});
-  final List<OwnerSiteSummary> sites;
-  final Future<void> Function() onPickDate;
-
-  @override
-  Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-    children: [
-      Align(
-        alignment: Alignment.centerRight,
-        child: OutlinedButton.icon(
-          onPressed: onPickDate,
-          icon: const Icon(Icons.calendar_today_outlined),
-          label: const Text('REPORT DATE'),
-        ),
-      ),
-      if (sites.isEmpty)
-        const _EmptyCard(
-          icon: Icons.location_on_outlined,
-          text: 'No sites in this report day.',
-        ),
-      for (final site in sites)
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.location_on_outlined),
-            title: Text(site.name),
-            subtitle: Text(
-              '${site.tippers} tippers · ${site.approvedTrips} approved trips\n${_numberText(site.distanceKm)} KM · ${_numberText(site.diesel)} L diesel',
-            ),
-            isThreeLine: true,
-            trailing: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text('${site.pending} pending'),
-                Text(
-                  '${site.emergencies} alerts',
-                  style: TextStyle(
-                    color: site.emergencies > 0
-                        ? Theme.of(context).colorScheme.error
-                        : null,
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
     ],

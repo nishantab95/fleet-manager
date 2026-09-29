@@ -79,7 +79,15 @@ class _IdempotentRemote implements DriverRemoteApi {
   int submissionCount(String eventId) => _submissions[eventId] ?? 0;
 
   @override
-  Future<void> registerDevice({required String installationIdentifier}) async {}
+  Future<DeviceRegistration> registerDevice({
+    required String installationIdentifier,
+    bool allowHandover = false,
+    bool localStateClear = false,
+  }) async => const DeviceRegistration(
+    deviceId: 'test-device-id',
+    membershipId: 'test-membership-id',
+    handedOver: false,
+  );
 
   @override
   Future<String> uploadEvidence({

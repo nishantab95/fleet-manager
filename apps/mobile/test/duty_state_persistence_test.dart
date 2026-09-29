@@ -366,7 +366,15 @@ class _RecordingRemote implements DriverRemoteApi, DriverDutyLookup {
   var _startAttempts = 0;
 
   @override
-  Future<void> registerDevice({required String installationIdentifier}) async {}
+  Future<DeviceRegistration> registerDevice({
+    required String installationIdentifier,
+    bool allowHandover = false,
+    bool localStateClear = false,
+  }) async => const DeviceRegistration(
+    deviceId: 'test-device-id',
+    membershipId: 'test-membership-id',
+    handedOver: false,
+  );
 
   @override
   Future<DriverDutyState> currentDuty() async => currentDutyState;

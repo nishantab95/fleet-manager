@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import UUID
 
 
 class DomainError(ValueError):
@@ -14,6 +15,16 @@ class ConflictError(DomainError):
 
 
 class TenantConsistencyError(DomainError):
+    pass
+
+
+class DeviceHandoverRequiredError(DomainError):
+    def __init__(self, *, current_membership_id: UUID) -> None:
+        super().__init__("device handover confirmation is required")
+        self.current_membership_id = current_membership_id
+
+
+class DeviceHandoverBlockedError(DomainError):
     pass
 
 

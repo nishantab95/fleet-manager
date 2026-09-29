@@ -18,6 +18,7 @@ class MembershipRole(StrEnum):
 
 
 class MembershipStatus(StrEnum):
+    INVITED = "INVITED"
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
 

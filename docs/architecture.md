@@ -283,3 +283,43 @@ Fleet tab consumes this API through one reusable, type-aware card and
 virtualized scrolling. Assignment identity is read-only here; assignment
 mutation remains Phase 1B.2. The PC Fleet CRUD UI is intentionally deferred to
 avoid creating a second incomplete management surface in this phase.
+
+## Phase 1B.2A Owner People and Sites boundary
+
+People and Sites are independent company resources exposed through focused
+`/api/v1/owner/people` and `/api/v1/owner/sites` APIs. Both require an active
+Owner/Admin session and derive tenant scope exclusively from that session. A
+People record reuses the canonical `User` identity and adds a company-scoped
+Driver or Supervisor membership; the mobile label for Driver is Operator.
+
+Invitations start as `INVITED`. The existing OTP flow includes invited
+memberships in membership selection and changes only the selected membership to
+`ACTIVE` when a valid session is created. No password or alternate OTP path is
+introduced. Sites keep their UUID and may store an optional description and
+coordinates. Supervisor access remains the existing many-to-many
+`SupervisorSiteAccess` relationship.
+
+All edits and lifecycle actions are audited. Deactivation changes status and
+never deletes identity, assignment, duty, access, event, or reporting history.
+Active assignments/duties block People and Site deactivation, and Supervisor
+access must be removed before that Supervisor is deactivated. Asset deployment
+and Driver-to-Asset assignment mutation remain outside this phase. The PC
+People/Sites management UI is explicitly deferred; its existing reporting and
+operations surfaces are unchanged.
+
+## Driver device handover
+
+The `Device` row represents one app installation and keeps a stable UUID. Its
+`membership_id` is the current Driver binding, not permanent employee identity.
+A change of Driver uses the explicit `/api/v1/driver/device` handover flow only;
+event submission cannot rebind a device. The server rejects a handover while
+the previously bound Driver has an active duty and writes a
+`DEVICE_DRIVER_HANDOVER` audit entry when reassignment succeeds. Existing
+operational events continue to reference the same device UUID and their
+original assignment, so historical Driver attribution is unchanged.
+
+The mobile database scopes queues, duty snapshots, current-duty markers, and
+sync diagnostics by normalized server URL, company ID, and membership ID.
+Unscoped code-8 data is preserved and claimed by the server-reported previous
+binding before a handover. A different Driver never reads or submits another
+Driver's scoped records.

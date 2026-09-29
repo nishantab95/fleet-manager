@@ -26,6 +26,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.models.common import utc_now
+from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     DevicePlatform,
     DeviceStatus,
@@ -42,6 +43,8 @@ from fleet_api.domain.enums import (
 )
 from fleet_api.domain.errors import (
     AssignmentNotEffectiveError,
+    DeviceHandoverBlockedError,
+    DeviceHandoverRequiredError,
     DomainError,
     DutyAlreadyStartedError,
     DutyAssignmentMismatchError,
@@ -301,7 +304,9 @@ def register_device(
     *,
     installation_identifier: str,
     platform: DevicePlatform,
-) -> Device:
+    allow_handover: bool = False,
+    local_state_clear: bool = False,
+) -> tuple[Device, bool]:
     _require_driver(context)
     clean_identifier = installation_identifier.strip()
     if not clean_identifier or len(clean_identifier) > 200:
@@ -310,7 +315,7 @@ def register_device(
         select(Device).where(
             Device.company_id == context.company.id,
             Device.installation_identifier == clean_identifier,
-        )
+        ).with_for_update()
     )
     if device is None:
         device = Device(
@@ -335,13 +340,48 @@ def register_device(
             )
             if device is None:
                 raise
-    elif device.membership_id != context.membership.id:
-        raise TenantConsistencyError("device belongs to another driver")
-    if device.membership_id != context.membership.id:
-        raise TenantConsistencyError("device belongs to another driver")
     if device.status != DeviceStatus.ACTIVE:
         raise DomainError("device is revoked")
-    return device
+    handed_over = False
+    if device.membership_id != context.membership.id:
+        if device.membership_id is None:
+            raise TenantConsistencyError("device has no current driver binding")
+        if not allow_handover:
+            raise DeviceHandoverRequiredError(
+                current_membership_id=device.membership_id
+            )
+        if not local_state_clear:
+            raise DeviceHandoverBlockedError(
+                "This phone still has an active duty or unsynced records for another "
+                "driver. Finish and sync that work before changing driver."
+            )
+        active_old_duty = session.scalar(
+            select(DutySession.id).where(
+                DutySession.company_id == context.company.id,
+                DutySession.driver_membership_id == device.membership_id,
+                DutySession.status == DutySessionStatus.ACTIVE,
+            )
+        )
+        if active_old_duty is not None:
+            raise DeviceHandoverBlockedError(
+                "This phone still has an active duty or unsynced records for another "
+                "driver. Finish and sync that work before changing driver."
+            )
+        old_membership_id = device.membership_id
+        device.membership_id = context.membership.id
+        device.platform = platform
+        write_audit_log(
+            session,
+            company_id=context.company.id,
+            actor_membership_id=context.membership.id,
+            action="DEVICE_DRIVER_HANDOVER",
+            entity_type="Device",
+            entity_id=device.id,
+            old_values={"membership_id": str(old_membership_id)},
+            new_values={"membership_id": str(context.membership.id)},
+        )
+        handed_over = True
+    return device, handed_over
 
 
 def _evidence_for_event(
@@ -366,6 +406,26 @@ def _evidence_for_event(
     )
     if evidence is None:
         raise EvidenceValidationError("evidence is not owned by this driver event")
+
+
+def validate_driver_event_uuid(
+    session: Session,
+    context: AuthContext,
+    *,
+    client_event_uuid: UUID,
+) -> None:
+    """Reject another driver's UUID before device registration side effects."""
+    _require_driver(context)
+    owner_membership_id = session.scalar(
+        select(Assignment.driver_membership_id)
+        .join(OperationalEvent, OperationalEvent.assignment_id == Assignment.id)
+        .where(
+            OperationalEvent.company_id == context.company.id,
+            OperationalEvent.client_event_uuid == client_event_uuid,
+        )
+    )
+    if owner_membership_id is not None and owner_membership_id != context.membership.id:
+        raise TenantConsistencyError("client event UUID is not owned by this driver")
 
 
 def create_driver_event(

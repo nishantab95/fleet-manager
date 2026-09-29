@@ -402,3 +402,95 @@ def test_0011_migrates_complete_tipper_history_and_reporting(
     finally:
         command.upgrade(config, "head")
         _cleanup_migrated_graph(postgres_engine)
+
+
+def test_0012_preserves_people_sites_and_accepts_invited_status(
+    postgres_engine: Engine,
+) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("40000000-0000-0000-0000-000000000001")
+    user_id = UUID("40000000-0000-0000-0000-000000000002")
+    membership_id = UUID("40000000-0000-0000-0000-000000000003")
+    site_id = UUID("40000000-0000-0000-0000-000000000004")
+    command.downgrade(config, "0011_fleet_assets")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'People Sites Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, phone_number, display_name, status) "
+                    "VALUES (:id, '+919100000099', 'Preserved Supervisor', 'ACTIVE')"
+                ),
+                {"id": user_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO company_memberships "
+                    "(id, company_id, user_id, role, status, display_name) VALUES "
+                    "(:id, :company_id, :user_id, 'SUPERVISOR', 'ACTIVE', "
+                    "'Preserved Supervisor')"
+                ),
+                {
+                    "id": membership_id,
+                    "company_id": company_id,
+                    "user_id": user_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO sites (id, company_id, name, code, status) VALUES "
+                    "(:id, :company_id, 'Preserved Site', 'KEEP', 'ACTIVE')"
+                ),
+                {"id": site_id, "company_id": company_id},
+            )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.begin() as connection:
+            site = connection.execute(
+                text(
+                    "SELECT id, name, code, location_description, latitude, longitude "
+                    "FROM sites WHERE id = :id"
+                ),
+                {"id": site_id},
+            ).mappings().one()
+            assert site["id"] == site_id
+            assert site["name"] == "Preserved Site"
+            assert site["code"] == "KEEP"
+            assert site["location_description"] is None
+            assert site["latitude"] is None
+            assert site["longitude"] is None
+            connection.execute(
+                text(
+                    "UPDATE company_memberships SET status = 'INVITED' WHERE id = :id"
+                ),
+                {"id": membership_id},
+            )
+            assert connection.scalar(
+                text("SELECT status::text FROM company_memberships WHERE id = :id"),
+                {"id": membership_id},
+            ) == "INVITED"
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM sites WHERE company_id = :company_id"),
+                {"company_id": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM company_memberships WHERE company_id = :company_id"),
+                {"company_id": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM users WHERE id = :id"), {"id": user_id}
+            )
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :id"), {"id": company_id}
+            )

@@ -22,6 +22,7 @@ class PendingEvents extends Table {
   TextColumn get evidencePath => text().nullable()();
   TextColumn get lastSyncError => text().nullable()();
   DateTimeColumn get createdAt => dateTime()();
+  TextColumn get accountScope => text().nullable()();
 
   @override
   Set<Column<Object>> get primaryKey => {clientEventUuid};
@@ -37,6 +38,7 @@ class SyncMetadata extends Table {
 
 class LocalDutySession {
   const LocalDutySession({
+    this.accountScope,
     required this.localSessionId,
     required this.assignmentId,
     required this.tipperId,
@@ -58,6 +60,7 @@ class LocalDutySession {
     required this.updatedAt,
   });
 
+  final String? accountScope;
   final String localSessionId;
   final String assignmentId;
   final String tipperId;
@@ -79,6 +82,7 @@ class LocalDutySession {
   final DateTime updatedAt;
 
   LocalDutySession copyWith({
+    String? accountScope,
     double? startKm,
     String? state,
     String? serverSessionId,
@@ -89,6 +93,7 @@ class LocalDutySession {
     DateTime? updatedAt,
   }) {
     return LocalDutySession(
+      accountScope: accountScope ?? this.accountScope,
       localSessionId: localSessionId,
       assignmentId: assignmentId,
       tipperId: tipperId,
@@ -112,6 +117,7 @@ class LocalDutySession {
   }
 
   Map<String, dynamic> toJson() => {
+    'accountScope': accountScope,
     'localSessionId': localSessionId,
     'assignmentId': assignmentId,
     'tipperId': tipperId,
@@ -135,6 +141,7 @@ class LocalDutySession {
 
   factory LocalDutySession.fromJson(Map<String, dynamic> json) {
     return LocalDutySession(
+      accountScope: json['accountScope'] as String?,
       localSessionId: json['localSessionId'] as String,
       assignmentId: json['assignmentId'] as String,
       tipperId: json['tipperId'] as String,
@@ -160,22 +167,135 @@ class LocalDutySession {
   }
 }
 
+class LocalHandoverSafety {
+  const LocalHandoverSafety({
+    required this.unsyncedEventCount,
+    required this.hasActiveDuty,
+  });
+
+  final int unsyncedEventCount;
+  final bool hasActiveDuty;
+
+  bool get isSafe => unsyncedEventCount == 0 && !hasActiveDuty;
+}
+
 @DriftDatabase(tables: [PendingEvents, SyncMetadata])
 class LocalDatabase extends _$LocalDatabase {
   LocalDatabase(super.e);
 
   static const _currentDutySessionKey = 'current_local_duty_session_id';
+  String? _activeAccountScope;
+
+  String? get activeAccountScope => _activeAccountScope;
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
     onUpgrade: (m, from, to) async {
       if (from < 2) await m.createTable(syncMetadata);
+      if (from < 3) {
+        await m.addColumn(pendingEvents, pendingEvents.accountScope);
+      }
     },
   );
+
+  Future<void> activateAccount(String accountScope) async {
+    _activeAccountScope = accountScope;
+    await latestLocalDutySession();
+  }
+
+  void deactivateAccount() {
+    _activeAccountScope = null;
+  }
+
+  String _accountMetadataKey(String key, [String? scope]) =>
+      '$key:${scope ?? _activeAccountScope ?? "legacy"}';
+
+  Expression<bool> _inActiveAccount(PendingEvents row) {
+    final scope = _activeAccountScope;
+    return scope == null
+        ? row.accountScope.isNull()
+        : row.accountScope.equals(scope);
+  }
+
+  Future<void> claimLegacyData(String accountScope) async {
+    await transaction(() async {
+      await (update(pendingEvents)..where((row) => row.accountScope.isNull()))
+          .write(PendingEventsCompanion(accountScope: Value(accountScope)));
+      final rows = await select(syncMetadata).get();
+      for (final row in rows.where(
+        (item) => item.key.startsWith('local_duty:'),
+      )) {
+        try {
+          final session = LocalDutySession.fromJson(
+            jsonDecode(row.value) as Map<String, dynamic>,
+          );
+          if (session.accountScope == null) {
+            await setMetadata(
+              row.key,
+              jsonEncode(session.copyWith(accountScope: accountScope).toJson()),
+            );
+          }
+        } on Object {
+          // Preserve unreadable legacy metadata rather than deleting it.
+        }
+      }
+      final legacyCurrent = await metadata(_currentDutySessionKey);
+      if (legacyCurrent != null) {
+        await setMetadata(
+          _accountMetadataKey(_currentDutySessionKey, accountScope),
+          legacyCurrent,
+        );
+      }
+    });
+  }
+
+  Future<LocalHandoverSafety> prepareHandover(String oldAccountScope) async {
+    await claimLegacyData(oldAccountScope);
+    final count = pendingEvents.clientEventUuid.count();
+    final unsyncedQuery = selectOnly(pendingEvents)
+      ..addColumns([count])
+      ..where(pendingEvents.accountScope.equals(oldAccountScope))
+      ..where(
+        pendingEvents.syncState.isNotIn(['synced', 'reconciledActiveDuty']),
+      );
+    final unsynced =
+        (await unsyncedQuery.map((row) => row.read(count)).getSingle()) ?? 0;
+    final sessions = await _allLocalDutySessionsUnscoped();
+    final scopedSessions = sessions
+        .where((session) => session.accountScope == oldAccountScope)
+        .toList(growable: false);
+    final currentId = await metadata(
+      _accountMetadataKey(_currentDutySessionKey, oldAccountScope),
+    );
+    LocalDutySession? currentDuty;
+    for (final session in scopedSessions) {
+      if (session.localSessionId == currentId) {
+        currentDuty = session;
+        break;
+      }
+    }
+    if (currentDuty == null && scopedSessions.isNotEmpty) {
+      currentDuty = scopedSessions.first;
+    }
+    final hasActiveDuty =
+        currentDuty != null &&
+        currentDuty.endedAt == null &&
+        currentDuty.state != 'closedConfirmed';
+    return LocalHandoverSafety(
+      unsyncedEventCount: unsynced,
+      hasActiveDuty: hasActiveDuty,
+    );
+  }
+
+  Future<void> setAccountMetadata(String key, String value) =>
+      setMetadata(_accountMetadataKey(key), value);
+
+  Future<String?> accountMetadata(String key) =>
+      metadata(_accountMetadataKey(key));
 
   Future<void> setMetadata(String key, String value) {
     return into(syncMetadata).insertOnConflictUpdate(
@@ -200,7 +320,9 @@ class LocalDatabase extends _$LocalDatabase {
     final sessions = await allLocalDutySessions();
     if (sessions.isEmpty) return null;
 
-    final currentId = await metadata(_currentDutySessionKey);
+    final currentId = await metadata(
+      _accountMetadataKey(_currentDutySessionKey),
+    );
     LocalDutySession? current;
     for (final session in sessions) {
       if (session.localSessionId == currentId) {
@@ -214,7 +336,10 @@ class LocalDatabase extends _$LocalDatabase {
       // marker existed. Operational chronology is immutable: error retries may
       // change updatedAt, but must never make an old duty current again.
       current = sessions.first;
-      await setMetadata(_currentDutySessionKey, current.localSessionId);
+      await setMetadata(
+        _accountMetadataKey(_currentDutySessionKey),
+        current.localSessionId,
+      );
     }
 
     if (assignmentId == null || current.assignmentId == assignmentId) {
@@ -228,6 +353,14 @@ class LocalDatabase extends _$LocalDatabase {
   }
 
   Future<List<LocalDutySession>> allLocalDutySessions() async {
+    final sessions = await _allLocalDutySessionsUnscoped();
+    final scope = _activeAccountScope;
+    return sessions
+        .where((session) => session.accountScope == scope)
+        .toList(growable: false);
+  }
+
+  Future<List<LocalDutySession>> _allLocalDutySessionsUnscoped() async {
     final rows = await select(syncMetadata).get();
     final sessions = <LocalDutySession>[];
     for (final row in rows.where((row) => row.key.startsWith('local_duty:'))) {
@@ -253,9 +386,10 @@ class LocalDatabase extends _$LocalDatabase {
     final value = await metadata('local_duty:$localSessionId');
     if (value == null) return null;
     try {
-      return LocalDutySession.fromJson(
+      final session = LocalDutySession.fromJson(
         jsonDecode(value) as Map<String, dynamic>,
       );
+      return session.accountScope == _activeAccountScope ? session : null;
     } on Object {
       return null;
     }
@@ -265,12 +399,19 @@ class LocalDatabase extends _$LocalDatabase {
     LocalDutySession session, {
     bool makeCurrent = false,
   }) async {
+    final scopedSession =
+        session.accountScope == null && _activeAccountScope != null
+        ? session.copyWith(accountScope: _activeAccountScope)
+        : session;
     await setMetadata(
-      'local_duty:${session.localSessionId}',
-      jsonEncode(session.toJson()),
+      'local_duty:${scopedSession.localSessionId}',
+      jsonEncode(scopedSession.toJson()),
     );
     if (makeCurrent) {
-      await setMetadata(_currentDutySessionKey, session.localSessionId);
+      await setMetadata(
+        _accountMetadataKey(_currentDutySessionKey),
+        scopedSession.localSessionId,
+      );
     }
   }
 
@@ -323,7 +464,7 @@ class LocalDatabase extends _$LocalDatabase {
     String localSessionId,
     String startEventUuid,
   ) async {
-    final rows = await select(pendingEvents).get();
+    final rows = await (select(pendingEvents)..where(_inActiveAccount)).get();
     for (final row in rows) {
       final payload = _decodeEventPayload(row.payloadJson);
       if (payload['_duty_session_id'] != localSessionId ||
@@ -344,7 +485,7 @@ class LocalDatabase extends _$LocalDatabase {
   }
 
   Future<void> unblockDutyDependentEvents(String localSessionId) async {
-    final rows = await select(pendingEvents).get();
+    final rows = await (select(pendingEvents)..where(_inActiveAccount)).get();
     for (final row in rows) {
       final payload = _decodeEventPayload(row.payloadJson);
       if (payload['_duty_session_id'] != localSessionId ||
@@ -396,6 +537,7 @@ class LocalDatabase extends _$LocalDatabase {
           ..where(
             (row) => row.syncState.isIn(['pending', 'syncing', 'syncFailed']),
           )
+          ..where(_inActiveAccount)
           ..orderBy([(row) => OrderingTerm.asc(row.createdAt)]))
         .get();
   }
@@ -406,65 +548,73 @@ class LocalDatabase extends _$LocalDatabase {
       ..addColumns([count])
       ..where(
         pendingEvents.syncState.isNotIn(['synced', 'reconciledActiveDuty']),
-      );
+      )
+      ..where(_inActiveAccount(pendingEvents));
     return (await query.map((row) => row.read(count)).getSingle()) ?? 0;
   }
 
   Future<void> markSyncing(String clientEventUuid) {
-    return (update(
-      pendingEvents,
-    )..where((row) => row.clientEventUuid.equals(clientEventUuid))).write(
-      const PendingEventsCompanion(
-        syncState: Value('syncing'),
-        lastSyncError: Value(null),
-      ),
-    );
+    return (update(pendingEvents)
+          ..where((row) => row.clientEventUuid.equals(clientEventUuid))
+          ..where(_inActiveAccount))
+        .write(
+          const PendingEventsCompanion(
+            syncState: Value('syncing'),
+            lastSyncError: Value(null),
+          ),
+        );
   }
 
   Future<void> markSynced(String clientEventUuid) {
     return (update(pendingEvents)
-          ..where((row) => row.clientEventUuid.equals(clientEventUuid)))
+          ..where((row) => row.clientEventUuid.equals(clientEventUuid))
+          ..where(_inActiveAccount))
         .write(const PendingEventsCompanion(syncState: Value('synced')));
   }
 
   Future<void> markReconciledActiveDuty(String clientEventUuid) {
-    return (update(
-      pendingEvents,
-    )..where((row) => row.clientEventUuid.equals(clientEventUuid))).write(
-      const PendingEventsCompanion(
-        syncState: Value('reconciledActiveDuty'),
-        lastSyncError: Value(null),
-      ),
-    );
+    return (update(pendingEvents)
+          ..where((row) => row.clientEventUuid.equals(clientEventUuid))
+          ..where(_inActiveAccount))
+        .write(
+          const PendingEventsCompanion(
+            syncState: Value('reconciledActiveDuty'),
+            lastSyncError: Value(null),
+          ),
+        );
   }
 
   Future<void> markFailed(String clientEventUuid, String message) async {
     final row =
         await (select(pendingEvents)
-              ..where((item) => item.clientEventUuid.equals(clientEventUuid)))
+              ..where((item) => item.clientEventUuid.equals(clientEventUuid))
+              ..where(_inActiveAccount))
             .getSingleOrNull();
     if (row == null) return;
-    await (update(
-      pendingEvents,
-    )..where((item) => item.clientEventUuid.equals(clientEventUuid))).write(
-      PendingEventsCompanion(
-        syncState: const Value('syncFailed'),
-        retryCount: Value(row.retryCount + 1),
-        lastSyncError: Value(message),
-      ),
-    );
+    await (update(pendingEvents)
+          ..where((item) => item.clientEventUuid.equals(clientEventUuid))
+          ..where(_inActiveAccount))
+        .write(
+          PendingEventsCompanion(
+            syncState: const Value('syncFailed'),
+            retryCount: Value(row.retryCount + 1),
+            lastSyncError: Value(message),
+          ),
+        );
   }
 
   Future<PendingEvent?> eventById(String clientEventUuid) {
     return (select(pendingEvents)
-          ..where((row) => row.clientEventUuid.equals(clientEventUuid)))
+          ..where((row) => row.clientEventUuid.equals(clientEventUuid))
+          ..where(_inActiveAccount))
         .getSingleOrNull();
   }
 
   Future<List<PendingEvent>> allEventsForDiagnostics() {
-    return (select(
-      pendingEvents,
-    )..orderBy([(row) => OrderingTerm.asc(row.createdAt)])).get();
+    return (select(pendingEvents)
+          ..where(_inActiveAccount)
+          ..orderBy([(row) => OrderingTerm.asc(row.createdAt)]))
+        .get();
   }
 
   static int _compareDutyChronology(LocalDutySession a, LocalDutySession b) {

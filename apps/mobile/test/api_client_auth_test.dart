@@ -126,7 +126,11 @@ void main() {
     final api = _refreshingApi(
       role: 'DRIVER',
       protectedPath: '/api/v1/driver/device',
-      successBody: '{}',
+      successBody: jsonEncode({
+        'device_id': 'device-id',
+        'membership_id': 'membership-id',
+        'handed_over': false,
+      }),
       counts: counts,
     );
 

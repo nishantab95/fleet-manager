@@ -167,6 +167,20 @@ append-only and requires an owner reason.
     an effective assignment or active duty session exists and never removes
     assignments, duty sessions, events, verification history, evidence, or
     report history.
+26. A People invitation creates or reuses the normalized global `User` and
+    creates a tenant-scoped `CompanyMembership` in `INVITED` state. A valid OTP
+    session selection activates that same membership UUID. Existing identities
+    in another company are not renamed or duplicated.
+27. Owner People management is limited to Driver and Supervisor memberships.
+    Deactivation is rejected for effective assignments, active Driver duty, or
+    remaining Supervisor site access. Records are never hard-deleted.
+28. Site name and optional code are case-insensitively unique within a company;
+    code is normalized to uppercase. Site deactivation is rejected while an
+    effective assignment or active duty exists and preserves the Site UUID and
+    historical relationships.
+29. Supervisor-to-Site access is tenant-consistent and unique per pair. New
+    access requires both an active Site and an active Supervisor membership;
+    grant and revoke actions are audited.
 
 ## PC V1 emergency contract
 
@@ -178,3 +192,12 @@ Emergency records use `OPEN -> ACKNOWLEDGED -> RESOLVED` lifecycle actions and
 are not normal Trip/KM/Diesel verification items. Rapid repeat open signals in
 the short retry window resolve to the existing emergency event while client UUID
 idempotency remains the primary retry boundary.
+
+## Device installation and current Driver binding
+
+`Device` is a company-scoped installation identity. `Device.membership_id`
+records the current Driver binding and may change through the guarded handover
+operation. `OperationalEvent.device_id`, assignment ownership, duty sessions,
+and `EvidenceObject.membership_id` remain immutable historical attribution.
+Each successful reassignment creates an append-only audit record containing
+the device ID and old/new membership IDs.

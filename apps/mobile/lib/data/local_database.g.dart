@@ -152,6 +152,17 @@ class $PendingEventsTable extends PendingEvents
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _accountScopeMeta = const VerificationMeta(
+    'accountScope',
+  );
+  @override
+  late final GeneratedColumn<String> accountScope = GeneratedColumn<String>(
+    'account_scope',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     clientEventUuid,
@@ -167,6 +178,7 @@ class $PendingEventsTable extends PendingEvents
     evidencePath,
     lastSyncError,
     createdAt,
+    accountScope,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -299,6 +311,15 @@ class $PendingEventsTable extends PendingEvents
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('account_scope')) {
+      context.handle(
+        _accountScopeMeta,
+        accountScope.isAcceptableOrUnknown(
+          data['account_scope']!,
+          _accountScopeMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -360,6 +381,10 @@ class $PendingEventsTable extends PendingEvents
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      accountScope: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_scope'],
+      ),
     );
   }
 
@@ -383,6 +408,7 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
   final String? evidencePath;
   final String? lastSyncError;
   final DateTime createdAt;
+  final String? accountScope;
   const PendingEvent({
     required this.clientEventUuid,
     required this.eventType,
@@ -397,6 +423,7 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
     this.evidencePath,
     this.lastSyncError,
     required this.createdAt,
+    this.accountScope,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -418,6 +445,9 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
       map['last_sync_error'] = Variable<String>(lastSyncError);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || accountScope != null) {
+      map['account_scope'] = Variable<String>(accountScope);
+    }
     return map;
   }
 
@@ -440,6 +470,9 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
           ? const Value.absent()
           : Value(lastSyncError),
       createdAt: Value(createdAt),
+      accountScope: accountScope == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accountScope),
     );
   }
 
@@ -462,6 +495,7 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
       evidencePath: serializer.fromJson<String?>(json['evidencePath']),
       lastSyncError: serializer.fromJson<String?>(json['lastSyncError']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      accountScope: serializer.fromJson<String?>(json['accountScope']),
     );
   }
   @override
@@ -481,6 +515,7 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
       'evidencePath': serializer.toJson<String?>(evidencePath),
       'lastSyncError': serializer.toJson<String?>(lastSyncError),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'accountScope': serializer.toJson<String?>(accountScope),
     };
   }
 
@@ -498,6 +533,7 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
     Value<String?> evidencePath = const Value.absent(),
     Value<String?> lastSyncError = const Value.absent(),
     DateTime? createdAt,
+    Value<String?> accountScope = const Value.absent(),
   }) => PendingEvent(
     clientEventUuid: clientEventUuid ?? this.clientEventUuid,
     eventType: eventType ?? this.eventType,
@@ -514,6 +550,7 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
         ? lastSyncError.value
         : this.lastSyncError,
     createdAt: createdAt ?? this.createdAt,
+    accountScope: accountScope.present ? accountScope.value : this.accountScope,
   );
   PendingEvent copyWithCompanion(PendingEventsCompanion data) {
     return PendingEvent(
@@ -546,6 +583,9 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
           ? data.lastSyncError.value
           : this.lastSyncError,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      accountScope: data.accountScope.present
+          ? data.accountScope.value
+          : this.accountScope,
     );
   }
 
@@ -564,7 +604,8 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
           ..write('payloadJson: $payloadJson, ')
           ..write('evidencePath: $evidencePath, ')
           ..write('lastSyncError: $lastSyncError, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('accountScope: $accountScope')
           ..write(')'))
         .toString();
   }
@@ -584,6 +625,7 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
     evidencePath,
     lastSyncError,
     createdAt,
+    accountScope,
   );
   @override
   bool operator ==(Object other) =>
@@ -601,7 +643,8 @@ class PendingEvent extends DataClass implements Insertable<PendingEvent> {
           other.payloadJson == this.payloadJson &&
           other.evidencePath == this.evidencePath &&
           other.lastSyncError == this.lastSyncError &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.accountScope == this.accountScope);
 }
 
 class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
@@ -618,6 +661,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
   final Value<String?> evidencePath;
   final Value<String?> lastSyncError;
   final Value<DateTime> createdAt;
+  final Value<String?> accountScope;
   final Value<int> rowid;
   const PendingEventsCompanion({
     this.clientEventUuid = const Value.absent(),
@@ -633,6 +677,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
     this.evidencePath = const Value.absent(),
     this.lastSyncError = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.accountScope = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   PendingEventsCompanion.insert({
@@ -649,6 +694,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
     this.evidencePath = const Value.absent(),
     this.lastSyncError = const Value.absent(),
     required DateTime createdAt,
+    this.accountScope = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : clientEventUuid = Value(clientEventUuid),
        eventType = Value(eventType),
@@ -674,6 +720,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
     Expression<String>? evidencePath,
     Expression<String>? lastSyncError,
     Expression<DateTime>? createdAt,
+    Expression<String>? accountScope,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -690,6 +737,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
       if (evidencePath != null) 'evidence_path': evidencePath,
       if (lastSyncError != null) 'last_sync_error': lastSyncError,
       if (createdAt != null) 'created_at': createdAt,
+      if (accountScope != null) 'account_scope': accountScope,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -708,6 +756,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
     Value<String?>? evidencePath,
     Value<String?>? lastSyncError,
     Value<DateTime>? createdAt,
+    Value<String?>? accountScope,
     Value<int>? rowid,
   }) {
     return PendingEventsCompanion(
@@ -724,6 +773,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
       evidencePath: evidencePath ?? this.evidencePath,
       lastSyncError: lastSyncError ?? this.lastSyncError,
       createdAt: createdAt ?? this.createdAt,
+      accountScope: accountScope ?? this.accountScope,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -770,6 +820,9 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (accountScope.present) {
+      map['account_scope'] = Variable<String>(accountScope.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -792,6 +845,7 @@ class PendingEventsCompanion extends UpdateCompanion<PendingEvent> {
           ..write('evidencePath: $evidencePath, ')
           ..write('lastSyncError: $lastSyncError, ')
           ..write('createdAt: $createdAt, ')
+          ..write('accountScope: $accountScope, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1037,6 +1091,7 @@ typedef $$PendingEventsTableCreateCompanionBuilder =
       Value<String?> evidencePath,
       Value<String?> lastSyncError,
       required DateTime createdAt,
+      Value<String?> accountScope,
       Value<int> rowid,
     });
 typedef $$PendingEventsTableUpdateCompanionBuilder =
@@ -1054,6 +1109,7 @@ typedef $$PendingEventsTableUpdateCompanionBuilder =
       Value<String?> evidencePath,
       Value<String?> lastSyncError,
       Value<DateTime> createdAt,
+      Value<String?> accountScope,
       Value<int> rowid,
     });
 
@@ -1128,6 +1184,11 @@ class $$PendingEventsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accountScope => $composableBuilder(
+    column: $table.accountScope,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1205,6 +1266,11 @@ class $$PendingEventsTableOrderingComposer
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get accountScope => $composableBuilder(
+    column: $table.accountScope,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$PendingEventsTableAnnotationComposer
@@ -1270,6 +1336,11 @@ class $$PendingEventsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<String> get accountScope => $composableBuilder(
+    column: $table.accountScope,
+    builder: (column) => column,
+  );
 }
 
 class $$PendingEventsTableTableManager
@@ -1318,6 +1389,7 @@ class $$PendingEventsTableTableManager
                 Value<String?> evidencePath = const Value.absent(),
                 Value<String?> lastSyncError = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<String?> accountScope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PendingEventsCompanion(
                 clientEventUuid: clientEventUuid,
@@ -1333,6 +1405,7 @@ class $$PendingEventsTableTableManager
                 evidencePath: evidencePath,
                 lastSyncError: lastSyncError,
                 createdAt: createdAt,
+                accountScope: accountScope,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1350,6 +1423,7 @@ class $$PendingEventsTableTableManager
                 Value<String?> evidencePath = const Value.absent(),
                 Value<String?> lastSyncError = const Value.absent(),
                 required DateTime createdAt,
+                Value<String?> accountScope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PendingEventsCompanion.insert(
                 clientEventUuid: clientEventUuid,
@@ -1365,6 +1439,7 @@ class $$PendingEventsTableTableManager
                 evidencePath: evidencePath,
                 lastSyncError: lastSyncError,
                 createdAt: createdAt,
+                accountScope: accountScope,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

@@ -199,6 +199,72 @@ class OwnerAssetResponse(BaseModel):
     active_assignment: OwnerAssetAssignmentResponse | None
 
 
+class OwnerPersonInviteRequest(BaseModel):
+    phone: str = Field(min_length=3, max_length=64)
+    display_name: str = Field(min_length=1, max_length=200)
+    role: Literal[MembershipRole.DRIVER, MembershipRole.SUPERVISOR]
+
+
+class OwnerPersonUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    role: Literal[MembershipRole.DRIVER, MembershipRole.SUPERVISOR] | None = None
+
+
+class OwnerPersonSiteResponse(BaseModel):
+    site_id: UUID
+    site_name: str
+
+
+class OwnerPersonResponse(BaseModel):
+    user_id: UUID
+    membership_id: UUID
+    phone: str
+    display_name: str
+    role: MembershipRole
+    status: MembershipStatus
+    sites: list[OwnerPersonSiteResponse]
+    has_active_assignment: bool
+    has_active_duty: bool
+
+
+class OwnerSiteCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=64)
+    location_description: str | None = Field(default=None, max_length=500)
+    latitude: Decimal | None = Field(default=None, ge=-90, le=90)
+    longitude: Decimal | None = Field(default=None, ge=-180, le=180)
+
+
+class OwnerSiteUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=64)
+    location_description: str | None = Field(default=None, max_length=500)
+    latitude: Decimal | None = Field(default=None, ge=-90, le=90)
+    longitude: Decimal | None = Field(default=None, ge=-180, le=180)
+
+
+class OwnerSiteSupervisorRequest(BaseModel):
+    supervisor_membership_id: UUID
+
+
+class OwnerSiteSupervisorResponse(BaseModel):
+    access_id: UUID
+    membership_id: UUID
+    display_name: str
+
+
+class OwnerSiteResponse(BaseModel):
+    id: UUID
+    name: str
+    code: str | None
+    location_description: str | None
+    latitude: Decimal | None
+    longitude: Decimal | None
+    status: SiteStatus
+    supervisors: list[OwnerSiteSupervisorResponse]
+    asset_count: int
+
+
 class PersonCreateRequest(BaseModel):
     phone: str = Field(min_length=3, max_length=64)
     display_name: str = Field(min_length=1, max_length=200)
@@ -289,12 +355,16 @@ class DriverDutyStateResponse(BaseModel):
 class DriverDeviceRequest(BaseModel):
     installation_identifier: str = Field(min_length=1, max_length=200)
     platform: DevicePlatform
+    allow_handover: bool = False
+    local_state_clear: bool = False
 
 
 class DriverDeviceResponse(BaseModel):
     device_id: UUID
     installation_identifier: str
     platform: DevicePlatform
+    membership_id: UUID
+    handed_over: bool = False
 
 
 class DriverEventRequest(BaseModel):

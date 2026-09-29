@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +51,9 @@ class Site(UpdatedTimestampModel):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    location_description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
+    longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
     status: Mapped[SiteStatus] = mapped_column(
         SAEnum(SiteStatus, name="site_status_enum"), nullable=False
     )
@@ -58,4 +62,12 @@ class Site(UpdatedTimestampModel):
         UniqueConstraint("company_id", "name", name="uq_sites_company_name"),
         UniqueConstraint("company_id", "code", name="uq_sites_company_code"),
         UniqueConstraint("company_id", "id", name="uq_sites_company_id"),
+        CheckConstraint(
+            "latitude IS NULL OR (latitude >= -90 AND latitude <= 90)",
+            name="ck_sites_latitude_range",
+        ),
+        CheckConstraint(
+            "longitude IS NULL OR (longitude >= -180 AND longitude <= 180)",
+            name="ck_sites_longitude_range",
+        ),
     )

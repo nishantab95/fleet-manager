@@ -27,6 +27,7 @@ from fleet_api.domain.errors import (
     TenantConsistencyError,
 )
 from fleet_api.domain.owner_assets import OwnerAssetService
+from fleet_api.domain.owner_people_sites import OwnerPeopleSiteService
 from fleet_api.storage.objects import ObjectStorage, build_object_storage
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -128,6 +129,20 @@ def get_owner_asset_service(
         db,
         context,
         request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_owner_people_site_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+    settings: Annotated[Settings, Depends(get_app_settings)],
+) -> OwnerPeopleSiteService:
+    return OwnerPeopleSiteService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+        phone_default_region=settings.phone_default_region,
     )
 
 

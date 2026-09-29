@@ -17,10 +17,13 @@ from fleet_api.auth.service import AuthService
 from fleet_api.core.config import Settings
 from fleet_api.db.models import (
     Assignment,
+    AuditLog,
     Company,
     CompanyMembership,
+    Device,
     DutySession,
     EmergencyEvent,
+    EvidenceObject,
     FleetAsset,
     OperationalEvent,
     Site,
@@ -31,6 +34,7 @@ from fleet_api.domain.enums import (
     AssetOwnershipType,
     FleetAssetStatus,
     FleetAssetType,
+    MembershipStatus,
     VerificationStatus,
 )
 from fleet_api.main import create_app
@@ -82,6 +86,7 @@ def session_for_user(
         "Driver A2": "+919876543211",
         "Supervisor A": "+919876543212",
         "Owner A": "+919876543213",
+        "Driver B": "+919876543214",
     }
     user.phone_number = phone_by_name[user.display_name]
     db_session.flush()
@@ -934,6 +939,287 @@ def test_driver_device_platform_is_restricted_to_supported_values(
         assert invalid.status_code == 422
     finally:
         client.close()
+
+
+def test_clean_driver_handover_is_audited_and_preserves_history(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    add_assignment(db_session, tenant_records)
+    driver_a_membership = value(tenant_records, "driver_a", CompanyMembership)
+    driver_a = user_by_name(db_session, "Driver A")
+    client_a = driver_app(
+        db_session,
+        session_for_user(db_session, driver_a, driver_a_membership),
+        storage=InMemoryStorage(),
+    )
+    installation = "handover-phone"
+    evidence_uuid = str(uuid4())
+    event_uuid = str(uuid4())
+    try:
+        registered = client_a.post(
+            "/api/v1/driver/device",
+            json={"installation_identifier": installation, "platform": "ANDROID"},
+        )
+        assert registered.status_code == 200
+        device_id = registered.json()["device_id"]
+        assert registered.json()["handed_over"] is False
+        assert registered.json()["membership_id"] == str(driver_a_membership.id)
+        repeated = client_a.post(
+            "/api/v1/driver/device",
+            json={"installation_identifier": installation, "platform": "ANDROID"},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["device_id"] == device_id
+
+        uploaded = client_a.post(
+            "/api/v1/driver/evidence",
+            params={"client_event_uuid": evidence_uuid},
+            files={"file": ("handover.jpg", b"\xff\xd8\xffhandover", "image/jpeg")},
+        )
+        assert uploaded.status_code == 200
+        event = client_a.post(
+            "/api/v1/driver/events",
+            json={
+                **event_payload(event_uuid, installation_identifier=installation),
+                "event_type": "EMERGENCY",
+            },
+        )
+        assert event.status_code == 200
+    finally:
+        client_a.close()
+
+    driver_a2_membership = value(tenant_records, "driver_a2", CompanyMembership)
+    driver_a2 = user_by_name(db_session, "Driver A2")
+    client_a2 = driver_app(
+        db_session,
+        session_for_user(db_session, driver_a2, driver_a2_membership),
+    )
+    try:
+        preflight = client_a2.post(
+            "/api/v1/driver/device",
+            json={"installation_identifier": installation, "platform": "ANDROID"},
+        )
+        assert preflight.status_code == 409
+        assert preflight.json()["detail"] == {
+            "code": "DEVICE_HANDOVER_REQUIRED",
+            "message": "device handover confirmation is required",
+            "current_membership_id": str(driver_a_membership.id),
+        }
+
+        missing_local_confirmation = client_a2.post(
+            "/api/v1/driver/device",
+            json={
+                "installation_identifier": installation,
+                "platform": "ANDROID",
+                "allow_handover": True,
+            },
+        )
+        assert missing_local_confirmation.status_code == 409
+        assert missing_local_confirmation.json()["detail"]["code"] == (
+            "DEVICE_HANDOVER_BLOCKED"
+        )
+
+        handed_over = client_a2.post(
+            "/api/v1/driver/device",
+            json={
+                "installation_identifier": installation,
+                "platform": "ANDROID",
+                "allow_handover": True,
+                "local_state_clear": True,
+            },
+        )
+        assert handed_over.status_code == 200
+        assert handed_over.json()["device_id"] == device_id
+        assert handed_over.json()["membership_id"] == str(driver_a2_membership.id)
+        assert handed_over.json()["handed_over"] is True
+
+        same_driver = client_a2.post(
+            "/api/v1/driver/device",
+            json={"installation_identifier": installation, "platform": "ANDROID"},
+        )
+        assert same_driver.status_code == 200
+        assert same_driver.json()["device_id"] == device_id
+        assert same_driver.json()["handed_over"] is False
+    finally:
+        client_a2.close()
+
+    historical_event = db_session.scalar(
+        select(OperationalEvent).where(OperationalEvent.client_event_uuid == event_uuid)
+    )
+    assert historical_event is not None
+    historical_assignment = db_session.get(Assignment, historical_event.assignment_id)
+    assert historical_assignment is not None
+    assert historical_assignment.driver_membership_id == driver_a_membership.id
+    assert str(historical_event.device_id) == device_id
+    evidence = db_session.scalar(
+        select(EvidenceObject).where(EvidenceObject.client_event_uuid == evidence_uuid)
+    )
+    assert evidence is not None
+    assert evidence.membership_id == driver_a_membership.id
+    audit = db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.entity_id == historical_event.device_id,
+            AuditLog.action == "DEVICE_DRIVER_HANDOVER",
+        )
+    )
+    assert audit is not None
+    assert audit.actor_membership_id == driver_a2_membership.id
+    assert audit.old_values == {"membership_id": str(driver_a_membership.id)}
+    assert audit.new_values == {"membership_id": str(driver_a2_membership.id)}
+
+
+def test_active_old_driver_duty_blocks_handover(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    add_assignment(db_session, tenant_records)
+    old_membership = value(tenant_records, "driver_a", CompanyMembership)
+    client_a = driver_app(
+        db_session,
+        session_for_user(db_session, user_by_name(db_session, "Driver A"), old_membership),
+        storage=InMemoryStorage(),
+    )
+    installation = "active-duty-phone"
+    try:
+        start_duty(client_a, installation_identifier=installation)
+    finally:
+        client_a.close()
+
+    new_membership = value(tenant_records, "driver_a2", CompanyMembership)
+    client_a2 = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            user_by_name(db_session, "Driver A2"),
+            new_membership,
+        ),
+    )
+    try:
+        blocked = client_a2.post(
+            "/api/v1/driver/device",
+            json={
+                "installation_identifier": installation,
+                "platform": "ANDROID",
+                "allow_handover": True,
+                "local_state_clear": True,
+            },
+        )
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"]["code"] == "DEVICE_HANDOVER_BLOCKED"
+    finally:
+        client_a2.close()
+
+    device = db_session.scalar(
+        select(Device).where(Device.installation_identifier == installation)
+    )
+    assert device is not None
+    assert device.membership_id == old_membership.id
+
+
+def test_inactive_old_driver_does_not_lock_clean_phone(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    old_membership = value(tenant_records, "driver_a", CompanyMembership)
+    installation = "inactive-driver-phone"
+    client_a = driver_app(
+        db_session,
+        session_for_user(db_session, user_by_name(db_session, "Driver A"), old_membership),
+    )
+    try:
+        assert client_a.post(
+            "/api/v1/driver/device",
+            json={"installation_identifier": installation, "platform": "ANDROID"},
+        ).status_code == 200
+    finally:
+        client_a.close()
+    old_membership.status = MembershipStatus.INACTIVE
+    db_session.commit()
+
+    new_membership = value(tenant_records, "driver_a2", CompanyMembership)
+    client_a2 = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            user_by_name(db_session, "Driver A2"),
+            new_membership,
+        ),
+    )
+    try:
+        handed_over = client_a2.post(
+            "/api/v1/driver/device",
+            json={
+                "installation_identifier": installation,
+                "platform": "ANDROID",
+                "allow_handover": True,
+                "local_state_clear": True,
+            },
+        )
+        assert handed_over.status_code == 200
+        assert handed_over.json()["handed_over"] is True
+    finally:
+        client_a2.close()
+
+
+def test_same_installation_identifier_cannot_claim_cross_company_device(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    installation = "shared-looking-installation"
+    company_a = value(tenant_records, "company_a", Company)
+    company_b = value(tenant_records, "company_b", Company)
+    driver_a_membership = value(tenant_records, "driver_a", CompanyMembership)
+    client_a = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            user_by_name(db_session, "Driver A"),
+            driver_a_membership,
+        ),
+    )
+    try:
+        device_a = client_a.post(
+            "/api/v1/driver/device",
+            json={"installation_identifier": installation, "platform": "ANDROID"},
+        )
+        assert device_a.status_code == 200
+    finally:
+        client_a.close()
+
+    driver_b_membership = value(tenant_records, "driver_b", CompanyMembership)
+    client_b = driver_app(
+        db_session,
+        session_for_user(
+            db_session,
+            user_by_name(db_session, "Driver B"),
+            driver_b_membership,
+        ),
+    )
+    try:
+        device_b = client_b.post(
+            "/api/v1/driver/device",
+            json={
+                "installation_identifier": installation,
+                "platform": "ANDROID",
+                "allow_handover": True,
+                "local_state_clear": True,
+            },
+        )
+        assert device_b.status_code == 200
+        assert device_b.json()["device_id"] != device_a.json()["device_id"]
+    finally:
+        client_b.close()
+
+    devices = list(
+        db_session.scalars(
+            select(Device).where(Device.installation_identifier == installation)
+        ).all()
+    )
+    assert {(item.company_id, item.membership_id) for item in devices} == {
+        (company_a.id, driver_a_membership.id),
+        (company_b.id, driver_b_membership.id),
+    }
 
 
 def test_driver_qa_registers_web_device_and_submits_real_event(

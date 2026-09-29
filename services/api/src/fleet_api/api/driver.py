@@ -29,9 +29,12 @@ from fleet_api.domain.driver import (
     get_current_duty_state,
     register_device,
     upload_evidence,
+    validate_driver_event_uuid,
 )
 from fleet_api.domain.errors import (
     AssignmentNotEffectiveError,
+    DeviceHandoverBlockedError,
+    DeviceHandoverRequiredError,
     DomainError,
     DutyAlreadyStartedError,
     DutyAssignmentMismatchError,
@@ -57,6 +60,18 @@ def _fail(exc: DomainError) -> NoReturn:
     elif isinstance(exc, ObjectStorageUnavailableError):
         http_status = status.HTTP_503_SERVICE_UNAVAILABLE
         code = "OBJECT_STORAGE_UNAVAILABLE"
+    elif isinstance(exc, DeviceHandoverRequiredError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "DEVICE_HANDOVER_REQUIRED",
+                "message": str(exc),
+                "current_membership_id": str(exc.current_membership_id),
+            },
+        ) from exc
+    elif isinstance(exc, DeviceHandoverBlockedError):
+        http_status = status.HTTP_409_CONFLICT
+        code = "DEVICE_HANDOVER_BLOCKED"
     elif isinstance(exc, TenantConsistencyError | EvidenceValidationError):
         http_status = status.HTTP_403_FORBIDDEN if isinstance(exc, TenantConsistencyError) else 422
         code = "FORBIDDEN" if isinstance(exc, TenantConsistencyError) else "VALIDATION_ERROR"
@@ -153,17 +168,21 @@ def register_driver_device(
     db: Annotated[Session, Depends(get_db)],
 ) -> DriverDeviceResponse:
     try:
-        device = register_device(
+        device, handed_over = register_device(
             db,
             context,
             installation_identifier=payload.installation_identifier,
             platform=payload.platform,
+            allow_handover=payload.allow_handover,
+            local_state_clear=payload.local_state_clear,
         )
         db.commit()
         return DriverDeviceResponse(
             device_id=device.id,
             installation_identifier=device.installation_identifier,
             platform=device.platform,
+            membership_id=context.membership.id,
+            handed_over=handed_over,
         )
     except DomainError as exc:
         db.rollback()
@@ -178,7 +197,12 @@ def submit_driver_event(
     db: Annotated[Session, Depends(get_db)],
 ) -> DriverEventResponse:
     try:
-        device = register_device(
+        validate_driver_event_uuid(
+            db,
+            context,
+            client_event_uuid=payload.client_event_uuid,
+        )
+        device, _ = register_device(
             db,
             context,
             installation_identifier=payload.installation_identifier,

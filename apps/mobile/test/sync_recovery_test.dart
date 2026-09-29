@@ -25,10 +25,7 @@ void main() {
 
       expect(await engine.syncPending(), 0);
       expect((await database.eventById(id))?.syncState, 'syncFailed');
-      expect(
-        await database.metadata(SyncEngine.lastSyncErrorKey),
-        'BACKEND_UNAVAILABLE',
-      );
+      expect(await engine.lastSyncErrorCategory(), 'BACKEND_UNAVAILABLE');
 
       expect(await engine.syncPending(), 1);
       expect((await database.eventById(id))?.syncState, 'synced');
@@ -123,7 +120,15 @@ class _ControlledRemote implements DriverRemoteApi {
   final Set<String> logicalEvents = <String>{};
 
   @override
-  Future<void> registerDevice({required String installationIdentifier}) async {}
+  Future<DeviceRegistration> registerDevice({
+    required String installationIdentifier,
+    bool allowHandover = false,
+    bool localStateClear = false,
+  }) async => const DeviceRegistration(
+    deviceId: 'test-device-id',
+    membershipId: 'test-membership-id',
+    handedOver: false,
+  );
 
   @override
   Future<String> uploadEvidence({

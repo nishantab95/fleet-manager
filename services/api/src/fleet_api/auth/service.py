@@ -250,7 +250,9 @@ class AuthService:
             .join(Company, Company.id == CompanyMembership.company_id)
             .where(
                 CompanyMembership.user_id == claims.user_id,
-                CompanyMembership.status == MembershipStatus.ACTIVE,
+                CompanyMembership.status.in_(
+                    (MembershipStatus.ACTIVE, MembershipStatus.INVITED)
+                ),
                 Company.status == CompanyStatus.ACTIVE,
             )
         )
@@ -270,6 +272,34 @@ class AuthService:
             raise MembershipSelectionError("membership selection is invalid")
         if claims.requested_role is not None and membership_row.role != claims.requested_role:
             raise MembershipSelectionError("membership selection is invalid")
+        if (
+            membership_row.user_id != claims.user_id
+            or membership_row.status == MembershipStatus.INACTIVE
+        ):
+            raise MembershipSelectionError("membership selection is invalid")
+        if membership_row.status == MembershipStatus.INVITED:
+            invited_user = self.session.get(User, claims.user_id)
+            invited_company = self.session.get(Company, membership_row.company_id)
+            if (
+                invited_user is None
+                or invited_user.status != UserStatus.ACTIVE
+                or invited_company is None
+                or invited_company.status != CompanyStatus.ACTIVE
+            ):
+                raise MembershipSelectionError("membership selection is invalid")
+            membership_row.status = MembershipStatus.ACTIVE
+            self.session.flush()
+            write_audit_log(
+                self.session,
+                company_id=membership_row.company_id,
+                actor_membership_id=membership_row.id,
+                action="MEMBERSHIP_INVITATION_ACCEPTED",
+                entity_type="COMPANY_MEMBERSHIP",
+                entity_id=membership_row.id,
+                old_values={"status": MembershipStatus.INVITED.value},
+                new_values={"status": MembershipStatus.ACTIVE.value},
+                request_id=self.request_id,
+            )
         context_row = _active_context_for_membership(
             self.session,
             user_id=claims.user_id,

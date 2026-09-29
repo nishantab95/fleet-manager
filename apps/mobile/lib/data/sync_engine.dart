@@ -32,6 +32,43 @@ class SyncEngine {
   static const lastSyncFailureStageKey = 'last_sync_failure_stage';
   bool _syncInProgress = false;
 
+  static String accountScope({
+    required String serverIdentity,
+    required String companyId,
+    required String membershipId,
+  }) => jsonEncode([serverIdentity, companyId, membershipId]);
+
+  Future<void> activateAccount({
+    required String serverIdentity,
+    required String companyId,
+    required String membershipId,
+    bool claimLegacyData = false,
+  }) async {
+    final scope = accountScope(
+      serverIdentity: serverIdentity,
+      companyId: companyId,
+      membershipId: membershipId,
+    );
+    if (claimLegacyData) await database.claimLegacyData(scope);
+    await database.activateAccount(scope);
+  }
+
+  Future<local.LocalHandoverSafety> prepareHandover({
+    required String serverIdentity,
+    required String companyId,
+    required String oldMembershipId,
+  }) {
+    return database.prepareHandover(
+      accountScope(
+        serverIdentity: serverIdentity,
+        companyId: companyId,
+        membershipId: oldMembershipId,
+      ),
+    );
+  }
+
+  void deactivateAccount() => database.deactivateAccount();
+
   Future<String> enqueue({
     required DriverAssignment assignment,
     required DriverEventType eventType,
@@ -77,6 +114,7 @@ class SyncEngine {
       payloadJson: jsonEncode(storedPayload),
       evidencePath: Value(evidencePath),
       createdAt: now,
+      accountScope: Value(database.activeAccountScope),
     );
     await database.transaction(() async {
       await database.enqueue(event);
@@ -284,35 +322,50 @@ class SyncEngine {
             row.clientEventUuid,
           );
         }
-        await database.setMetadata(lastSyncErrorKey, _errorCategory(error));
-        await database.setMetadata(lastSyncErrorMessageKey, error.message);
-        await database.setMetadata(
+        await database.setAccountMetadata(
+          lastSyncErrorKey,
+          _errorCategory(error),
+        );
+        await database.setAccountMetadata(
+          lastSyncErrorMessageKey,
+          error.message,
+        );
+        await database.setAccountMetadata(
           lastSyncHttpStatusKey,
           error.statusCode.toString(),
         );
-        await database.setMetadata(lastSyncErrorCodeKey, error.code ?? '');
-        await database.setMetadata(
+        await database.setAccountMetadata(
+          lastSyncErrorCodeKey,
+          error.code ?? '',
+        );
+        await database.setAccountMetadata(
           lastSyncFailureStageKey,
           error.context?['sync_stage'] as String? ?? 'UNKNOWN',
         );
       } on Object catch (error) {
         await database.markFailed(event.clientEventUuid, error.toString());
-        await database.setMetadata(lastSyncErrorKey, 'LOCAL_OR_NETWORK_ERROR');
-        await database.setMetadata(lastSyncErrorMessageKey, error.toString());
+        await database.setAccountMetadata(
+          lastSyncErrorKey,
+          'LOCAL_OR_NETWORK_ERROR',
+        );
+        await database.setAccountMetadata(
+          lastSyncErrorMessageKey,
+          error.toString(),
+        );
       }
     }
     if (attempted == 0 || synced == attempted) {
-      await database.setMetadata(
+      await database.setAccountMetadata(
         lastSuccessfulSyncKey,
         DateTime.now().toUtc().toIso8601String(),
       );
     }
     if (attempted > 0 && synced == attempted) {
-      await database.setMetadata(lastSyncErrorKey, '');
-      await database.setMetadata(lastSyncErrorMessageKey, '');
-      await database.setMetadata(lastSyncHttpStatusKey, '');
-      await database.setMetadata(lastSyncErrorCodeKey, '');
-      await database.setMetadata(lastSyncFailureStageKey, '');
+      await database.setAccountMetadata(lastSyncErrorKey, '');
+      await database.setAccountMetadata(lastSyncErrorMessageKey, '');
+      await database.setAccountMetadata(lastSyncHttpStatusKey, '');
+      await database.setAccountMetadata(lastSyncErrorCodeKey, '');
+      await database.setAccountMetadata(lastSyncFailureStageKey, '');
       if ((await database.pendingForSync()).isNotEmpty) {
         return synced + await _syncPending();
       }
@@ -504,32 +557,32 @@ class SyncEngine {
   }
 
   Future<DateTime?> lastSuccessfulSync() async {
-    final value = await database.metadata(lastSuccessfulSyncKey);
+    final value = await database.accountMetadata(lastSuccessfulSyncKey);
     return value == null ? null : DateTime.tryParse(value)?.toUtc();
   }
 
   Future<String?> lastSyncErrorCategory() async {
-    final value = await database.metadata(lastSyncErrorKey);
+    final value = await database.accountMetadata(lastSyncErrorKey);
     return value == null || value.isEmpty ? null : value;
   }
 
   Future<String?> lastSyncErrorMessage() async {
-    final value = await database.metadata(lastSyncErrorMessageKey);
+    final value = await database.accountMetadata(lastSyncErrorMessageKey);
     return value == null || value.isEmpty ? null : value;
   }
 
   Future<String?> lastSyncHttpStatus() async {
-    final value = await database.metadata(lastSyncHttpStatusKey);
+    final value = await database.accountMetadata(lastSyncHttpStatusKey);
     return value == null || value.isEmpty ? null : value;
   }
 
   Future<String?> lastSyncErrorCode() async {
-    final value = await database.metadata(lastSyncErrorCodeKey);
+    final value = await database.accountMetadata(lastSyncErrorCodeKey);
     return value == null || value.isEmpty ? null : value;
   }
 
   Future<String?> lastSyncFailureStage() async {
-    final value = await database.metadata(lastSyncFailureStageKey);
+    final value = await database.accountMetadata(lastSyncFailureStageKey);
     return value == null || value.isEmpty ? null : value;
   }
 

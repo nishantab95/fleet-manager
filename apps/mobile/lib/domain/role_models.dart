@@ -477,6 +477,162 @@ class OwnerAssetInput {
       };
 }
 
+class OwnerPersonSite {
+  const OwnerPersonSite({required this.id, required this.name});
+
+  final String id;
+  final String name;
+
+  factory OwnerPersonSite.fromJson(Map<String, dynamic> json) =>
+      OwnerPersonSite(id: '${json['site_id']}', name: '${json['site_name']}');
+}
+
+class OwnerPerson {
+  const OwnerPerson({
+    required this.userId,
+    required this.membershipId,
+    required this.phone,
+    required this.displayName,
+    required this.role,
+    required this.status,
+    required this.sites,
+    required this.hasActiveAssignment,
+    required this.hasActiveDuty,
+  });
+
+  final String userId;
+  final String membershipId;
+  final String phone;
+  final String displayName;
+  final String role;
+  final String status;
+  final List<OwnerPersonSite> sites;
+  final bool hasActiveAssignment;
+  final bool hasActiveDuty;
+
+  bool get isActive => status == 'ACTIVE';
+  bool get isInvited => status == 'INVITED';
+  bool get isSupervisor => role == 'SUPERVISOR';
+
+  factory OwnerPerson.fromJson(Map<String, dynamic> json) => OwnerPerson(
+    userId: '${json['user_id']}',
+    membershipId: '${json['membership_id']}',
+    phone: '${json['phone']}',
+    displayName: '${json['display_name']}',
+    role: '${json['role']}',
+    status: '${json['status']}',
+    sites: (json['sites'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(OwnerPersonSite.fromJson)
+        .toList(),
+    hasActiveAssignment: json['has_active_assignment'] == true,
+    hasActiveDuty: json['has_active_duty'] == true,
+  );
+}
+
+class OwnerPersonInput {
+  const OwnerPersonInput({
+    required this.displayName,
+    required this.role,
+    this.phone,
+  });
+
+  final String displayName;
+  final String role;
+  final String? phone;
+
+  Map<String, dynamic> toJson({bool includePhone = false}) => {
+    'display_name': displayName,
+    'role': role,
+    if (includePhone) 'phone': phone,
+  };
+}
+
+class OwnerSiteSupervisor {
+  const OwnerSiteSupervisor({
+    required this.accessId,
+    required this.membershipId,
+    required this.displayName,
+  });
+
+  final String accessId;
+  final String membershipId;
+  final String displayName;
+
+  factory OwnerSiteSupervisor.fromJson(Map<String, dynamic> json) =>
+      OwnerSiteSupervisor(
+        accessId: '${json['access_id']}',
+        membershipId: '${json['membership_id']}',
+        displayName: '${json['display_name']}',
+      );
+}
+
+class OwnerManagedSite {
+  const OwnerManagedSite({
+    required this.id,
+    required this.name,
+    required this.code,
+    required this.locationDescription,
+    required this.latitude,
+    required this.longitude,
+    required this.status,
+    required this.supervisors,
+    required this.assetCount,
+  });
+
+  final String id;
+  final String name;
+  final String? code;
+  final String? locationDescription;
+  final double? latitude;
+  final double? longitude;
+  final String status;
+  final List<OwnerSiteSupervisor> supervisors;
+  final int assetCount;
+
+  bool get isActive => status == 'ACTIVE';
+
+  factory OwnerManagedSite.fromJson(Map<String, dynamic> json) =>
+      OwnerManagedSite(
+        id: '${json['id']}',
+        name: '${json['name']}',
+        code: json['code'] as String?,
+        locationDescription: json['location_description'] as String?,
+        latitude: _number(json['latitude']),
+        longitude: _number(json['longitude']),
+        status: '${json['status']}',
+        supervisors: (json['supervisors'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(OwnerSiteSupervisor.fromJson)
+            .toList(),
+        assetCount: _int(json['asset_count']),
+      );
+}
+
+class OwnerSiteInput {
+  const OwnerSiteInput({
+    required this.name,
+    this.code,
+    this.locationDescription,
+    this.latitude,
+    this.longitude,
+  });
+
+  final String name;
+  final String? code;
+  final String? locationDescription;
+  final double? latitude;
+  final double? longitude;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'code': code,
+    'location_description': locationDescription,
+    'latitude': latitude,
+    'longitude': longitude,
+  };
+}
+
 DateTime? _date(Object? value) =>
     value is String ? DateTime.tryParse(value) : null;
 double? _number(Object? value) => switch (value) {
