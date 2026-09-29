@@ -20,9 +20,9 @@ from fleet_api.db.models import (
     DutySession,
     EmergencyEvent,
     EvidenceObject,
+    FleetAsset,
     OperationalEvent,
     Site,
-    Tipper,
     User,
 )
 from fleet_api.db.models.common import utc_now
@@ -32,11 +32,12 @@ from fleet_api.domain.enums import (
     DutySessionStatus,
     EmergencyCategory,
     EmergencyStatus,
+    FleetAssetStatus,
+    FleetAssetType,
     KmReadingType,
     MembershipRole,
     OperationalEventType,
     SiteStatus,
-    TipperStatus,
     VerificationStatus,
 )
 from fleet_api.domain.errors import (
@@ -66,7 +67,7 @@ from fleet_api.storage.objects import ObjectStorage
 @dataclass(frozen=True)
 class DriverAssignment:
     assignment: Assignment
-    tipper: Tipper
+    asset: FleetAsset
     site: Site
     supervisor_membership: CompanyMembership
     supervisor: User
@@ -95,8 +96,8 @@ def _assignment_query(
     at: datetime,
 ) -> DriverAssignment | None:
     row = session.execute(
-        select(Assignment, Tipper, Site, CompanyMembership, User)
-        .join(Tipper, Tipper.id == Assignment.tipper_id)
+        select(Assignment, FleetAsset, Site, CompanyMembership, User)
+        .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
         .join(Site, Site.id == Assignment.site_id)
         .join(
             CompanyMembership,
@@ -108,7 +109,8 @@ def _assignment_query(
             Assignment.driver_membership_id == context.membership.id,
             Assignment.starts_at <= at,
             (Assignment.ends_at.is_(None) | (Assignment.ends_at > at)),
-            Tipper.status == TipperStatus.ACTIVE,
+            FleetAsset.asset_type == FleetAssetType.TIPPER,
+            FleetAsset.status == FleetAssetStatus.ACTIVE,
             Site.status == SiteStatus.ACTIVE,
             CompanyMembership.status == "ACTIVE",
         )
@@ -116,8 +118,8 @@ def _assignment_query(
     ).first()
     if row is None:
         return None
-    assignment, tipper, site, supervisor_membership, supervisor = row._tuple()
-    return DriverAssignment(assignment, tipper, site, supervisor_membership, supervisor)
+    assignment, asset, site, supervisor_membership, supervisor = row._tuple()
+    return DriverAssignment(assignment, asset, site, supervisor_membership, supervisor)
 
 
 def get_current_assignment(session: Session, context: AuthContext) -> DriverAssignment | None:
@@ -183,10 +185,10 @@ def _previous_valid_end_km(
     session: Session,
     *,
     company_id: UUID,
-    tipper_id: UUID,
+    asset_id: UUID,
     before: datetime,
 ) -> Decimal | None:
-    """Return the latest non-rejected END KM for this tipper before START.
+    """Return the latest non-rejected END KM for this asset before START.
 
     Pending verification is intentionally continuity-valid: the driver must
     not be able to roll the physical odometer backward while review is still
@@ -204,7 +206,7 @@ def _previous_valid_end_km(
         .join(OperationalEvent, OperationalEvent.id == DutySession.end_event_id)
         .where(
             DutySession.company_id == company_id,
-            DutySession.tipper_id == tipper_id,
+            DutySession.asset_id == asset_id,
             DutySession.status == DutySessionStatus.CLOSED,
             DutySession.ended_at < before,
             OperationalEvent.verification_status.in_(valid_statuses),
@@ -461,7 +463,7 @@ def create_driver_event(
             previous_end_km = _previous_valid_end_km(
                 session,
                 company_id=context.company.id,
-                tipper_id=assignment.tipper_id,
+                asset_id=assignment.asset_id,
                 before=device_created_at,
             )
             assert km_reading_value is not None
@@ -514,7 +516,7 @@ def create_driver_event(
                 company_id=context.company.id,
                 assignment_id=assignment.id,
                 driver_membership_id=context.membership.id,
-                tipper_id=assignment.tipper_id,
+                asset_id=assignment.asset_id,
                 site_id=assignment.site_id,
                 operational_date=_operational_date(context, device_created_at),
                 start_event_id=km_reading.event_id,

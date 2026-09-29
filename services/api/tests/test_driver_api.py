@@ -21,13 +21,18 @@ from fleet_api.db.models import (
     CompanyMembership,
     DutySession,
     EmergencyEvent,
+    FleetAsset,
     OperationalEvent,
     Site,
-    Tipper,
     User,
 )
 from fleet_api.db.session import get_db as session_get_db
-from fleet_api.domain.enums import TipperStatus, VerificationStatus
+from fleet_api.domain.enums import (
+    AssetOwnershipType,
+    FleetAssetStatus,
+    FleetAssetType,
+    VerificationStatus,
+)
 from fleet_api.main import create_app
 
 pytestmark = pytest.mark.postgres
@@ -117,7 +122,7 @@ def add_assignment(
     records: dict[str, object],
     *,
     driver_key: str = "driver_a",
-    tipper: Tipper | None = None,
+    tipper: FleetAsset | None = None,
     starts_at: datetime | None = None,
     ends_at: datetime | None = None,
 ) -> Assignment:
@@ -125,7 +130,7 @@ def add_assignment(
         company_id=value(records, "company_a", Company).id,
         driver_membership_id=value(records, driver_key, CompanyMembership).id,
         supervisor_membership_id=value(records, "supervisor_a", CompanyMembership).id,
-        tipper_id=(tipper or value(records, "tipper_a", Tipper)).id,
+        asset_id=(tipper or value(records, "tipper_a", FleetAsset)).id,
         site_id=value(records, "site_a", Site).id,
         starts_at=starts_at or datetime.now(UTC) - timedelta(hours=1),
         ends_at=ends_at,
@@ -726,7 +731,10 @@ def test_driver_handover_can_start_after_previous_session_closes(
         sessions = list(
             db_session.scalars(
                 select(DutySession)
-                .where(DutySession.tipper_id == value(tenant_records, "tipper_a", Tipper).id)
+                .where(
+                    DutySession.asset_id
+                    == value(tenant_records, "tipper_a", FleetAsset).id
+                )
                 .order_by(DutySession.started_at)
             ).all()
         )
@@ -797,11 +805,14 @@ def test_driver_event_timestamp_and_cross_driver_uuid_are_rejected(
 ) -> None:
     now = datetime.now(UTC)
     add_assignment(db_session, tenant_records, starts_at=now - timedelta(hours=1))
-    second_tipper = Tipper(
+    second_tipper = FleetAsset(
         company_id=value(tenant_records, "company_a", Company).id,
+        asset_type=FleetAssetType.TIPPER,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="ALPHA-TWO",
         registration_number="KA01XY9999",
         short_name="Alpha Two",
-        status=TipperStatus.ACTIVE,
+        status=FleetAssetStatus.ACTIVE,
     )
     db_session.add(second_tipper)
     db_session.flush()

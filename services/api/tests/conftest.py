@@ -16,16 +16,18 @@ from fleet_api.core.config import Settings
 from fleet_api.db.models import (
     Company,
     CompanyMembership,
+    FleetAsset,
     Site,
-    Tipper,
     User,
 )
 from fleet_api.domain.enums import (
+    AssetOwnershipType,
     CompanyStatus,
+    FleetAssetStatus,
+    FleetAssetType,
     MembershipRole,
     MembershipStatus,
     SiteStatus,
-    TipperStatus,
     UserStatus,
 )
 
@@ -166,17 +168,23 @@ def tenant_records(db_session: Session) -> dict[str, object]:
         code="BETA",
         status=SiteStatus.ACTIVE,
     )
-    tipper_a = Tipper(
+    tipper_a = FleetAsset(
         company_id=company_a.id,
+        asset_type=FleetAssetType.TIPPER,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="ALPHA-ONE",
         registration_number="KA01AB1234",
         short_name="Alpha One",
-        status=TipperStatus.ACTIVE,
+        status=FleetAssetStatus.ACTIVE,
     )
-    tipper_b = Tipper(
+    tipper_b = FleetAsset(
         company_id=company_b.id,
+        asset_type=FleetAssetType.TIPPER,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="BETA-ONE",
         registration_number="KA02BC5678",
         short_name="Beta One",
-        status=TipperStatus.ACTIVE,
+        status=FleetAssetStatus.ACTIVE,
     )
     db_session.add_all([site_a, site_b, tipper_a, tipper_b])
     db_session.flush()

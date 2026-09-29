@@ -14,9 +14,9 @@ from fleet_api.db.models import (
     CompanyMembership,
     EmergencyEvent,
     EventVerification,
+    FleetAsset,
     OperationalEvent,
     Site,
-    Tipper,
     TripEvent,
 )
 from fleet_api.domain.assignments import create_assignment, grant_supervisor_site_access
@@ -61,13 +61,13 @@ def create_a_assignment(
     company = value(records, "company_a", Company)
     driver = value(records, "driver_a", CompanyMembership)
     supervisor = value(records, "supervisor_a", CompanyMembership)
-    tipper = value(records, "tipper_a", Tipper)
+    tipper = value(records, "tipper_a", FleetAsset)
     site = value(records, "site_a", Site)
     params: dict[str, object] = {
         "company_id": company.id,
         "driver_membership_id": driver.id,
         "supervisor_membership_id": supervisor.id,
-        "tipper_id": tipper.id,
+        "asset_id": tipper.id,
         "site_id": site.id,
         "starts_at": dt(1),
     }
@@ -80,7 +80,7 @@ def test_company_site_tipper_and_membership_are_company_scoped(
 ) -> None:
     company = value(tenant_records, "company_a", Company)
     site = value(tenant_records, "site_a", Site)
-    tipper = value(tenant_records, "tipper_a", Tipper)
+    tipper = value(tenant_records, "tipper_a", FleetAsset)
     membership = value(tenant_records, "driver_a", CompanyMembership)
 
     assert site.company_id == company.id
@@ -95,7 +95,7 @@ def test_cross_company_assignment_records_fail(
     company = value(tenant_records, "company_a", Company)
     driver = value(tenant_records, "driver_a", CompanyMembership)
     supervisor = value(tenant_records, "supervisor_a", CompanyMembership)
-    tipper_b = value(tenant_records, "tipper_b", Tipper)
+    tipper_b = value(tenant_records, "tipper_b", FleetAsset)
     site_a = value(tenant_records, "site_a", Site)
 
     with pytest.raises(TenantConsistencyError):
@@ -104,7 +104,7 @@ def test_cross_company_assignment_records_fail(
             company_id=company.id,
             driver_membership_id=driver.id,
             supervisor_membership_id=supervisor.id,
-            tipper_id=tipper_b.id,
+            asset_id=tipper_b.id,
             site_id=site_a.id,
             starts_at=dt(1),
         )
@@ -115,7 +115,7 @@ def test_cross_company_assignment_records_fail(
     [
         ("driver_membership_id", "driver_b"),
         ("supervisor_membership_id", "supervisor_b"),
-        ("tipper_id", "tipper_b"),
+        ("asset_id", "tipper_b"),
         ("site_id", "site_b"),
     ],
 )
@@ -128,7 +128,7 @@ def test_each_cross_company_assignment_reference_fails(
     company = value(tenant_records, "company_a", Company)
     driver = value(tenant_records, "driver_a", CompanyMembership)
     supervisor = value(tenant_records, "supervisor_a", CompanyMembership)
-    tipper = value(tenant_records, "tipper_a", Tipper)
+    tipper = value(tenant_records, "tipper_a", FleetAsset)
     site = value(tenant_records, "site_a", Site)
     cross_company_record = tenant_records[record_key]
     cross_company_id = getattr(cross_company_record, "id", None)
@@ -137,7 +137,7 @@ def test_each_cross_company_assignment_reference_fails(
         "company_id": company.id,
         "driver_membership_id": driver.id,
         "supervisor_membership_id": supervisor.id,
-        "tipper_id": tipper.id,
+        "asset_id": tipper.id,
         "site_id": site.id,
         "starts_at": dt(1),
     }
@@ -159,7 +159,7 @@ def test_assignment_requires_driver_and_supervisor_roles(
     company = value(tenant_records, "company_a", Company)
     driver = value(tenant_records, driver_key, CompanyMembership)
     supervisor = value(tenant_records, supervisor_key, CompanyMembership)
-    tipper = value(tenant_records, "tipper_a", Tipper)
+    tipper = value(tenant_records, "tipper_a", FleetAsset)
     site = value(tenant_records, "site_a", Site)
 
     with pytest.raises(RoleViolationError):
@@ -168,7 +168,7 @@ def test_assignment_requires_driver_and_supervisor_roles(
             company_id=company.id,
             driver_membership_id=driver.id,
             supervisor_membership_id=supervisor.id,
-            tipper_id=tipper.id,
+            asset_id=tipper.id,
             site_id=site.id,
             starts_at=dt(1),
         )
@@ -184,7 +184,7 @@ def test_assignment_end_must_follow_start(
         company_id=value(tenant_records, "company_a", Company).id,
         driver_membership_id=value(tenant_records, "driver_a", CompanyMembership).id,
         supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
-        tipper_id=value(tenant_records, "tipper_a", Tipper).id,
+        asset_id=value(tenant_records, "tipper_a", FleetAsset).id,
         site_id=value(tenant_records, "site_a", Site).id,
         starts_at=dt(1),
         ends_at=dt(1, 7),
@@ -407,13 +407,13 @@ def test_audit_log_preserves_explicit_actor_and_values(
 ) -> None:
     company = value(tenant_records, "company_a", Company)
     actor = value(tenant_records, "supervisor_a", CompanyMembership)
-    target = value(tenant_records, "tipper_a", Tipper)
+    target = value(tenant_records, "tipper_a", FleetAsset)
     audit = write_audit_log(
         db_session,
         company_id=company.id,
         actor_membership_id=actor.id,
-        action="TIPPER_RENAMED",
-        entity_type="Tipper",
+        action="FLEET_ASSET_RENAMED",
+        entity_type="FLEET_ASSET",
         entity_id=target.id,
         old_values={"short_name": "Old"},
         new_values={"short_name": "New"},

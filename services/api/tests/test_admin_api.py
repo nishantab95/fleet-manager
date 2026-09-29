@@ -12,9 +12,9 @@ from fleet_api.api.dependencies import get_otp_provider
 from fleet_api.auth.providers import FakeOtpProvider
 from fleet_api.auth.service import AuthService
 from fleet_api.core.config import Settings
-from fleet_api.db.models import CompanyMembership, Site, Tipper, User
+from fleet_api.db.models import CompanyMembership, FleetAsset, Site, User
 from fleet_api.db.session import get_db as session_get_db
-from fleet_api.domain.enums import MembershipStatus, SiteStatus, TipperStatus
+from fleet_api.domain.enums import FleetAssetStatus, MembershipStatus, SiteStatus
 from fleet_api.main import create_app
 
 pytestmark = pytest.mark.postgres
@@ -82,7 +82,7 @@ def test_owner_admin_management_is_tenant_scoped_and_uses_domain_rules(
     supervisor_membership = value(tenant_records, "supervisor_a", CompanyMembership)
     site_a = value(tenant_records, "site_a", Site)
     site_b = value(tenant_records, "site_b", Site)
-    tipper_a = value(tenant_records, "tipper_a", Tipper)
+    tipper_a = value(tenant_records, "tipper_a", FleetAsset)
     access_token, _ = session_for_user(db_session, owner, owner_membership)
     client = admin_app(db_session, access_token)
     try:
@@ -112,7 +112,7 @@ def test_owner_admin_management_is_tenant_scoped_and_uses_domain_rules(
                 f"/api/v1/admin/tippers/{new_tipper_id}",
                 json={"status": "INACTIVE"},
             ).json()["status"]
-            == TipperStatus.INACTIVE
+            == FleetAssetStatus.INACTIVE
         )
 
         created_person = client.post(
@@ -193,7 +193,7 @@ def test_admin_routes_reject_non_owner_and_foreign_assignment_inputs(
 ) -> None:
     supervisor = user_by_name(db_session, "Supervisor A")
     supervisor_membership = value(tenant_records, "supervisor_a", CompanyMembership)
-    foreign_tipper = value(tenant_records, "tipper_b", Tipper)
+    foreign_tipper = value(tenant_records, "tipper_b", FleetAsset)
     site_a = value(tenant_records, "site_a", Site)
     access_token, _ = session_for_user(db_session, supervisor, supervisor_membership)
     client = admin_app(db_session, access_token)

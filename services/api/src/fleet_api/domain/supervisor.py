@@ -17,11 +17,11 @@ from fleet_api.db.models import (
     EmergencyEvent,
     EventVerification,
     EvidenceObject,
+    FleetAsset,
     KmReading,
     OperationalEvent,
     Site,
     SupervisorSiteAccess,
-    Tipper,
     TripEvent,
     User,
 )
@@ -48,7 +48,7 @@ class VerificationHistoryItem:
 class SupervisorEvent:
     event: OperationalEvent
     assignment: Assignment
-    tipper: Tipper
+    asset: FleetAsset
     site: Site
     driver: User
     trip: TripEvent | None
@@ -62,7 +62,7 @@ class SupervisorEvent:
 @dataclass(frozen=True)
 class SiteCompleteness:
     assignment: Assignment
-    tipper: Tipper
+    asset: FleetAsset
     site: Site
     driver: User
     has_start_reading: bool
@@ -117,11 +117,11 @@ class SupervisorService:
 
     def _event_query(
         self,
-    ) -> Select[tuple[OperationalEvent, Assignment, Tipper, Site, CompanyMembership, User]]:
+    ) -> Select[tuple[OperationalEvent, Assignment, FleetAsset, Site, CompanyMembership, User]]:
         return (
-            select(OperationalEvent, Assignment, Tipper, Site, CompanyMembership, User)
+            select(OperationalEvent, Assignment, FleetAsset, Site, CompanyMembership, User)
             .join(Assignment, Assignment.id == OperationalEvent.assignment_id)
-            .join(Tipper, Tipper.id == Assignment.tipper_id)
+            .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
             .join(Site, Site.id == Assignment.site_id)
             .join(CompanyMembership, CompanyMembership.id == Assignment.driver_membership_id)
             .join(User, User.id == CompanyMembership.user_id)
@@ -133,16 +133,16 @@ class SupervisorService:
         event_id: UUID,
         *,
         lock: bool = False,
-    ) -> tuple[OperationalEvent, Assignment, Tipper, Site, CompanyMembership, User]:
+    ) -> tuple[OperationalEvent, Assignment, FleetAsset, Site, CompanyMembership, User]:
         statement = self._event_query().where(OperationalEvent.id == event_id)
         if lock:
             statement = statement.with_for_update()
         row = self.session.execute(statement).first()
         if row is None:
             raise NotFoundError("event was not found")
-        event, assignment, tipper, site, driver_membership, driver = row._tuple()
+        event, assignment, asset, site, driver_membership, driver = row._tuple()
         self._site(site.id)
-        return event, assignment, tipper, site, driver_membership, driver
+        return event, assignment, asset, site, driver_membership, driver
 
     def _history(self, event_id: UUID) -> list[VerificationHistoryItem]:
         rows = self.session.execute(
@@ -173,9 +173,9 @@ class SupervisorService:
 
     def _event_view(
         self,
-        row: tuple[OperationalEvent, Assignment, Tipper, Site, CompanyMembership, User],
+        row: tuple[OperationalEvent, Assignment, FleetAsset, Site, CompanyMembership, User],
     ) -> SupervisorEvent:
-        event, assignment, tipper, site, _driver_membership, _driver = row
+        event, assignment, asset, site, _driver_membership, _driver = row
         trip = self.session.get(TripEvent, event.id)
         km = self.session.get(KmReading, event.id)
         diesel = self.session.get(DieselEvent, event.id)
@@ -198,7 +198,7 @@ class SupervisorService:
         return SupervisorEvent(
             event=event,
             assignment=assignment,
-            tipper=tipper,
+            asset=asset,
             site=site,
             driver=_driver,
             trip=trip,
@@ -350,8 +350,8 @@ class SupervisorService:
         start = datetime.combine(review_date, time.min, tzinfo=UTC)
         end = start + timedelta(days=1)
         assignments = self.session.execute(
-            select(Assignment, Tipper, CompanyMembership, User)
-            .join(Tipper, Tipper.id == Assignment.tipper_id)
+            select(Assignment, FleetAsset, CompanyMembership, User)
+            .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
             .join(CompanyMembership, CompanyMembership.id == Assignment.driver_membership_id)
             .join(User, User.id == CompanyMembership.user_id)
             .where(
@@ -363,7 +363,7 @@ class SupervisorService:
             .order_by(Assignment.starts_at.asc(), Assignment.id.asc())
         ).all()
         result: list[SiteCompleteness] = []
-        for assignment, tipper, _membership, driver in assignments:
+        for assignment, asset, _membership, driver in assignments:
             events = list(
                 self.session.scalars(
                     select(OperationalEvent).where(
@@ -391,7 +391,7 @@ class SupervisorService:
             result.append(
                 SiteCompleteness(
                     assignment=assignment,
-                    tipper=tipper,
+                    asset=asset,
                     site=site,
                     driver=driver,
                     has_start_reading=any(

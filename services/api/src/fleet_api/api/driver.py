@@ -109,9 +109,9 @@ def current_assignment(
         return None
     return DriverAssignmentResponse(
         assignment_id=current.assignment.id,
-        tipper_id=current.tipper.id,
-        tipper_registration_number=current.tipper.registration_number,
-        tipper_short_name=current.tipper.short_name,
+        tipper_id=current.asset.id,
+        tipper_registration_number=current.asset.registration_number or current.asset.asset_code,
+        tipper_short_name=current.asset.short_name,
         site_id=current.site.id,
         site_name=current.site.name,
         supervisor_name=(
@@ -136,7 +136,7 @@ def current_duty(
         status=state.status.value,
         session_id=state.id,
         assignment_id=state.assignment_id,
-        tipper_id=state.tipper_id,
+        tipper_id=state.asset_id,
         site_id=state.site_id,
         started_at=state.started_at,
         start_km=state.start_km,

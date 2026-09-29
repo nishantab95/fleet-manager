@@ -13,9 +13,9 @@ from fleet_api.db.models import (
     AuthSession,
     Company,
     CompanyMembership,
+    FleetAsset,
     Site,
     SupervisorSiteAccess,
-    Tipper,
     User,
 )
 from fleet_api.db.models.common import utc_now
@@ -27,11 +27,13 @@ from fleet_api.domain.assets import (
 )
 from fleet_api.domain.assignments import create_assignment, grant_supervisor_site_access
 from fleet_api.domain.enums import (
+    AssetOwnershipType,
     CompanyStatus,
+    FleetAssetStatus,
+    FleetAssetType,
     MembershipRole,
     MembershipStatus,
     SiteStatus,
-    TipperStatus,
     UserStatus,
 )
 
@@ -151,13 +153,14 @@ def _site(session: Session, *, company_id: UUID) -> Site:
     return site
 
 
-def _tipper(session: Session, *, company_id: UUID) -> Tipper:
+def _tipper(session: Session, *, company_id: UUID) -> FleetAsset:
     registration = normalize_registration_number(TIPPER_REGISTRATION)
     tipper = _single(
         session,
-        select(Tipper).where(
-            Tipper.company_id == company_id,
-            Tipper.registration_number == registration,
+        select(FleetAsset).where(
+            FleetAsset.company_id == company_id,
+            FleetAsset.asset_type == FleetAssetType.TIPPER,
+            FleetAsset.registration_number == registration,
         ),
         "tipper",
     )
@@ -170,7 +173,9 @@ def _tipper(session: Session, *, company_id: UUID) -> Tipper:
         )
     else:
         tipper.short_name = TIPPER_SHORT_NAME
-        tipper.status = TipperStatus.ACTIVE
+        tipper.asset_type = FleetAssetType.TIPPER
+        tipper.ownership_type = AssetOwnershipType.OWNED
+        tipper.status = FleetAssetStatus.ACTIVE
     return tipper
 
 
@@ -344,7 +349,7 @@ def _assignment(
     company_id: UUID,
     driver_membership_id: UUID,
     supervisor_membership_id: UUID,
-    tipper_id: UUID,
+    asset_id: UUID,
     site_id: UUID,
 ) -> Assignment:
     now = utc_now()
@@ -355,7 +360,7 @@ def _assignment(
             Assignment.company_id == company_id,
             Assignment.driver_membership_id == driver_membership_id,
             Assignment.supervisor_membership_id == supervisor_membership_id,
-            Assignment.tipper_id == tipper_id,
+            Assignment.asset_id == asset_id,
             Assignment.site_id == site_id,
         )
         .order_by(Assignment.starts_at.desc()),
@@ -367,7 +372,7 @@ def _assignment(
             company_id=company_id,
             driver_membership_id=driver_membership_id,
             supervisor_membership_id=supervisor_membership_id,
-            tipper_id=tipper_id,
+            asset_id=asset_id,
             site_id=site_id,
             starts_at=now - timedelta(hours=1),
         )
@@ -422,7 +427,7 @@ def bootstrap_pilot(session: Session) -> dict[str, UUID]:
         company_id=company.id,
         driver_membership_id=driver_membership.id,
         supervisor_membership_id=supervisor_membership.id,
-        tipper_id=tipper.id,
+        asset_id=tipper.id,
         site_id=site.id,
     )
     session.flush()

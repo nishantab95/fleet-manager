@@ -1,6 +1,8 @@
 # Domain Model
 
-Phase 1 implements the company-owned tipper core. Phase 2 adds the identity,
+Phase 1A replaces the tipper-specific persistence core with one canonical
+`FleetAsset` model while retaining the physically accepted tipper API contract.
+Phase 2 adds the identity,
 session, and authorization persistence needed to protect later business APIs.
 Phase 3 adds owner/admin management APIs and an authenticated web shell over
 these entities. Phase 4 adds the driver event/evidence boundary and offline
@@ -15,9 +17,9 @@ without adding a new persistence boundary.
 | `User` | Global application identity with normalized phone number and display name. |
 | `CompanyMembership` | Company-scoped role (`OWNER_ADMIN`, `SUPERVISOR`, or `DRIVER`) and status. |
 | `Site` | Company-scoped work location with company-scoped name/code uniqueness. |
-| `Tipper` | Company-owned tipper; registration is stored uppercase without spaces or hyphens. |
+| `FleetAsset` | Canonical company fleet record with type, ownership, stable asset code, optional road registration, status, and optional rental metadata. |
 | `SupervisorSiteAccess` | Explicit company-consistent supervisor-to-site grant. |
-| `Assignment` | Effective-dated driver, supervisor, tipper, and site relationship. |
+| `Assignment` | Effective-dated driver, supervisor, fleet asset, and site relationship. |
 | `Device` | Minimal installation identifier, platform, membership association, and active/revoked state. |
 | `OperationalEvent` | Common server event envelope and company-scoped client UUID idempotency boundary. |
 | `TripEvent` | Trip-complete payload attached to an operational event. |
@@ -39,7 +41,7 @@ erDiagram
     COMPANIES ||--o{ COMPANY_MEMBERSHIPS : has
     USERS ||--o{ COMPANY_MEMBERSHIPS : joins
     COMPANIES ||--o{ SITES : owns
-    COMPANIES ||--o{ TIPPERS : owns
+    COMPANIES ||--o{ FLEET_ASSETS : scopes
     COMPANIES ||--o{ DEVICES : registers
     COMPANY_MEMBERSHIPS ||--o{ DEVICES : uses
     COMPANY_MEMBERSHIPS ||--o{ SUPERVISOR_SITE_ACCESS : grants
@@ -47,7 +49,9 @@ erDiagram
     COMPANY_MEMBERSHIPS ||--o{ ASSIGNMENTS : drives
     COMPANY_MEMBERSHIPS ||--o{ ASSIGNMENTS : supervises
     SITES ||--o{ ASSIGNMENTS : serves
-    TIPPERS ||--o{ ASSIGNMENTS : operates
+    FLEET_ASSETS ||--o{ ASSIGNMENTS : operates
+    FLEET_ASSETS ||--o{ DUTY_SESSIONS : snapshots
+    ASSIGNMENTS ||--o{ DUTY_SESSIONS : contains
     ASSIGNMENTS ||--o{ OPERATIONAL_EVENTS : records
     DEVICES ||--o{ OPERATIONAL_EVENTS : originates
     OPERATIONAL_EVENTS ||--o| TRIP_EVENTS : specializes
@@ -66,7 +70,28 @@ erDiagram
 
 `company_id` is intentionally carried on every company-owned table and on
 composite foreign keys. PostgreSQL therefore rejects a reference to a site,
-tipper, membership, assignment, or device belonging to another company.
+fleet asset, membership, assignment, or device belonging to another company.
+
+## Fleet asset model
+
+`FleetAssetType` supports `TIPPER`, `EXCAVATOR`, `BACKHOE_LOADER`, `ROLLER`,
+and `GRADER`. `AssetOwnershipType` supports `OWNED` and `RENTED`; ownership is
+a management/reporting attribute and does not fork the tipper workflow.
+`FleetAssetStatus` uses `ACTIVE` and `INACTIVE`, so historical assets are
+deactivated rather than deleted.
+
+Every asset has a non-empty, company-unique `asset_code`. Road registration is
+normalized to uppercase without spaces or hyphens when present and is unique
+within a company, but remains nullable for construction machinery. Rental end
+cannot precede rental start. The centralized `AssetCapabilities` map enables
+the current operational workflow only for tippers in Phase 1A; machinery
+workflows remain disabled.
+
+Migration `0011_fleet_assets` renames the former table and foreign-key columns
+in place. Legacy UUIDs are unchanged. Existing assets become active, owned
+tippers, and receive a deterministic code derived from short name when usable
+or registration otherwise, with a deterministic UUID suffix only for code
+collisions.
 
 ## Invariants
 
@@ -75,7 +100,7 @@ tipper, membership, assignment, or device belonging to another company.
    supervisor.
 2. Assignment intervals are `[starts_at, ends_at)`. `ends_at` must be after
    `starts_at`, and PostgreSQL exclusion constraints prevent overlaps for the
-   same company/driver or company/tipper, including open-ended intervals.
+   same company/driver or company/asset, including open-ended intervals.
 3. Events retain the historical assignment, device-created time, server
    receive time, and independent business verification status.
 4. `(company_id, client_event_uuid)` is unique in `operational_events`. A retry
@@ -94,7 +119,7 @@ tipper, membership, assignment, or device belonging to another company.
    revokes the complete session family.
 10. Administrative status changes preserve records for audit/history. New
     assignments may reference only active, same-company driver/supervisor
-    memberships, sites, and tippers; their effective-date overlap rules stay
+    memberships, sites, and compatible active assets; their effective-date overlap rules stay
     in the existing domain service and PostgreSQL constraints.
 11. Driver events are accepted only for the authenticated driver's effective
     assignment and registered device. KM readings and diesel events require a
@@ -114,7 +139,7 @@ tipper, membership, assignment, or device belonging to another company.
 16. Official reports count only approved event envelopes. Distance is available
     only for one unambiguous approved START, one unambiguous approved END, and
     `END >= START`; otherwise the report exposes an exception and `null` KM.
-17. Site and tipper reports group by effective-dated Assignment. A transfer
+17. Site and tipper compatibility reports group by effective-dated Assignment. A transfer
     therefore retains event ownership and prevents double-counting; a reading
     pair split across sites is not silently allocated and produces unavailable
     site KM.
@@ -137,7 +162,7 @@ append-only and requires an owner reason.
 
 The PC V1 `EMERGENCY` action is a one-tap signal. New events do not require a
 category, description, or evidence upload; the backend captures the authenticated
-driver, current tipper/site/supervisor/company assignment, and timestamp. The
+driver, current asset/site/supervisor/company assignment, and timestamp. The
 legacy category field remains nullable for historical and compatible clients.
 Emergency records use `OPEN -> ACKNOWLEDGED -> RESOLVED` lifecycle actions and
 are not normal Trip/KM/Diesel verification items. Rapid repeat open signals in

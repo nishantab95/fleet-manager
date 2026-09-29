@@ -35,7 +35,7 @@ from fleet_api.api.schemas import (
 )
 from fleet_api.auth.service import AuthContext
 from fleet_api.core.config import Settings
-from fleet_api.db.models import Assignment, CompanyMembership, DutySession, Site, Tipper, User
+from fleet_api.db.models import Assignment, CompanyMembership, DutySession, FleetAsset, Site, User
 from fleet_api.db.session import get_db
 from fleet_api.domain.enums import DutySessionStatus, SiteClosureStatus, VerificationStatus
 from fleet_api.domain.errors import (
@@ -48,6 +48,7 @@ from fleet_api.domain.errors import (
     TenantConsistencyError,
 )
 from fleet_api.domain.reporting import (
+    AssetDailyReport,
     ClosureSnapshot,
     DashboardReport,
     OperationalDay,
@@ -57,7 +58,6 @@ from fleet_api.domain.reporting import (
     ReportHistory,
     ReportingService,
     SiteDailyReport,
-    TipperDailyReport,
 )
 from fleet_api.storage.objects import ObjectStorage
 
@@ -101,8 +101,8 @@ def _event_response(event: ReportEvent) -> ReportEventResponse:
         event_type=event.event_type,
         assignment_id=event.assignment_id,
         duty_session_id=event.duty_session_id,
-        tipper_id=event.tipper_id,
-        tipper_registration_number=event.tipper_registration_number,
+        tipper_id=event.asset_id,
+        tipper_registration_number=event.asset_registration_number,
         site_id=event.site_id,
         site_name=event.site_name,
         driver_name=event.driver_name,
@@ -127,8 +127,8 @@ def _exception_response(item: ReportException) -> ReportExceptionResponse:
         code=item.code,
         description=item.description,
         assignment_id=item.assignment_id,
-        tipper_id=item.tipper_id,
-        tipper_registration_number=item.tipper_registration_number,
+        tipper_id=item.asset_id,
+        tipper_registration_number=item.asset_registration_number,
         site_id=item.site_id,
         event_id=item.event_id,
     )
@@ -138,12 +138,12 @@ def _duration_seconds(value: timedelta | None) -> float | None:
     return value.total_seconds() if value is not None else None
 
 
-def _tipper_response(item: TipperDailyReport) -> TipperDailyReportResponse:
+def _tipper_response(item: AssetDailyReport) -> TipperDailyReportResponse:
     return TipperDailyReportResponse(
         assignment_id=item.assignment.id,
-        tipper_id=item.tipper.id,
-        registration_number=item.tipper.registration_number,
-        short_name=item.tipper.short_name,
+        tipper_id=item.asset.id,
+        registration_number=item.asset.registration_number or item.asset.asset_code,
+        short_name=item.asset.short_name,
         site_id=item.site.id,
         site_name=item.site.name,
         driver_name=item.driver_name,
@@ -207,7 +207,7 @@ def _site_response(report: SiteDailyReport) -> SiteDailyReportResponse:
         site_name=report.site.name,
         operational_date=report.operational_day.operational_date,
         reporting_timezone=report.operational_day.reporting_timezone,
-        assigned_tippers_count=report.assigned_tippers_count,
+        assigned_tippers_count=report.assigned_assets_count,
         approved_trip_count=report.approved_trip_count,
         pending_trip_count=report.pending_trip_count,
         disputed_trip_count=report.disputed_trip_count,
@@ -231,12 +231,12 @@ def _duty_reports(
         select(
             DutySession,
             Assignment,
-            Tipper,
+            FleetAsset,
             Site,
             sql_cast(func.coalesce(CompanyMembership.display_name, User.display_name), String),
         )
         .join(Assignment, Assignment.id == DutySession.assignment_id)
-        .join(Tipper, Tipper.id == DutySession.tipper_id)
+        .join(FleetAsset, FleetAsset.id == DutySession.asset_id)
         .join(Site, Site.id == DutySession.site_id)
         .join(CompanyMembership, CompanyMembership.id == DutySession.driver_membership_id)
         .join(User, User.id == CompanyMembership.user_id)
@@ -248,7 +248,7 @@ def _duty_reports(
     ).all()
     now = datetime.now(UTC)
     reports: list[DriverDutyReportResponse] = []
-    for duty, assignment, tipper, site, driver_name in rows:
+    for duty, assignment, asset, site, driver_name in rows:
         actual_end = duty.ended_at
         actual_reference = actual_end or now
         span = max(0.0, (actual_reference - duty.started_at).total_seconds())
@@ -264,7 +264,7 @@ def _duty_reports(
                 session_id=duty.id,
                 assignment_id=assignment.id,
                 driver_name=driver_name,
-                tipper_registration_number=tipper.registration_number,
+                tipper_registration_number=asset.registration_number or asset.asset_code,
                 site_name=site.name,
                 duty_start=duty.started_at,
                 start_km=duty.start_km,
@@ -289,7 +289,7 @@ def _dashboard_response(
         operational_date=report.operational_day.operational_date,
         reporting_timezone=report.operational_day.reporting_timezone,
         workday_start_minutes=report.operational_day.workday_start_minutes,
-        assigned_tippers_count=report.assigned_tippers_count,
+        assigned_tippers_count=report.assigned_assets_count,
         approved_trip_count=report.approved_trip_count,
         pending_trip_count=report.pending_trip_count,
         total_km=report.total_km,
@@ -298,7 +298,7 @@ def _dashboard_response(
         missing_reading_count=report.missing_reading_count,
         unresolved_emergency_count=report.unresolved_emergency_count,
         sites_not_closed_count=report.sites_not_closed_count,
-        complete_tippers_count=report.complete_tippers_count,
+        complete_tippers_count=report.complete_assets_count,
         drivers_on_duty=sum(item.status == DutySessionStatus.ACTIVE.value for item in duty_reports),
         drivers_past_regular_duty=sum(
             item.status == DutySessionStatus.ACTIVE.value and item.overtime_minutes > 0
@@ -322,7 +322,7 @@ def _evidence_headers(view: ReportEvidenceContext) -> dict[str, str]:
         "Content-Disposition": "inline",
         "X-Fleet-Evidence-Event-Type": view.event.event_type.value,
         "X-Fleet-Evidence-Driver": view.driver_name,
-        "X-Fleet-Evidence-Tipper": view.tipper.registration_number,
+        "X-Fleet-Evidence-Tipper": view.asset.registration_number or view.asset.asset_code,
         "X-Fleet-Evidence-Timestamp": view.event.device_created_at.isoformat(),
     }
 
@@ -378,7 +378,7 @@ def tipper_daily_report(
     try:
         return [
             _tipper_response(item)
-            for item in _service(db, context).tipper_daily(tipper_id, operational_date)
+            for item in _service(db, context).asset_daily(tipper_id, operational_date)
         ]
     except DomainError as exc:
         _fail(exc)
@@ -609,8 +609,10 @@ def _build_workbook(
                 [
                     report.operational_day.operational_date,
                     site.site.name,
-                    row.tipper.short_name or row.tipper.registration_number,
-                    row.tipper.registration_number,
+                    row.asset.short_name
+                    or row.asset.registration_number
+                    or row.asset.asset_code,
+                    row.asset.registration_number or row.asset.asset_code,
                     row.driver_name,
                     row.approved_trip_count,
                     row.pending_trip_count,
@@ -650,7 +652,9 @@ def _build_workbook(
             management_rows.append(
                 [
                     site.site.name,
-                    row.tipper.short_name or row.tipper.registration_number,
+                    row.asset.short_name
+                    or row.asset.registration_number
+                    or row.asset.asset_code,
                     row.driver_name,
                     row.supervisor_name,
                     row.approved_trip_count,
@@ -696,7 +700,7 @@ def _build_workbook(
                         [
                             report.operational_day.operational_date,
                             site.site.name,
-                            row.tipper.registration_number,
+                            row.asset.registration_number or row.asset.asset_code,
                             row.driver_name,
                             _excel_datetime(event.device_created_at),
                             event.verification_status.value,
@@ -711,7 +715,7 @@ def _build_workbook(
                         [
                             report.operational_day.operational_date,
                             site.site.name,
-                            row.tipper.registration_number,
+                            row.asset.registration_number or row.asset.asset_code,
                             row.driver_name,
                             event.reading_type,
                             event.reading_value,
@@ -729,7 +733,7 @@ def _build_workbook(
                         [
                             report.operational_day.operational_date,
                             site.site.name,
-                            row.tipper.registration_number,
+                            row.asset.registration_number or row.asset.asset_code,
                             row.driver_name,
                             event.litres,
                             _excel_datetime(event.device_created_at),
@@ -746,7 +750,7 @@ def _build_workbook(
                     [
                         report.operational_day.operational_date,
                         site.site.name,
-                        row.tipper.registration_number,
+                        row.asset.registration_number or row.asset.asset_code,
                         exception.code,
                         exception.description,
                         "OPEN",
@@ -870,7 +874,7 @@ def _build_workbook(
     dashboard_summary_values = [
         report.operational_day.operational_date,
         report.operational_day.reporting_timezone,
-        report.assigned_tippers_count,
+        report.assigned_assets_count,
         report.approved_trip_count,
         _excel_metric(report.total_km),
         report.verified_diesel_issued,

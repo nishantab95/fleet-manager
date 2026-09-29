@@ -33,7 +33,7 @@ class DutySession(UpdatedTimestampModel):
     )
     assignment_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     driver_membership_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
-    tipper_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    asset_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     site_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     operational_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     start_event_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
@@ -65,9 +65,9 @@ class DutySession(UpdatedTimestampModel):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["company_id", "tipper_id"],
-            ["tippers.company_id", "tippers.id"],
-            name="fk_duty_sessions_company_tipper",
+            ["company_id", "asset_id"],
+            ["fleet_assets.company_id", "fleet_assets.id"],
+            name="fk_duty_sessions_company_asset",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(

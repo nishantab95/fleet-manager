@@ -35,7 +35,20 @@ class SiteStatus(StrEnum):
     INACTIVE = "INACTIVE"
 
 
-class TipperStatus(StrEnum):
+class FleetAssetType(StrEnum):
+    TIPPER = "TIPPER"
+    EXCAVATOR = "EXCAVATOR"
+    BACKHOE_LOADER = "BACKHOE_LOADER"
+    ROLLER = "ROLLER"
+    GRADER = "GRADER"
+
+
+class AssetOwnershipType(StrEnum):
+    OWNED = "OWNED"
+    RENTED = "RENTED"
+
+
+class FleetAssetStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
 

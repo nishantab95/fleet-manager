@@ -16,9 +16,9 @@ from fleet_api.db.models import (
     Assignment,
     Company,
     CompanyMembership,
+    FleetAsset,
     Site,
     SupervisorSiteAccess,
-    Tipper,
     User,
 )
 from fleet_api.domain.assets import create_site, create_tipper, normalize_registration_number
@@ -29,10 +29,11 @@ from fleet_api.domain.assignments import (
 )
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
+    FleetAssetStatus,
+    FleetAssetType,
     MembershipRole,
     MembershipStatus,
     SiteStatus,
-    TipperStatus,
     UserStatus,
 )
 from fleet_api.domain.errors import (
@@ -92,13 +93,17 @@ class AdminService:
             raise NotFoundError("site was not found")
         return site
 
-    def _tipper(self, tipper_id: UUID) -> Tipper:
-        tipper = self.session.scalar(
-            select(Tipper).where(Tipper.id == tipper_id, Tipper.company_id == self.company_id)
+    def _tipper_asset(self, tipper_id: UUID) -> FleetAsset:
+        asset = self.session.scalar(
+            select(FleetAsset).where(
+                FleetAsset.id == tipper_id,
+                FleetAsset.company_id == self.company_id,
+                FleetAsset.asset_type == FleetAssetType.TIPPER,
+            )
         )
-        if tipper is None:
+        if asset is None:
             raise NotFoundError("tipper was not found")
-        return tipper
+        return asset
 
     def _membership(self, membership_id: UUID) -> CompanyMembership:
         membership = self.session.scalar(
@@ -209,19 +214,27 @@ class AdminService:
         )
         return site
 
-    def list_tippers(self) -> list[Tipper]:
+    def list_tippers(self) -> list[FleetAsset]:
         return list(
             self.session.scalars(
-                select(Tipper)
-                .where(Tipper.company_id == self.company_id)
-                .order_by(Tipper.status, Tipper.registration_number, Tipper.id)
+                select(FleetAsset)
+                .where(
+                    FleetAsset.company_id == self.company_id,
+                    FleetAsset.asset_type == FleetAssetType.TIPPER,
+                )
+                .order_by(
+                    FleetAsset.status,
+                    FleetAsset.registration_number,
+                    FleetAsset.asset_code,
+                    FleetAsset.id,
+                )
             ).all()
         )
 
-    def get_tipper(self, tipper_id: UUID) -> Tipper:
-        return self._tipper(tipper_id)
+    def get_tipper(self, tipper_id: UUID) -> FleetAsset:
+        return self._tipper_asset(tipper_id)
 
-    def create_tipper(self, *, registration_number: str, short_name: str | None) -> Tipper:
+    def create_tipper(self, *, registration_number: str, short_name: str | None) -> FleetAsset:
         try:
             tipper = create_tipper(
                 self.session,
@@ -249,11 +262,11 @@ class AdminService:
         *,
         registration_number: str | None,
         short_name: str | None,
-        status: TipperStatus | None,
+        status: FleetAssetStatus | None,
         registration_was_sent: bool,
         short_name_was_sent: bool,
-    ) -> Tipper:
-        tipper = self._tipper(tipper_id)
+    ) -> FleetAsset:
+        tipper = self._tipper_asset(tipper_id)
         old_values = {
             "registration_number": tipper.registration_number,
             "short_name": tipper.short_name,
@@ -464,7 +477,13 @@ class AdminService:
             for row in self.session.execute(
                 select(
                     Assignment,
-                    Tipper.registration_number,
+                    sql_cast(
+                        func.coalesce(
+                            FleetAsset.registration_number,
+                            FleetAsset.asset_code,
+                        ),
+                        String,
+                    ),
                     Site.name,
                     sql_cast(
                         func.coalesce(driver_membership.display_name, driver_user.display_name),
@@ -478,7 +497,7 @@ class AdminService:
                         String,
                     ),
                 )
-                .join(Tipper, Tipper.id == Assignment.tipper_id)
+                .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
                 .join(Site, Site.id == Assignment.site_id)
                 .join(
                     driver_membership,
@@ -500,7 +519,7 @@ class AdminService:
         *,
         driver_membership_id: UUID,
         supervisor_membership_id: UUID,
-        tipper_id: UUID,
+        asset_id: UUID,
         site_id: UUID,
         starts_at: datetime,
         ends_at: datetime | None,
@@ -508,18 +527,18 @@ class AdminService:
     ) -> Assignment:
         driver = self._membership(driver_membership_id)
         supervisor = self._membership(supervisor_membership_id)
-        tipper = self._tipper(tipper_id)
+        asset = self._tipper_asset(asset_id)
         site = self._site(site_id)
         if driver.status != MembershipStatus.ACTIVE or supervisor.status != MembershipStatus.ACTIVE:
             raise DomainError("driver and supervisor memberships must be active")
-        if tipper.status != TipperStatus.ACTIVE or site.status != SiteStatus.ACTIVE:
+        if asset.status != FleetAssetStatus.ACTIVE or site.status != SiteStatus.ACTIVE:
             raise DomainError("tipper and site must be active")
         assignment = create_assignment(
             self.session,
             company_id=self.company_id,
             driver_membership_id=driver_membership_id,
             supervisor_membership_id=supervisor_membership_id,
-            tipper_id=tipper_id,
+            asset_id=asset_id,
             site_id=site_id,
             starts_at=starts_at,
             ends_at=ends_at,
@@ -532,7 +551,7 @@ class AdminService:
             new_values={
                 "driver_membership_id": str(driver_membership_id),
                 "supervisor_membership_id": str(supervisor_membership_id),
-                "tipper_id": str(tipper_id),
+                "asset_id": str(asset_id),
                 "site_id": str(site_id),
                 "starts_at": starts_at.isoformat(),
                 "ends_at": ends_at.isoformat() if ends_at else None,

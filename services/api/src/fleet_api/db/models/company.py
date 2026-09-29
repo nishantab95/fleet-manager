@@ -7,7 +7,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from fleet_api.db.models.common import UpdatedTimestampModel
-from fleet_api.domain.enums import CompanyStatus, SiteStatus, TipperStatus, UserStatus
+from fleet_api.domain.enums import CompanyStatus, SiteStatus, UserStatus
 
 
 class Company(UpdatedTimestampModel):
@@ -58,24 +58,4 @@ class Site(UpdatedTimestampModel):
         UniqueConstraint("company_id", "name", name="uq_sites_company_name"),
         UniqueConstraint("company_id", "code", name="uq_sites_company_code"),
         UniqueConstraint("company_id", "id", name="uq_sites_company_id"),
-    )
-
-
-class Tipper(UpdatedTimestampModel):
-    __tablename__ = "tippers"
-
-    company_id: Mapped[UUID] = mapped_column(
-        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    registration_number: Mapped[str] = mapped_column(String(32), nullable=False)
-    short_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    status: Mapped[TipperStatus] = mapped_column(
-        SAEnum(TipperStatus, name="tipper_status_enum"), nullable=False
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "company_id", "registration_number", name="uq_tippers_company_registration"
-        ),
-        UniqueConstraint("company_id", "id", name="uq_tippers_company_id"),
     )

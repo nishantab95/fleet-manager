@@ -11,10 +11,11 @@ from fleet_api.db.models import (
     Assignment,
     Company,
     CompanyMembership,
+    FleetAsset,
     Site,
     SupervisorSiteAccess,
-    Tipper,
 )
+from fleet_api.domain.assets import capabilities_for
 from fleet_api.domain.enums import MembershipRole
 from fleet_api.domain.errors import (
     AssignmentConflictError,
@@ -68,7 +69,7 @@ def create_assignment(
     company_id: UUID,
     driver_membership_id: UUID,
     supervisor_membership_id: UUID,
-    tipper_id: UUID,
+    asset_id: UUID,
     site_id: UUID,
     starts_at: datetime,
     ends_at: datetime | None = None,
@@ -91,14 +92,18 @@ def create_assignment(
         membership_id=supervisor_membership_id,
         role=MembershipRole.SUPERVISOR,
     )
-    _require_owned_record(session, company_id=company_id, record_id=tipper_id, model=Tipper)
+    asset = _require_owned_record(
+        session, company_id=company_id, record_id=asset_id, model=FleetAsset
+    )
+    if not capabilities_for(asset.asset_type).supports_duty_session:
+        raise DomainError("asset type does not support the current duty workflow")
     _require_owned_record(session, company_id=company_id, record_id=site_id, model=Site)
 
     assignment = Assignment(
         company_id=company_id,
         driver_membership_id=driver_membership_id,
         supervisor_membership_id=supervisor_membership_id,
-        tipper_id=tipper_id,
+        asset_id=asset_id,
         site_id=site_id,
         starts_at=starts_at,
         ends_at=ends_at,
@@ -109,7 +114,7 @@ def create_assignment(
         session.flush()
     except IntegrityError as exc:
         raise AssignmentConflictError(
-            "driver or tipper has an overlapping assignment; transaction must be rolled back"
+            "driver or asset has an overlapping assignment; transaction must be rolled back"
         ) from exc
     return assignment
 

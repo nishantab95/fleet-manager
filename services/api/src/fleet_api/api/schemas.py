@@ -10,13 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from fleet_api.domain.enums import (
     DevicePlatform,
     EmergencyCategory,
+    FleetAssetStatus,
     KmReadingType,
     MembershipRole,
     MembershipStatus,
     OperationalEventType,
     SiteClosureStatus,
     SiteStatus,
-    TipperStatus,
     VerificationStatus,
 )
 
@@ -135,7 +135,7 @@ class TipperCreateRequest(BaseModel):
 class TipperUpdateRequest(BaseModel):
     registration_number: str | None = Field(default=None, min_length=1, max_length=32)
     short_name: str | None = Field(default=None, max_length=100)
-    status: TipperStatus | None = None
+    status: FleetAssetStatus | None = None
 
 
 class TipperResponse(BaseModel):
@@ -144,7 +144,7 @@ class TipperResponse(BaseModel):
     id: UUID
     registration_number: str
     short_name: str | None
-    status: TipperStatus
+    status: FleetAssetStatus
 
 
 class PersonCreateRequest(BaseModel):

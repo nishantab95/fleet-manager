@@ -18,12 +18,12 @@ from fleet_api.db.models import (
     EmergencyEvent,
     EventVerification,
     EvidenceObject,
+    FleetAsset,
     KmReading,
     OperationalEvent,
     Site,
     SiteDailyClosure,
     SiteDailyClosureHistory,
-    Tipper,
     TripEvent,
 )
 from fleet_api.db.session import SessionLocal
@@ -38,9 +38,9 @@ def _require_fixture(session: Session) -> Company:
         raise RuntimeError(f"fixture {COMPANY_NAME!r} does not exist; run bootstrap-pilot first")
     site = session.scalar(select(Site).where(Site.company_id == company.id, Site.name == SITE_NAME))
     tipper = session.scalar(
-        select(Tipper).where(
-            Tipper.company_id == company.id,
-            Tipper.registration_number == normalize_registration_number(TIPPER_REGISTRATION),
+        select(FleetAsset).where(
+            FleetAsset.company_id == company.id,
+            FleetAsset.registration_number == normalize_registration_number(TIPPER_REGISTRATION),
         )
     )
     if site is None or tipper is None:

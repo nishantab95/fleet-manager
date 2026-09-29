@@ -25,7 +25,7 @@ class Assignment(UpdatedTimestampModel):
     )
     driver_membership_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     supervisor_membership_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
-    tipper_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    asset_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     site_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -47,9 +47,9 @@ class Assignment(UpdatedTimestampModel):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["company_id", "tipper_id"],
-            ["tippers.company_id", "tippers.id"],
-            name="fk_assignments_company_tipper",
+            ["company_id", "asset_id"],
+            ["fleet_assets.company_id", "fleet_assets.id"],
+            name="fk_assignments_company_asset",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(

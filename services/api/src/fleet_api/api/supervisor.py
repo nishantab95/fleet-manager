@@ -60,7 +60,7 @@ def _event_response(view: SupervisorEvent) -> SupervisorEventResponse:
         duty_session_id=view.event.duty_session_id,
         driver_name=view.driver.display_name,
         driver_phone=(view.driver.phone_number if view.emergency is not None else None),
-        tipper_registration_number=view.tipper.registration_number,
+        tipper_registration_number=view.asset.registration_number or view.asset.asset_code,
         site_id=view.site.id,
         site_name=view.site.name,
         device_created_at=view.event.device_created_at,
@@ -96,7 +96,7 @@ def _evidence_headers(view: SupervisorEvent) -> dict[str, str]:
         "Content-Disposition": "inline",
         "X-Fleet-Evidence-Event-Type": view.event.event_type.value,
         "X-Fleet-Evidence-Driver": view.driver.display_name,
-        "X-Fleet-Evidence-Tipper": view.tipper.registration_number,
+        "X-Fleet-Evidence-Tipper": view.asset.registration_number or view.asset.asset_code,
         "X-Fleet-Evidence-Timestamp": view.event.device_created_at.isoformat(),
     }
 
@@ -156,7 +156,9 @@ def site_completeness(
             SupervisorCompletenessResponse(
                 assignment_id=item.assignment.id,
                 driver_name=item.driver.display_name,
-                tipper_registration_number=item.tipper.registration_number,
+                tipper_registration_number=(
+                    item.asset.registration_number or item.asset.asset_code
+                ),
                 site_id=item.site.id,
                 site_name=item.site.name,
                 has_start_reading=item.has_start_reading,

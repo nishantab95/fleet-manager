@@ -19,12 +19,12 @@ from fleet_api.db.models import (
     EmergencyEvent,
     EventVerification,
     EvidenceObject,
+    FleetAsset,
     KmReading,
     OperationalEvent,
     Site,
     SiteDailyClosure,
     SiteDailyClosureHistory,
-    Tipper,
     User,
 )
 from fleet_api.db.models.common import utc_now
@@ -69,8 +69,11 @@ class ReportEvent:
     event_type: OperationalEventType
     assignment_id: UUID
     duty_session_id: UUID | None
-    tipper_id: UUID
-    tipper_registration_number: str
+    asset_id: UUID
+    asset_registration_number: str
+    asset_type: str
+    ownership_type: str
+    asset_code: str
     site_id: UUID
     site_name: str
     driver_name: str
@@ -92,7 +95,7 @@ class ReportEvent:
 @dataclass(frozen=True)
 class ReportEvidenceContext:
     event: OperationalEvent
-    tipper: Tipper
+    asset: FleetAsset
     driver_name: str
     evidence: EvidenceObject
 
@@ -102,16 +105,16 @@ class ReportException:
     code: str
     description: str
     assignment_id: UUID
-    tipper_id: UUID
-    tipper_registration_number: str
+    asset_id: UUID
+    asset_registration_number: str
     site_id: UUID
     event_id: UUID | None = None
 
 
 @dataclass(frozen=True)
-class TipperDailyReport:
+class AssetDailyReport:
     assignment: Assignment
-    tipper: Tipper
+    asset: FleetAsset
     site: Site
     driver_name: str
     supervisor_name: str
@@ -161,8 +164,8 @@ class ClosureSnapshot:
 class SiteDailyReport:
     site: Site
     operational_day: OperationalDay
-    rows: list[TipperDailyReport]
-    assigned_tippers_count: int
+    rows: list[AssetDailyReport]
+    assigned_assets_count: int
     approved_trip_count: int
     pending_trip_count: int
     disputed_trip_count: int
@@ -176,7 +179,7 @@ class SiteDailyReport:
 @dataclass(frozen=True)
 class DashboardReport:
     operational_day: OperationalDay
-    assigned_tippers_count: int
+    assigned_assets_count: int
     approved_trip_count: int
     pending_trip_count: int
     total_km: Decimal | None
@@ -185,7 +188,7 @@ class DashboardReport:
     missing_reading_count: int
     unresolved_emergency_count: int
     sites_not_closed_count: int
-    complete_tippers_count: int
+    complete_assets_count: int
     sites: list[SiteDailyReport]
     exceptions: list[ReportException]
 
@@ -194,7 +197,7 @@ class DashboardReport:
 class _EventParts:
     event: OperationalEvent
     assignment: Assignment
-    tipper: Tipper
+    asset: FleetAsset
     site: Site
     driver_name: str
     driver_phone: str
@@ -289,13 +292,16 @@ class ReportingService:
             raise NotFoundError("site was not found")
         return site
 
-    def _tipper(self, tipper_id: UUID) -> Tipper:
-        tipper = self.session.scalar(
-            select(Tipper).where(Tipper.id == tipper_id, Tipper.company_id == self.company_id)
+    def _asset(self, asset_id: UUID) -> FleetAsset:
+        asset = self.session.scalar(
+            select(FleetAsset).where(
+                FleetAsset.id == asset_id,
+                FleetAsset.company_id == self.company_id,
+            )
         )
-        if tipper is None:
-            raise NotFoundError("tipper was not found")
-        return tipper
+        if asset is None:
+            raise NotFoundError("asset was not found")
+        return asset
 
     def _authorize_site(self, site_id: UUID) -> Site:
         site = self._site(site_id)
@@ -314,8 +320,8 @@ class ReportingService:
         day: OperationalDay,
         *,
         site_id: UUID | None = None,
-        tipper_id: UUID | None = None,
-    ) -> list[tuple[Assignment, Tipper, Site, str, str]]:
+        asset_id: UUID | None = None,
+    ) -> list[tuple[Assignment, FleetAsset, Site, str, str]]:
         driver_membership = aliased(CompanyMembership)
         supervisor_membership = aliased(CompanyMembership)
         driver_user = aliased(User)
@@ -323,7 +329,7 @@ class ReportingService:
         statement = (
             select(
                 Assignment,
-                Tipper,
+                FleetAsset,
                 Site,
                 sql_cast(
                     func.coalesce(driver_membership.display_name, driver_user.display_name),
@@ -334,7 +340,7 @@ class ReportingService:
                     String,
                 ),
             )
-            .join(Tipper, Tipper.id == Assignment.tipper_id)
+            .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
             .join(Site, Site.id == Assignment.site_id)
             .join(driver_membership, driver_membership.id == Assignment.driver_membership_id)
             .join(driver_user, driver_user.id == driver_membership.user_id)
@@ -348,12 +354,17 @@ class ReportingService:
                 Assignment.starts_at < day.end_utc,
                 (Assignment.ends_at.is_(None) | (Assignment.ends_at > day.start_utc)),
             )
-            .order_by(Site.name, Tipper.registration_number, Assignment.starts_at)
+            .order_by(
+                Site.name,
+                FleetAsset.registration_number,
+                FleetAsset.asset_code,
+                Assignment.starts_at,
+            )
         )
         if site_id is not None:
             statement = statement.where(Assignment.site_id == site_id)
-        if tipper_id is not None:
-            statement = statement.where(Assignment.tipper_id == tipper_id)
+        if asset_id is not None:
+            statement = statement.where(Assignment.asset_id == asset_id)
         return [row._tuple() for row in self.session.execute(statement).all()]
 
     def _event_parts(
@@ -371,7 +382,7 @@ class ReportingService:
             select(
                 OperationalEvent,
                 Assignment,
-                Tipper,
+                FleetAsset,
                 Site,
                 sql_cast(
                     func.coalesce(driver_membership.display_name, driver_user.display_name),
@@ -384,7 +395,7 @@ class ReportingService:
                 ),
             )
             .join(Assignment, Assignment.id == OperationalEvent.assignment_id)
-            .join(Tipper, Tipper.id == Assignment.tipper_id)
+            .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
             .join(Site, Site.id == Assignment.site_id)
             .join(driver_membership, driver_membership.id == Assignment.driver_membership_id)
             .join(driver_user, driver_user.id == driver_membership.user_id)
@@ -458,12 +469,12 @@ class ReportingService:
                 )
             )
         result: dict[UUID, list[_EventParts]] = defaultdict(list)
-        for event, assignment, tipper, site, driver_name, driver_phone, supervisor_name in rows:
+        for event, assignment, asset, site, driver_name, driver_phone, supervisor_name in rows:
             result[assignment.id].append(
                 _EventParts(
                     event=event,
                     assignment=assignment,
-                    tipper=tipper,
+                    asset=asset,
                     site=site,
                     driver_name=driver_name,
                     driver_phone=driver_phone,
@@ -484,8 +495,13 @@ class ReportingService:
             event_type=parts.event.event_type,
             assignment_id=parts.assignment.id,
             duty_session_id=parts.event.duty_session_id,
-            tipper_id=parts.tipper.id,
-            tipper_registration_number=parts.tipper.registration_number,
+            asset_id=parts.asset.id,
+            asset_registration_number=(
+                parts.asset.registration_number or parts.asset.asset_code
+            ),
+            asset_type=parts.asset.asset_type.value,
+            ownership_type=parts.asset.ownership_type.value,
+            asset_code=parts.asset.asset_code,
             site_id=parts.site.id,
             site_name=parts.site.name,
             driver_name=parts.driver_name,
@@ -519,7 +535,7 @@ class ReportingService:
         ]
 
         # A daily report can contain several legitimate duty sessions for one
-        # tipper.  Readings only conflict when one session has competing
+        # asset. Readings only conflict when one session has competing
         # approved values; readings from separate linked sessions are the
         # first/last boundary of the daily aggregate.  Keep the old conflict
         # behavior for legacy events that have no session link.
@@ -550,15 +566,15 @@ class ReportingService:
             for parts in events
         )
 
-    def _tipper_report(
+    def _asset_report(
         self,
         assignment: Assignment,
-        tipper: Tipper,
+        asset: FleetAsset,
         site: Site,
         driver_name: str,
         supervisor_name: str,
         events: list[_EventParts],
-    ) -> TipperDailyReport:
+    ) -> AssetDailyReport:
         approved_trips = [
             parts
             for parts in events
@@ -606,8 +622,10 @@ class ReportingService:
                     code=code,
                     description=description,
                     assignment_id=assignment.id,
-                    tipper_id=tipper.id,
-                    tipper_registration_number=tipper.registration_number,
+                    asset_id=asset.id,
+                    asset_registration_number=(
+                        asset.registration_number or asset.asset_code
+                    ),
                     site_id=site.id,
                     event_id=event_id,
                 )
@@ -708,9 +726,9 @@ class ReportingService:
                 else "INCOMPLETE"
             )
         )
-        return TipperDailyReport(
+        return AssetDailyReport(
             assignment=assignment,
-            tipper=tipper,
+            asset=asset,
             site=site,
             driver_name=driver_name,
             supervisor_name=supervisor_name,
@@ -814,7 +832,7 @@ class ReportingService:
         self,
         site: Site,
         day: OperationalDay,
-        rows: list[TipperDailyReport],
+        rows: list[AssetDailyReport],
         closure: ClosureSnapshot | None = None,
     ) -> SiteDailyReport:
         blockers = [item for row in rows for item in row.exceptions]
@@ -825,7 +843,7 @@ class ReportingService:
             site=site,
             operational_day=day,
             rows=rows,
-            assigned_tippers_count=len({row.tipper.id for row in rows}),
+            assigned_assets_count=len({row.asset.id for row in rows}),
             approved_trip_count=sum(row.approved_trip_count for row in rows),
             pending_trip_count=sum(row.pending_trip_count for row in rows),
             disputed_trip_count=sum(row.disputed_trip_count for row in rows),
@@ -845,25 +863,25 @@ class ReportingService:
         assignments = [row[0] for row in rows]
         events = self._event_parts(day, [assignment.id for assignment in assignments])
         reports = [
-            self._tipper_report(
-                assignment, tipper, site_row, driver, supervisor, events.get(assignment.id, [])
+            self._asset_report(
+                assignment, asset, site_row, driver, supervisor, events.get(assignment.id, [])
             )
-            for assignment, tipper, site_row, driver, supervisor in rows
+            for assignment, asset, site_row, driver, supervisor in rows
         ]
         return self._make_site_report(site, day, reports)
 
-    def tipper_daily(
-        self, tipper_id: UUID, requested_date: date | None = None
-    ) -> list[TipperDailyReport]:
-        tipper = self._tipper(tipper_id)
+    def asset_daily(
+        self, asset_id: UUID, requested_date: date | None = None
+    ) -> list[AssetDailyReport]:
+        asset = self._asset(asset_id)
         day = self.operational_day(requested_date)
-        rows = self._assignment_rows(day, tipper_id=tipper.id)
+        rows = self._assignment_rows(day, asset_id=asset.id)
         events = self._event_parts(day, [row[0].id for row in rows])
         reports = [
-            self._tipper_report(
-                assignment, tipper_row, site, driver, supervisor, events.get(assignment.id, [])
+            self._asset_report(
+                assignment, asset_row, site, driver, supervisor, events.get(assignment.id, [])
             )
-            for assignment, tipper_row, site, driver, supervisor in rows
+            for assignment, asset_row, site, driver, supervisor in rows
         ]
         blockers_by_site: dict[UUID, list[ReportException]] = defaultdict(list)
         for report in reports:
@@ -887,11 +905,11 @@ class ReportingService:
         )
         assignment_rows = self._assignment_rows(day)
         events = self._event_parts(day, [row[0].id for row in assignment_rows])
-        by_site: dict[UUID, list[TipperDailyReport]] = defaultdict(list)
-        for assignment, tipper, site, driver, supervisor in assignment_rows:
+        by_site: dict[UUID, list[AssetDailyReport]] = defaultdict(list)
+        for assignment, asset, site, driver, supervisor in assignment_rows:
             by_site[site.id].append(
-                self._tipper_report(
-                    assignment, tipper, site, driver, supervisor, events.get(assignment.id, [])
+                self._asset_report(
+                    assignment, asset, site, driver, supervisor, events.get(assignment.id, [])
                 )
             )
         blockers_by_site = {
@@ -921,15 +939,18 @@ class ReportingService:
                         code="SITE_NOT_CLOSED",
                         description=f"{report.site.name} is {report.closure.status.value}",
                         assignment_id=report.rows[0].assignment.id,
-                        tipper_id=report.rows[0].tipper.id,
-                        tipper_registration_number=report.rows[0].tipper.registration_number,
+                        asset_id=report.rows[0].asset.id,
+                        asset_registration_number=(
+                            report.rows[0].asset.registration_number
+                            or report.rows[0].asset.asset_code
+                        ),
                         site_id=report.site.id,
                     )
                 )
         distances = [row.distance_km for row in rows if row.distance_km is not None]
         return DashboardReport(
             operational_day=day,
-            assigned_tippers_count=len({row.tipper.id for row in rows}),
+            assigned_assets_count=len({row.asset.id for row in rows}),
             approved_trip_count=sum(row.approved_trip_count for row in rows),
             pending_trip_count=sum(row.pending_trip_count for row in rows),
             total_km=sum(distances, Decimal("0")) if distances else None,
@@ -952,7 +973,7 @@ class ReportingService:
                 for report in site_reports
                 if report.rows and report.closure.status != SiteClosureStatus.CLOSED
             ),
-            complete_tippers_count=sum(1 for row in rows if row.completeness_status == "COMPLETE"),
+            complete_assets_count=sum(1 for row in rows if row.completeness_status == "COMPLETE"),
             sites=site_reports,
             exceptions=exceptions,
         )
@@ -978,7 +999,7 @@ class ReportingService:
                 {
                     "code": blocker.code,
                     "description": blocker.description,
-                    "tipper_registration_number": blocker.tipper_registration_number,
+                    "tipper_registration_number": blocker.asset_registration_number,
                 }
                 for blocker in report.closure.blockers
             ]
@@ -1112,9 +1133,9 @@ class ReportingService:
         if evidence is None:
             raise NotFoundError("event evidence was not found")
         row = self.session.execute(
-            select(OperationalEvent, Tipper, User.display_name)
+            select(OperationalEvent, FleetAsset, User.display_name)
             .join(Assignment, Assignment.id == OperationalEvent.assignment_id)
-            .join(Tipper, Tipper.id == Assignment.tipper_id)
+            .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
             .join(CompanyMembership, CompanyMembership.id == Assignment.driver_membership_id)
             .join(User, User.id == CompanyMembership.user_id)
             .where(
@@ -1124,10 +1145,10 @@ class ReportingService:
         ).first()
         if row is None:
             raise NotFoundError("event was not found")
-        _event, tipper, driver_name = row._tuple()
+        _event, asset, driver_name = row._tuple()
         return ReportEvidenceContext(
             event=event,
-            tipper=tipper,
+            asset=asset,
             driver_name=driver_name,
             evidence=evidence,
         )

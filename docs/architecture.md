@@ -28,6 +28,34 @@ under `/api/v1/auth`, Phase 3 administration under `/api/v1/admin`, the Phase 4
 driver boundary under `/api/v1/driver`, and Phase 5 supervisor operations under
 `/api/v1/supervisor`.
 
+## Phase 1A fleet-asset foundation
+
+`FleetAsset` is the single canonical persistence record for company fleet.
+The `fleet_assets` table replaces the former `tippers` table in place, keeping
+every UUID while `assignments.asset_id` and `duty_sessions.asset_id` replace
+their former tipper-named foreign keys. Operational events, verification
+history, evidence, and closures remain connected through their existing
+assignment, duty, event, and site relationships; no parallel vehicle table or
+copied history exists.
+
+The model declares `TIPPER`, `EXCAVATOR`, `BACKHOE_LOADER`, `ROLLER`, and
+`GRADER`, with `OWNED` and `RENTED` ownership. Registration is nullable for
+non-road machinery, while company-scoped `asset_code` is the stable required
+identifier. Status-based deactivation preserves assignment and event history.
+Composite `(company_id, asset_id)` foreign keys retain the database tenant
+boundary.
+
+`AssetCapabilities` is the single workflow capability map. Phase 1A enables
+the existing trip, odometer, diesel, emergency, and duty capabilities only for
+`TIPPER`; future machinery types are declared but have no Driver workflow.
+Ownership is descriptive and does not change tipper operations.
+
+The public 1.0.4 contract remains intentionally tipper-shaped. Existing
+`/tippers` routes, report routes, workbook layout, and fields such as
+`tipper_id`, `tipper_registration_number`, and `tipper_short_name` are adapters
+over `FleetAsset`. Generic management endpoints and UI are deferred to the
+next phase.
+
 ## Phase 2 authentication boundary
 
 - `fleet_api.auth.phone` normalizes input to canonical E.164 values. A default
@@ -64,7 +92,7 @@ and delegate business rules to the service or the existing asset/assignment
 domain services.
 
 Management uses status changes instead of destructive deletion for sites,
-tippers, and memberships. People creation associates an existing global User
+fleet assets, and memberships. People creation associates an existing global User
 by normalized phone or creates one, then creates only DRIVER or SUPERVISOR
 memberships; owner/admin privilege is not granted through this onboarding
 flow. Assignment creation reuses the existing effective-dated overlap
@@ -139,7 +167,8 @@ with `FLEET_WEB_PUBLIC_BASE_URL`; they never embed images or object-storage keys
 `Company` is the tenancy root. Company-owned rows carry a non-null
 `company_id`; relationships that could otherwise cross tenants use composite
 foreign keys such as `(company_id, site_id)` and `(company_id,
-driver_membership_id)`. Domain services also load records by identity and
+driver_membership_id)`. Fleet relationships use `(company_id, asset_id)`.
+Domain services also load records by identity and
 validate company scope before flushing a transaction. Client-supplied company
 IDs are not authorization. The authenticated membership and its company are
 the source of tenant context, and the persistence boundary uses composite
@@ -148,10 +177,10 @@ foreign keys to reject cross-tenant relationships.
 ## Effective-dated assignments
 
 An assignment is the source of operational ownership. It contains driver and
-supervisor memberships, tipper, site, and a half-open effective interval. The
+supervisor memberships, fleet asset, site, and a half-open effective interval. The
 database enables `btree_gist` and uses PostgreSQL GiST exclusion constraints
-over timestamp ranges to protect both driver and tipper histories under
-concurrent writes. No `current_driver_id` is stored on `Tipper`.
+over timestamp ranges to protect both driver and asset histories under
+concurrent writes. No `current_driver_id` is stored on `FleetAsset`.
 
 ## Events and verification
 
@@ -171,8 +200,10 @@ sync state.
 for the owner dashboard, site/day report, tipper/day report, exception list,
 closure blockers, and Excel export. It scopes assignments and events to the
 authenticated company, follows `event -> assignment -> site` for historical
-ownership, bulk-loads subtype/evidence/verification data, and does not use a
-tipper's current location as history.
+ownership, bulk-loads subtype/evidence/verification data, and uses generic
+asset-domain objects internally. The compatibility API and workbook keep their
+current tipper naming and layout; reporting does not use an asset's current
+location as history.
 
 `Company.reporting_timezone` and `Company.operational_day_start_minutes`
 define the operational day. The service converts the local wall-clock range

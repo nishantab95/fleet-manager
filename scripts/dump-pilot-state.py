@@ -11,6 +11,24 @@ from fleet_api.db.session import engine
 from fleet_api.domain.assets import normalize_registration_number
 
 
+ASSET = text(
+    """
+    SELECT
+      a.id AS asset_id,
+      a.asset_code,
+      a.asset_type,
+      a.ownership_type,
+      a.registration_number,
+      a.short_name,
+      a.status
+    FROM fleet_assets AS a
+    JOIN companies AS c ON c.id = a.company_id
+    WHERE c.name = :company_name
+      AND a.registration_number = :tipper_registration
+    """
+)
+
+
 EVENTS = text(
     """
     SELECT
@@ -25,9 +43,9 @@ EVENTS = text(
     JOIN companies AS c ON c.id = oe.company_id
     JOIN assignments AS a
       ON a.id = oe.assignment_id AND a.company_id = oe.company_id
-    JOIN tippers AS t ON t.id = a.tipper_id AND t.company_id = a.company_id
+    JOIN fleet_assets AS a2 ON a2.id = a.asset_id AND a2.company_id = a.company_id
     WHERE c.name = :company_name
-      AND t.registration_number = :tipper_registration
+      AND a2.registration_number = :tipper_registration
     ORDER BY oe.device_created_at, oe.server_received_at, oe.id
     """
 )
@@ -46,10 +64,10 @@ DUTIES = text(
       ds.updated_at
     FROM duty_sessions AS ds
     JOIN companies AS c ON c.id = ds.company_id
-    JOIN tippers AS t
-      ON t.id = ds.tipper_id AND t.company_id = ds.company_id
+    JOIN fleet_assets AS a
+      ON a.id = ds.asset_id AND a.company_id = ds.company_id
     WHERE c.name = :company_name
-      AND t.registration_number = :tipper_registration
+      AND a.registration_number = :tipper_registration
     ORDER BY ds.started_at, ds.id
     """
 )
@@ -65,10 +83,13 @@ def main() -> None:
         "tipper_registration": normalize_registration_number(TIPPER_REGISTRATION),
     }
     with engine.connect() as connection:
+        asset_rows = [dict(row) for row in connection.execute(ASSET, parameters).mappings()]
         event_rows = [dict(row) for row in connection.execute(EVENTS, parameters).mappings()]
         duty_rows = [dict(row) for row in connection.execute(DUTIES, parameters).mappings()]
         connection.rollback()
 
+    print("BACKEND_FLEET_ASSET_TABLE")
+    print(_json_rows(asset_rows))
     print("BACKEND_EVENT_TABLE")
     print(_json_rows(event_rows))
     print("BACKEND_DUTY_TABLE")

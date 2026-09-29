@@ -217,6 +217,16 @@ def test_web_environment_always_enables_driver_qa() -> None:
     assert web_env["NEXT_PUBLIC_ENABLE_DRIVER_QA"] == "true"
 
 
+def test_pilot_fixture_check_uses_canonical_fleet_asset_schema() -> None:
+    fixture_sql = launch.FIXTURE_SQL.lower()
+
+    assert "join fleet_assets fa" in fixture_sql
+    assert "fa.asset_type = 'tipper'" in fixture_sql
+    assert "a.asset_id = fa.id" in fixture_sql
+    assert "join tippers" not in fixture_sql
+    assert "a.tipper_id" not in fixture_sql
+
+
 def test_known_bookkeeper_process_is_recognized() -> None:
     info = launch.ProcessInfo(
         4321,
@@ -553,6 +563,7 @@ def test_empty_port_does_not_query_a_process_pid(
 ) -> None:
     launcher = launch.RoleLabLauncher(
         paths=launch.LauncherPaths.from_root(tmp_path),
+        probe=lambda url, timeout: None,
         process_info=lambda _: pytest.fail("process info queried without a listener"),
         listener_pid=lambda port: pytest.fail("listener PID queried for a free port"),
     )

@@ -18,9 +18,9 @@ from fleet_api.db.models import (
     Assignment,
     Company,
     CompanyMembership,
+    FleetAsset,
     Site,
     SupervisorSiteAccess,
-    Tipper,
     User,
 )
 from fleet_api.db.session import get_db as session_get_db
@@ -116,7 +116,7 @@ def add_assignment(db_session: Session, records: dict[str, object]) -> Assignmen
         company_id=value(records, "company_a", Company).id,
         driver_membership_id=value(records, "driver_a", CompanyMembership).id,
         supervisor_membership_id=value(records, "supervisor_a", CompanyMembership).id,
-        tipper_id=value(records, "tipper_a", Tipper).id,
+        asset_id=value(records, "tipper_a", FleetAsset).id,
         site_id=value(records, "site_a", Site).id,
         starts_at=datetime.now(UTC) - timedelta(hours=1),
     )

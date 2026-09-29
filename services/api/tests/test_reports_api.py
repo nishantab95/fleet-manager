@@ -14,10 +14,10 @@ from fleet_api.db.models import (
     Assignment,
     Company,
     CompanyMembership,
+    FleetAsset,
     Site,
     SiteDailyClosureHistory,
     SupervisorSiteAccess,
-    Tipper,
 )
 from fleet_api.domain.enums import SiteStatus
 from test_supervisor_api import (
@@ -49,7 +49,7 @@ def add_reporting_assignment(
         company_id=company.id,
         driver_membership_id=value(records, "driver_a", CompanyMembership).id,
         supervisor_membership_id=value(records, "supervisor_a", CompanyMembership).id,
-        tipper_id=value(records, "tipper_a", Tipper).id,
+        asset_id=value(records, "tipper_a", FleetAsset).id,
         site_id=(site or value(records, "site_a", Site)).id,
         starts_at=starts_at,
         ends_at=ends_at,
@@ -236,7 +236,7 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         assert site_report.status_code == 200
         assert site_report.json()["approved_trip_count"] == dashboard_data["approved_trip_count"]
         tipper_report = owner.get(
-            f"/api/v1/reports/tippers/{value(tenant_records, 'tipper_a', Tipper).id}/daily",
+            f"/api/v1/reports/tippers/{value(tenant_records, 'tipper_a', FleetAsset).id}/daily",
             params={"operational_date": REPORT_DATE.isoformat()},
         )
         assert tipper_report.status_code == 200

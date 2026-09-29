@@ -103,10 +103,12 @@ SELECT CASE WHEN EXISTS (
     SELECT 1
     FROM companies c
     JOIN sites s ON s.company_id = c.id AND s.name = 'Pilot Site'
-    JOIN tippers t ON t.company_id = c.id AND t.registration_number = 'PILOT12'
+    JOIN fleet_assets fa ON fa.company_id = c.id
+        AND fa.asset_type = 'TIPPER'
+        AND fa.registration_number = 'PILOT12'
     JOIN assignments a ON a.company_id = c.id
         AND a.site_id = s.id
-        AND a.tipper_id = t.id
+        AND a.asset_id = fa.id
         AND a.ends_at IS NULL
     JOIN company_memberships dm ON dm.company_id = c.id
         AND dm.id = a.driver_membership_id
