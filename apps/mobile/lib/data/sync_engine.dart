@@ -27,6 +27,9 @@ class SyncEngine {
   static const lastSuccessfulSyncKey = 'last_successful_sync_at';
   static const lastSyncErrorKey = 'last_sync_error_category';
   static const lastSyncErrorMessageKey = 'last_sync_error_message';
+  static const lastSyncHttpStatusKey = 'last_sync_http_status';
+  static const lastSyncErrorCodeKey = 'last_sync_error_code';
+  static const lastSyncFailureStageKey = 'last_sync_failure_stage';
   bool _syncInProgress = false;
 
   Future<String> enqueue({
@@ -39,12 +42,22 @@ class SyncEngine {
     final now = DateTime.now().toUtc();
     final isStart = _isStartEvent(eventType, payload);
     final isEnd = _isEndEvent(eventType, payload);
+    final isEmergency = eventType == DriverEventType.emergency;
     final existing = await database.latestLocalDutySession(
       assignmentId: assignment.assignmentId,
     );
-    final activeSession = existing != null && _isLocallyActive(existing.state);
+    final activeSession =
+        existing != null &&
+        existing.endedAt == null &&
+        _isLocallyActive(existing.state);
     final localSessionId = isStart ? _uuid.v4() : existing?.localSessionId;
-    final dependency = activeSession ? existing.lastEventUuid : null;
+    final dependency = activeSession && !isEmergency && !isStart
+        ? existing.lastEventUuid
+        : null;
+    final blockedForStartCorrection =
+        !isEmergency &&
+        !isStart &&
+        existing?.state == LocalDutyState.needsAttention.name;
     final storedPayload = <String, dynamic>{
       ...payload,
       if (localSessionId != null) '_duty_session_id': localSessionId,
@@ -58,7 +71,9 @@ class SyncEngine {
       siteId: assignment.siteId,
       supervisorName: assignment.supervisorName,
       deviceCreatedAt: now,
-      syncState: 'pending',
+      syncState: blockedForStartCorrection
+          ? 'blockedPendingStartCorrection'
+          : 'pending',
       payloadJson: jsonEncode(storedPayload),
       evidencePath: Value(evidencePath),
       createdAt: now,
@@ -88,14 +103,19 @@ class SyncEngine {
             createdAt: now,
             updatedAt: now,
           ),
+          makeCurrent: true,
         );
-      } else if (existing != null && activeSession) {
+      } else if (existing != null && activeSession && !isEmergency) {
         await database.updateLocalDutySession(
           existing.copyWith(
             endClientEventUuid: isEnd ? clientEventUuid : null,
             endKm: isEnd ? _readingValue(payload) : null,
             endedAt: isEnd ? now : null,
-            state: isEnd ? 'endPendingSync' : null,
+            state: isEnd
+                ? (existing.state == LocalDutyState.needsAttention.name
+                      ? LocalDutyState.needsAttention.name
+                      : LocalDutyState.endPendingSync.name)
+                : null,
             lastEventUuid: clientEventUuid,
             updatedAt: now,
           ),
@@ -103,6 +123,46 @@ class SyncEngine {
       }
     });
     return clientEventUuid;
+  }
+
+  Future<String> correctStart({
+    required String assignmentId,
+    required String readingValue,
+    required String evidencePath,
+  }) async {
+    final session = await database.latestLocalDutySession(
+      assignmentId: assignmentId,
+    );
+    if (session == null ||
+        session.state != LocalDutyState.needsAttention.name) {
+      throw StateError('There is no rejected START KM to correct.');
+    }
+    final start = await database.eventById(session.startClientEventUuid);
+    if (start == null) {
+      throw StateError('The original START KM event is missing.');
+    }
+    final payload = _decodeStoredPayload(start.payloadJson)
+      ..['reading_type'] = 'START_READING'
+      ..['reading_value'] = readingValue;
+    final parsed = double.tryParse(readingValue);
+    if (parsed == null) throw StateError('The corrected START KM is invalid.');
+    final now = DateTime.now().toUtc();
+    await database.transaction(() async {
+      await database.replaceEventForRetry(
+        clientEventUuid: session.startClientEventUuid,
+        payloadJson: jsonEncode(payload),
+        evidencePath: evidencePath,
+      );
+      await database.unblockDutyDependentEvents(session.localSessionId);
+      await database.updateLocalDutySession(
+        session.copyWith(
+          startKm: parsed,
+          state: LocalDutyState.startPendingSync.name,
+          updatedAt: now,
+        ),
+      );
+    });
+    return session.startClientEventUuid;
   }
 
   Future<DriverAssignment?> localAssignment() async {
@@ -158,7 +218,9 @@ class SyncEngine {
   }
 
   Future<int> syncPending() async {
-    if (_syncInProgress) return 0;
+    while (_syncInProgress) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
     _syncInProgress = true;
     try {
       return await _syncPending();
@@ -169,6 +231,16 @@ class SyncEngine {
 
   Future<int> _syncPending() async {
     final rows = await database.pendingForSync();
+    rows.sort((left, right) {
+      final leftEmergency =
+          left.eventType == DriverEventType.emergency.wireName;
+      final rightEmergency =
+          right.eventType == DriverEventType.emergency.wireName;
+      if (leftEmergency == rightEmergency) {
+        return left.createdAt.compareTo(right.createdAt);
+      }
+      return leftEmergency ? -1 : 1;
+    });
     var synced = 0;
     var attempted = 0;
     for (final row in rows) {
@@ -176,7 +248,10 @@ class SyncEngine {
       final dependency = storedPayload['_depends_on_event_uuid'] as String?;
       if (dependency != null) {
         final dependencyRow = await database.eventById(dependency);
-        if (dependencyRow?.syncState != 'synced') continue;
+        if (dependencyRow?.syncState != 'synced' &&
+            dependencyRow?.syncState != 'reconciledActiveDuty') {
+          continue;
+        }
       }
       attempted++;
       await database.markSyncing(row.clientEventUuid);
@@ -187,15 +262,39 @@ class SyncEngine {
         await _markLocalDutySynced(row);
         synced++;
       } on ApiException catch (error) {
-        await database.markFailed(event.clientEventUuid, error.message);
         final dutySessionId = storedPayload['_duty_session_id'] as String?;
+        final activeDuty = await _matchingActiveDutyForConflict(event, error);
+        if (activeDuty != null && dutySessionId != null) {
+          await database.markReconciledActiveDuty(event.clientEventUuid);
+          await database.markDutyStartSynced(
+            dutySessionId,
+            DateTime.now().toUtc(),
+            serverSessionId: activeDuty.sessionId,
+          );
+          await database.unblockDutyDependentEvents(dutySessionId);
+          synced++;
+          continue;
+        }
+        await database.markFailed(event.clientEventUuid, error.message);
         if (_isDeterministicStartFailure(event, error) &&
             dutySessionId != null) {
           await database.markDutyNeedsAttention(dutySessionId);
-          await database.blockDependentEvents(row.clientEventUuid);
+          await database.blockDutyDependentEvents(
+            dutySessionId,
+            row.clientEventUuid,
+          );
         }
         await database.setMetadata(lastSyncErrorKey, _errorCategory(error));
         await database.setMetadata(lastSyncErrorMessageKey, error.message);
+        await database.setMetadata(
+          lastSyncHttpStatusKey,
+          error.statusCode.toString(),
+        );
+        await database.setMetadata(lastSyncErrorCodeKey, error.code ?? '');
+        await database.setMetadata(
+          lastSyncFailureStageKey,
+          error.context?['sync_stage'] as String? ?? 'UNKNOWN',
+        );
       } on Object catch (error) {
         await database.markFailed(event.clientEventUuid, error.toString());
         await database.setMetadata(lastSyncErrorKey, 'LOCAL_OR_NETWORK_ERROR');
@@ -211,11 +310,57 @@ class SyncEngine {
     if (attempted > 0 && synced == attempted) {
       await database.setMetadata(lastSyncErrorKey, '');
       await database.setMetadata(lastSyncErrorMessageKey, '');
+      await database.setMetadata(lastSyncHttpStatusKey, '');
+      await database.setMetadata(lastSyncErrorCodeKey, '');
+      await database.setMetadata(lastSyncFailureStageKey, '');
+      if ((await database.pendingForSync()).isNotEmpty) {
+        return synced + await _syncPending();
+      }
     }
     return synced;
   }
 
-  Future<int> pendingCount() async => (await database.pendingForSync()).length;
+  Future<int> pendingCount() => database.unsyncedCount();
+
+  Future<List<Map<String, String>>> diagnosticEventRows() async {
+    final rows = await database.allEventsForDiagnostics();
+    return rows.map((row) {
+      final payload = _decodeStoredPayload(row.payloadJson);
+      return <String, String>{
+        'uuid': row.clientEventUuid,
+        'type': row.eventType,
+        'reading': '${payload['reading_type'] ?? ''}',
+        'state': row.syncState,
+        'retries': '${row.retryCount}',
+        'duty': '${payload['_duty_session_id'] ?? ''}',
+        'depends': '${payload['_depends_on_event_uuid'] ?? ''}',
+        'created': row.createdAt.toUtc().toIso8601String(),
+        'error': row.lastSyncError ?? '',
+      };
+    }).toList();
+  }
+
+  Future<List<Map<String, String>>> diagnosticDutyRows() async {
+    final rows = await database.allLocalDutySessions();
+    final current = await database.latestLocalDutySession();
+    return rows.map((row) {
+      return <String, String>{
+        'session': row.localSessionId,
+        'current': '${row.localSessionId == current?.localSessionId}',
+        'assignment': row.assignmentId,
+        'startEvent': row.startClientEventUuid,
+        'state': row.state,
+        'startKm': '${row.startKm}',
+        'started': row.startedAt.toUtc().toIso8601String(),
+        'endEvent': row.endClientEventUuid ?? '',
+        'ended': row.endedAt?.toUtc().toIso8601String() ?? '',
+        'updated': row.updatedAt.toUtc().toIso8601String(),
+      };
+    }).toList();
+  }
+
+  Future<String?> eventSyncState(String clientEventUuid) async =>
+      (await database.eventById(clientEventUuid))?.syncState;
 
   Future<void> _markLocalDutySynced(local.PendingEvent row) async {
     final storedPayload = _decodeStoredPayload(row.payloadJson);
@@ -229,6 +374,7 @@ class SyncEngine {
       _eventPayload(row.payloadJson),
     )) {
       await database.markDutyStartSynced(sessionId, now);
+      await database.unblockDutyDependentEvents(sessionId);
     } else if (_isEndEvent(
       DriverEventType.values.firstWhere(
         (value) => value.wireName == row.eventType,
@@ -275,7 +421,8 @@ class SyncEngine {
 
   static bool _isLocallyActive(String state) =>
       state == LocalDutyState.startPendingSync.name ||
-      state == LocalDutyState.activeConfirmed.name;
+      state == LocalDutyState.activeConfirmed.name ||
+      state == LocalDutyState.needsAttention.name;
 
   static LocalDutyState _localState(String value) =>
       LocalDutyState.values.firstWhere(
@@ -294,7 +441,8 @@ class SyncEngine {
       LocalDutyState.activeConfirmed => DriverDutyStatus.active,
       LocalDutyState.closedConfirmed => DriverDutyStatus.closed,
       LocalDutyState.endPendingSync => DriverDutyStatus.active,
-      LocalDutyState.needsAttention => DriverDutyStatus.none,
+      LocalDutyState.needsAttention =>
+        row.endedAt == null ? DriverDutyStatus.active : DriverDutyStatus.closed,
     };
     final useServer =
         serverDuty?.isActive == true &&
@@ -327,10 +475,32 @@ class SyncEngine {
       'ASSIGNMENT_INVALID',
       'ASSIGNMENT_NOT_FOUND',
     };
-    return codes.contains(error.code) ||
-        (error.statusCode >= 400 &&
-            error.statusCode < 500 &&
-            error.statusCode != 401);
+    return codes.contains(error.code);
+  }
+
+  Future<DriverDutyState?> _matchingActiveDutyForConflict(
+    PendingEvent event,
+    ApiException error,
+  ) async {
+    if (error.code != 'DUTY_ALREADY_STARTED' ||
+        !_isStartEvent(event.eventType, event.payload)) {
+      return null;
+    }
+    if (remote is! DriverDutyLookup) return null;
+    try {
+      final duty = await (remote as DriverDutyLookup).currentDuty();
+      final startedAt = duty.startedAt;
+      if (!duty.isActive ||
+          duty.assignmentId != event.assignmentId ||
+          duty.tipperId != event.tipperId ||
+          duty.siteId != event.siteId ||
+          (startedAt != null && startedAt.isAfter(event.deviceCreatedAt))) {
+        return null;
+      }
+      return duty;
+    } on Object {
+      return null;
+    }
   }
 
   Future<DateTime?> lastSuccessfulSync() async {
@@ -348,9 +518,29 @@ class SyncEngine {
     return value == null || value.isEmpty ? null : value;
   }
 
+  Future<String?> lastSyncHttpStatus() async {
+    final value = await database.metadata(lastSyncHttpStatusKey);
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  Future<String?> lastSyncErrorCode() async {
+    final value = await database.metadata(lastSyncErrorCodeKey);
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  Future<String?> lastSyncFailureStage() async {
+    final value = await database.metadata(lastSyncFailureStageKey);
+    return value == null || value.isEmpty ? null : value;
+  }
+
   static String _errorCategory(ApiException error) {
     if (error.code == 'ODOMETER_CONTINUITY') return 'ODOMETER_CONTINUITY';
     if (error.code == 'ODOMETER_OUT_OF_RANGE') return 'ODOMETER_OUT_OF_RANGE';
+    if (error.code == 'EVIDENCE_FORMAT_UNSUPPORTED' ||
+        error.code == 'EVIDENCE_FORMAT_MISMATCH' ||
+        error.code == 'EVIDENCE_FILE_UNREADABLE') {
+      return 'EVIDENCE_FILE_INVALID';
+    }
     if (error.statusCode == 401) return 'AUTH_REQUIRED';
     if (error.statusCode == 403) return 'ACCESS_REVOKED_OR_DENIED';
     if (error.statusCode >= 500 || error.statusCode == 0) {
@@ -368,30 +558,39 @@ class SyncEngine {
       try {
         var payload = <String, dynamic>{...event.payload};
         if (event.evidencePath != null) {
-          final objectReference = await remote.uploadEvidence(
-            clientEventUuid: event.clientEventUuid,
-            evidencePath: event.evidencePath!,
-          );
+          late final String objectReference;
+          try {
+            objectReference = await remote.uploadEvidence(
+              clientEventUuid: event.clientEventUuid,
+              evidencePath: event.evidencePath!,
+            );
+          } on ApiException catch (error) {
+            throw error.atSyncStage('EVIDENCE_UPLOAD');
+          }
           payload['object_reference'] = objectReference;
         }
-        await remote.submitEvent(
-          event: PendingEvent(
-            clientEventUuid: event.clientEventUuid,
-            assignmentId: event.assignmentId,
-            tipperId: event.tipperId,
-            siteId: event.siteId,
-            supervisorName: event.supervisorName,
-            eventType: event.eventType,
-            deviceCreatedAt: event.deviceCreatedAt,
-            payload: payload,
-            state: event.state,
-            retryCount: event.retryCount,
-            createdAt: event.createdAt,
-            evidencePath: event.evidencePath,
-            lastSyncError: event.lastSyncError,
-          ),
-          installationIdentifier: installationIdentifier,
-        );
+        try {
+          await remote.submitEvent(
+            event: PendingEvent(
+              clientEventUuid: event.clientEventUuid,
+              assignmentId: event.assignmentId,
+              tipperId: event.tipperId,
+              siteId: event.siteId,
+              supervisorName: event.supervisorName,
+              eventType: event.eventType,
+              deviceCreatedAt: event.deviceCreatedAt,
+              payload: payload,
+              state: event.state,
+              retryCount: event.retryCount,
+              createdAt: event.createdAt,
+              evidencePath: event.evidencePath,
+              lastSyncError: event.lastSyncError,
+            ),
+            installationIdentifier: installationIdentifier,
+          );
+        } on ApiException catch (error) {
+          throw error.atSyncStage('EVENT_SUBMISSION');
+        }
         return;
       } on ApiException catch (error) {
         if (error.isUnauthorized && !refreshed && refreshSession != null) {

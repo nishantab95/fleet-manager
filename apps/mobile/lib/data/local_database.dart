@@ -79,6 +79,7 @@ class LocalDutySession {
   final DateTime updatedAt;
 
   LocalDutySession copyWith({
+    double? startKm,
     String? state,
     String? serverSessionId,
     String? endClientEventUuid,
@@ -97,7 +98,7 @@ class LocalDutySession {
       siteName: siteName,
       supervisorName: supervisorName,
       startClientEventUuid: startClientEventUuid,
-      startKm: startKm,
+      startKm: startKm ?? this.startKm,
       startedAt: startedAt,
       endClientEventUuid: endClientEventUuid ?? this.endClientEventUuid,
       endKm: endKm ?? this.endKm,
@@ -163,6 +164,8 @@ class LocalDutySession {
 class LocalDatabase extends _$LocalDatabase {
   LocalDatabase(super.e);
 
+  static const _currentDutySessionKey = 'current_local_duty_session_id';
+
   @override
   int get schemaVersion => 2;
 
@@ -194,23 +197,56 @@ class LocalDatabase extends _$LocalDatabase {
   Future<LocalDutySession?> latestLocalDutySession({
     String? assignmentId,
   }) async {
+    final sessions = await allLocalDutySessions();
+    if (sessions.isEmpty) return null;
+
+    final currentId = await metadata(_currentDutySessionKey);
+    LocalDutySession? current;
+    for (final session in sessions) {
+      if (session.localSessionId == currentId) {
+        current = session;
+        break;
+      }
+    }
+
+    if (current == null) {
+      // Reconcile databases written by releases before the explicit current
+      // marker existed. Operational chronology is immutable: error retries may
+      // change updatedAt, but must never make an old duty current again.
+      current = sessions.first;
+      await setMetadata(_currentDutySessionKey, current.localSessionId);
+    }
+
+    if (assignmentId == null || current.assignmentId == assignmentId) {
+      return current;
+    }
+
+    for (final session in sessions) {
+      if (session.assignmentId == assignmentId) return session;
+    }
+    return null;
+  }
+
+  Future<List<LocalDutySession>> allLocalDutySessions() async {
     final rows = await select(syncMetadata).get();
     final sessions = <LocalDutySession>[];
     for (final row in rows.where((row) => row.key.startsWith('local_duty:'))) {
       try {
-        final session = LocalDutySession.fromJson(
-          jsonDecode(row.value) as Map<String, dynamic>,
+        sessions.add(
+          LocalDutySession.fromJson(
+            jsonDecode(row.value) as Map<String, dynamic>,
+          ),
         );
-        if (assignmentId == null || session.assignmentId == assignmentId) {
-          sessions.add(session);
-        }
       } on Object {
         // Ignore a corrupt snapshot; the pending queue remains authoritative.
       }
     }
-    if (sessions.isEmpty) return null;
-    sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return sessions.first;
+    sessions.sort(_compareDutyChronology);
+    return sessions;
+  }
+
+  Future<void> reconcileCurrentDutySession() async {
+    await latestLocalDutySession();
   }
 
   Future<LocalDutySession?> localDutySession(String localSessionId) async {
@@ -225,11 +261,17 @@ class LocalDatabase extends _$LocalDatabase {
     }
   }
 
-  Future<void> saveLocalDutySession(LocalDutySession session) {
-    return setMetadata(
+  Future<void> saveLocalDutySession(
+    LocalDutySession session, {
+    bool makeCurrent = false,
+  }) async {
+    await setMetadata(
       'local_duty:${session.localSessionId}',
       jsonEncode(session.toJson()),
     );
+    if (makeCurrent) {
+      await setMetadata(_currentDutySessionKey, session.localSessionId);
+    }
   }
 
   Future<void> updateLocalDutySession(LocalDutySession session) {
@@ -238,12 +280,17 @@ class LocalDatabase extends _$LocalDatabase {
 
   Future<void> markDutyStartSynced(
     String localSessionId,
-    DateTime updatedAt,
-  ) async {
+    DateTime updatedAt, {
+    String? serverSessionId,
+  }) async {
     final row = await localDutySession(localSessionId);
     if (row?.localSessionId == localSessionId) {
       await updateLocalDutySession(
-        row!.copyWith(state: 'activeConfirmed', updatedAt: updatedAt),
+        row!.copyWith(
+          state: 'activeConfirmed',
+          serverSessionId: serverSessionId,
+          updatedAt: updatedAt,
+        ),
       );
     }
   }
@@ -272,20 +319,66 @@ class LocalDatabase extends _$LocalDatabase {
     }
   }
 
-  Future<void> blockDependentEvents(String eventUuid) async {
-    final rows = await pendingForSync();
+  Future<void> blockDutyDependentEvents(
+    String localSessionId,
+    String startEventUuid,
+  ) async {
+    final rows = await select(pendingEvents).get();
     for (final row in rows) {
       final payload = _decodeEventPayload(row.payloadJson);
-      if (payload['_depends_on_event_uuid'] != eventUuid) continue;
+      if (payload['_duty_session_id'] != localSessionId ||
+          row.clientEventUuid == startEventUuid ||
+          row.syncState == 'synced' ||
+          row.syncState == 'reconciledActiveDuty') {
+        continue;
+      }
       await (update(pendingEvents)
             ..where((item) => item.clientEventUuid.equals(row.clientEventUuid)))
           .write(
             const PendingEventsCompanion(
-              syncState: Value('blocked'),
+              syncState: Value('blockedPendingStartCorrection'),
               lastSyncError: Value('START_KM_NEEDS_CORRECTION'),
             ),
           );
     }
+  }
+
+  Future<void> unblockDutyDependentEvents(String localSessionId) async {
+    final rows = await select(pendingEvents).get();
+    for (final row in rows) {
+      final payload = _decodeEventPayload(row.payloadJson);
+      if (payload['_duty_session_id'] != localSessionId ||
+          (row.syncState != 'blockedPendingStartCorrection' &&
+              row.syncState != 'blocked')) {
+        continue;
+      }
+      await (update(pendingEvents)
+            ..where((item) => item.clientEventUuid.equals(row.clientEventUuid)))
+          .write(
+            const PendingEventsCompanion(
+              syncState: Value('pending'),
+              lastSyncError: Value(null),
+            ),
+          );
+    }
+  }
+
+  Future<void> replaceEventForRetry({
+    required String clientEventUuid,
+    required String payloadJson,
+    required String evidencePath,
+  }) {
+    return (update(
+      pendingEvents,
+    )..where((row) => row.clientEventUuid.equals(clientEventUuid))).write(
+      PendingEventsCompanion(
+        payloadJson: Value(payloadJson),
+        evidencePath: Value(evidencePath),
+        syncState: const Value('pending'),
+        retryCount: const Value(0),
+        lastSyncError: const Value(null),
+      ),
+    );
   }
 
   static Map<String, dynamic> _decodeEventPayload(String payloadJson) {
@@ -307,6 +400,16 @@ class LocalDatabase extends _$LocalDatabase {
         .get();
   }
 
+  Future<int> unsyncedCount() async {
+    final count = pendingEvents.clientEventUuid.count();
+    final query = selectOnly(pendingEvents)
+      ..addColumns([count])
+      ..where(
+        pendingEvents.syncState.isNotIn(['synced', 'reconciledActiveDuty']),
+      );
+    return (await query.map((row) => row.read(count)).getSingle()) ?? 0;
+  }
+
   Future<void> markSyncing(String clientEventUuid) {
     return (update(
       pendingEvents,
@@ -322,6 +425,17 @@ class LocalDatabase extends _$LocalDatabase {
     return (update(pendingEvents)
           ..where((row) => row.clientEventUuid.equals(clientEventUuid)))
         .write(const PendingEventsCompanion(syncState: Value('synced')));
+  }
+
+  Future<void> markReconciledActiveDuty(String clientEventUuid) {
+    return (update(
+      pendingEvents,
+    )..where((row) => row.clientEventUuid.equals(clientEventUuid))).write(
+      const PendingEventsCompanion(
+        syncState: Value('reconciledActiveDuty'),
+        lastSyncError: Value(null),
+      ),
+    );
   }
 
   Future<void> markFailed(String clientEventUuid, String message) async {
@@ -346,10 +460,26 @@ class LocalDatabase extends _$LocalDatabase {
           ..where((row) => row.clientEventUuid.equals(clientEventUuid)))
         .getSingleOrNull();
   }
+
+  Future<List<PendingEvent>> allEventsForDiagnostics() {
+    return (select(
+      pendingEvents,
+    )..orderBy([(row) => OrderingTerm.asc(row.createdAt)])).get();
+  }
+
+  static int _compareDutyChronology(LocalDutySession a, LocalDutySession b) {
+    final started = b.startedAt.compareTo(a.startedAt);
+    if (started != 0) return started;
+    final created = b.createdAt.compareTo(a.createdAt);
+    if (created != 0) return created;
+    return b.localSessionId.compareTo(a.localSessionId);
+  }
 }
 
 Future<LocalDatabase> openLocalDatabase() async {
   final directory = await getApplicationDocumentsDirectory();
   final file = File(path.join(directory.path, 'fleet_manager_driver.sqlite'));
-  return LocalDatabase(NativeDatabase.createInBackground(file));
+  final database = LocalDatabase(NativeDatabase.createInBackground(file));
+  await database.reconcileCurrentDutySession();
+  return database;
 }

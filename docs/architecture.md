@@ -210,3 +210,18 @@ The mobile queue is a durable Drift/SQLite state machine. A row is marked
 submission and evidence upload use the existing client UUID idempotency
 boundary. Diagnostics persist only safe support categories and timestamps;
 they never expose payloads or credentials.
+
+Driver duty, transport sync, and supervisor verification are independent state
+machines. A locally valid START makes the duty operationally active before any
+network response, so Trip, Diesel, END, and Emergency capture remain available
+while START is pending sync or business verification. Normal duty events keep a
+local causal chain (`START -> activity -> END`) and are submitted only after the
+previous event is accepted. A deterministic START business rejection preserves
+the chain as `blockedPendingStartCorrection`; correcting the original START
+retains its UUID and releases the chain in order. Emergency has no queue
+dependency and is attempted ahead of normal queued work.
+
+Evidence MIME is derived from the file signature and checked against any known
+extension before upload. The client sends only `image/jpeg`, `image/png`, or
+`image/webp`; the backend remains responsible for its existing MIME, size, and
+signature validation.

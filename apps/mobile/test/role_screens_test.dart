@@ -25,6 +25,57 @@ void main() {
     },
   );
 
+  testWidgets(
+    'approved START disappears from review count while emergency stays separate',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _FakeRoleApi();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 pending'), findsOneWidget);
+      await tester.tap(find.text('PILOT-12'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 pending'), findsOneWidget);
+      await tester.tap(find.text('APPROVE'));
+      await tester.pumpAndSettle();
+
+      expect(api.approvedEventId, _FakeRoleApi.startEventId);
+      expect(find.text('0 pending'), findsOneWidget);
+      expect(find.text('Record approved.'), findsOneWidget);
+      expect(find.text('ACKNOWLEDGE'), findsOneWidget);
+    },
+  );
+
+  test(
+    'physical event statuses yield zero normal review items after approval',
+    () {
+      final events = [
+        _FakeRoleApi.event(
+          id: _FakeRoleApi.startEventId,
+          eventType: 'KM_READING',
+          verificationStatus: 'APPROVED',
+        ),
+        _FakeRoleApi.event(
+          id: _FakeRoleApi.emergencyEventId,
+          eventType: 'EMERGENCY',
+          verificationStatus: 'PENDING_VERIFICATION',
+        ),
+      ];
+
+      expect(events.first.id, '7cb203af-aaf4-4c8d-af39-84d2ca6e263f');
+      expect(events.first.verificationStatus, 'APPROVED');
+      expect(events.last.id, 'cb0915c7-4e29-4f19-8e0c-4f6c95d51c74');
+      expect(events.last.verificationStatus, 'PENDING_VERIFICATION');
+      expect(supervisorReviewPendingCount(events), 0);
+    },
+  );
+
   testWidgets('owner home exposes management dashboard and duty monitoring', (
     tester,
   ) async {
@@ -51,7 +102,34 @@ void main() {
 class _FakeRoleApi extends ApiClient {
   _FakeRoleApi() : super(baseUrl: 'http://test');
 
+  static const startEventId = '7cb203af-aaf4-4c8d-af39-84d2ca6e263f';
+  static const emergencyEventId = 'cb0915c7-4e29-4f19-8e0c-4f6c95d51c74';
+
   final _site = const SupervisorSite(id: 'site-1', name: 'Pilot Site');
+  String? approvedEventId;
+
+  static SupervisorEvent event({
+    required String id,
+    required String eventType,
+    required String verificationStatus,
+  }) => SupervisorEvent.fromJson({
+    'event_id': id,
+    'event_type': eventType,
+    'assignment_id': 'assignment-1',
+    'driver_name': 'Pilot Driver',
+    'driver_phone': '9606743463',
+    'tipper_registration_number': 'PILOT-12',
+    'site_id': 'site-1',
+    'site_name': 'Pilot Site',
+    'device_created_at': '2026-09-25T08:00:00Z',
+    'verification_status': verificationStatus,
+    'emergency_category': eventType == 'EMERGENCY' ? 'BREAKDOWN' : null,
+    'emergency_status': eventType == 'EMERGENCY' ? 'OPEN' : null,
+    'reading_type': eventType == 'KM_READING' ? 'START_READING' : null,
+    'reading_value': eventType == 'KM_READING' ? 10000 : null,
+    'evidence_available': false,
+    'verification_history': [],
+  });
 
   @override
   Future<List<SupervisorSite>> supervisorSites() async => [_site];
@@ -62,36 +140,31 @@ class _FakeRoleApi extends ApiClient {
     String? verificationStatus,
     DateTime? reviewDate,
   }) async => [
-    SupervisorEvent.fromJson({
-      'event_id': 'event-1',
-      'event_type': 'EMERGENCY',
-      'assignment_id': 'assignment-1',
-      'driver_name': 'Pilot Driver',
-      'driver_phone': '9606743463',
-      'tipper_registration_number': 'PILOT-12',
-      'site_id': siteId,
-      'site_name': 'Pilot Site',
-      'device_created_at': '2026-09-25T08:00:00Z',
-      'verification_status': 'PENDING_VERIFICATION',
-      'emergency_category': 'BREAKDOWN',
-      'emergency_status': 'OPEN',
-      'evidence_available': false,
-      'verification_history': [],
-    }),
-    SupervisorEvent.fromJson({
-      'event_id': 'event-2',
-      'event_type': 'TRIP_COMPLETE',
-      'assignment_id': 'assignment-1',
-      'driver_name': 'Pilot Driver',
-      'tipper_registration_number': 'PILOT-12',
-      'site_id': siteId,
-      'site_name': 'Pilot Site',
-      'device_created_at': '2026-09-25T07:00:00Z',
-      'verification_status': 'PENDING_VERIFICATION',
-      'evidence_available': false,
-      'verification_history': [],
-    }),
+    event(
+      id: emergencyEventId,
+      eventType: 'EMERGENCY',
+      verificationStatus: 'PENDING_VERIFICATION',
+    ),
+    event(
+      id: startEventId,
+      eventType: 'KM_READING',
+      verificationStatus: 'PENDING_VERIFICATION',
+    ),
   ];
+
+  @override
+  Future<SupervisorEvent> verifySupervisorEvent(
+    String eventId, {
+    required String decision,
+    String? reason,
+  }) async {
+    approvedEventId = eventId;
+    return event(
+      id: eventId,
+      eventType: 'KM_READING',
+      verificationStatus: decision,
+    );
+  }
 
   @override
   Future<OwnerDashboard> ownerDashboard({DateTime? date}) async =>

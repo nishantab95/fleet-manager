@@ -172,9 +172,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
     final openEmergencies = _events
         .where((item) => item.isOpenEmergency)
         .toList();
-    final pending = _events
-        .where((item) => item.isPending && !item.isEmergency)
-        .length;
+    final pending = supervisorReviewPendingCount(_events);
     return _RoleScaffold(
       title: 'Supervisor operations',
       subtitle: '${_sites.length} assigned site(s)',
@@ -295,7 +293,7 @@ class _SiteTippers extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.w700),
         ),
         subtitle: Text(
-          '${grouped.length} tipper(s) · ${events.where((e) => e.isPending).length} pending',
+          '${grouped.length} tipper(s) · ${supervisorReviewPendingCount(events)} pending',
         ),
         children: [
           if (grouped.isEmpty)
@@ -350,7 +348,7 @@ class _TipperGroup extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         child: ExpansionTile(
           title: Text(registration),
-          subtitle: Text('${events.where((e) => e.isPending).length} pending'),
+          subtitle: Text('${supervisorReviewPendingCount(events)} pending'),
           children: [
             _ReviewSection(
               title: 'TRIPS',

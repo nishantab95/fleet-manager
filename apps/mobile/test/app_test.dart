@@ -181,6 +181,73 @@ void main() {
       await database.close();
     },
   );
+
+  testWidgets('START pending sync or verification never gates Driver buttons', (
+    tester,
+  ) async {
+    final database = LocalDatabase(NativeDatabase.memory());
+    final dependencies = DriverAppDependencies(
+      api: ApiClient(),
+      sessionStore: SecureSessionStore(),
+      sync: SyncEngine(
+        database: database,
+        remote: _FakeRemote(),
+        installationIdentifier: 'test-device',
+      ),
+      installationIdentifier: 'test-device',
+    );
+    const assignment = DriverAssignment(
+      assignmentId: 'assignment',
+      tipperId: 'tipper',
+      tipperRegistrationNumber: 'KA01AB1234',
+      tipperShortName: 'Alpha One',
+      siteId: 'site',
+      siteName: 'Alpha Site',
+      supervisorName: 'Supervisor A',
+    );
+
+    Future<void> verify(DriverDutyState duty) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DriverHomeScreen(
+            dependencies: dependencies,
+            assignment: assignment,
+            duty: duty,
+            onSignOut: () async {},
+          ),
+        ),
+      );
+      await tester.pump();
+      for (final label in ['TRIP COMPLETE', 'KM READING', 'DIESEL']) {
+        expect(
+          tester
+              .widget<FilledButton>(find.widgetWithText(FilledButton, label))
+              .onPressed,
+          isNotNull,
+        );
+      }
+    }
+
+    await verify(
+      const DriverDutyState(
+        status: DriverDutyStatus.active,
+        localState: LocalDutyState.startPendingSync,
+      ),
+    );
+    await verify(
+      const DriverDutyState(
+        status: DriverDutyStatus.active,
+        localState: LocalDutyState.activeConfirmed,
+      ),
+    );
+    await verify(
+      const DriverDutyState(
+        status: DriverDutyStatus.active,
+        localState: LocalDutyState.needsAttention,
+      ),
+    );
+    await database.close();
+  });
 }
 
 class _FakeRemote implements DriverRemoteApi {

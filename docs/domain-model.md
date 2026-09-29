@@ -121,6 +121,17 @@ tipper, membership, assignment, or device belonging to another company.
 18. A closure cannot bypass missing/conflicting readings, invalid KM, pending
 or disputed trips/diesel, or unresolved emergencies. Reopen history is
 append-only and requires an owner reason.
+19. Driver operational duty (`NOT_STARTED`, `ACTIVE`, `ENDED`), device sync,
+    and Supervisor verification are independent. Verification never enables or
+    disables Driver capture.
+20. A locally accepted START permits field capture immediately. Server
+    submission remains causal: dependent Trip, Diesel, and END events wait for
+    START acceptance without being deleted or hidden from the local queue.
+21. A deterministic START rejection keeps the local duty recoverable and marks
+    dependent events `blockedPendingStartCorrection`. Correcting the original
+    START preserves its client UUID and releases dependents in original order.
+22. Emergency is locally durable but has no START/activity sync dependency. UI
+    copy distinguishes phone-only persistence from confirmed server receipt.
 
 ## PC V1 emergency contract
 

@@ -105,6 +105,7 @@ class SupervisorEvent {
   bool get isDiesel => eventType == 'DIESEL';
   bool get isOpenEmergency => isEmergency && emergencyStatus == 'OPEN';
   bool get isPending => verificationStatus == 'PENDING_VERIFICATION';
+  bool get needsSupervisorReview => isPending && !isEmergency;
 
   factory SupervisorEvent.fromJson(Map<String, dynamic> json) {
     final value = json['reading_value'];
@@ -135,6 +136,9 @@ class SupervisorEvent {
     );
   }
 }
+
+int supervisorReviewPendingCount(Iterable<SupervisorEvent> events) =>
+    events.where((event) => event.needsSupervisorReview).length;
 
 class CompletenessItem {
   const CompletenessItem({

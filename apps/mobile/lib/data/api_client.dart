@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:path/path.dart' as path;
 
 import '../domain/driver_models.dart';
 import '../domain/role_models.dart';
@@ -32,6 +34,10 @@ abstract class DriverRemoteApi {
   });
 }
 
+abstract class DriverDutyLookup {
+  Future<DriverDutyState> currentDuty();
+}
+
 class ApiException implements Exception {
   const ApiException(this.statusCode, this.message, {this.code, this.context});
 
@@ -44,11 +50,18 @@ class ApiException implements Exception {
   bool get isRetryable =>
       statusCode == 408 || statusCode == 429 || statusCode >= 500;
 
+  ApiException atSyncStage(String stage) => ApiException(
+    statusCode,
+    message,
+    code: code,
+    context: <String, dynamic>{...?context, 'sync_stage': stage},
+  );
+
   @override
   String toString() => 'ApiException($statusCode): $message';
 }
 
-class ApiClient implements DriverRemoteApi {
+class ApiClient implements DriverRemoteApi, DriverDutyLookup {
   ApiClient({String? baseUrl, http.Client? client})
     : _baseUrl = (baseUrl ?? defaultApiBaseUrl).replaceFirst(RegExp(r'/$'), ''),
       _client = client ?? http.Client();
@@ -162,6 +175,7 @@ class ApiClient implements DriverRemoteApi {
     return DriverAssignment.fromJson(_json(response));
   }
 
+  @override
   Future<DriverDutyState> currentDuty() async {
     final response = await _request(
       'GET',
@@ -343,13 +357,20 @@ class ApiClient implements DriverRemoteApi {
   }) async {
     final token = _tokens?.accessToken;
     if (token == null) throw const ApiException(401, 'session is missing');
+    final mimeType = await evidenceMimeTypeForPath(evidencePath);
     final request =
         http.MultipartRequest(
             'POST',
             _uri('/api/v1/driver/evidence?client_event_uuid=$clientEventUuid'),
           )
           ..headers['Authorization'] = 'Bearer $token'
-          ..files.add(await http.MultipartFile.fromPath('file', evidencePath));
+          ..files.add(
+            await http.MultipartFile.fromPath(
+              'file',
+              evidencePath,
+              contentType: MediaType.parse(mimeType),
+            ),
+          );
     late final http.Response materialized;
     try {
       final response = await _client.send(request);
@@ -456,4 +477,69 @@ class ApiClient implements DriverRemoteApi {
       context: structured,
     );
   }
+}
+
+Future<String> evidenceMimeTypeForPath(String evidencePath) async {
+  final file = File(evidencePath);
+  RandomAccessFile? handle;
+  late final Uint8List header;
+  try {
+    handle = await file.open();
+    header = await handle.read(12);
+  } on FileSystemException catch (error) {
+    throw ApiException(
+      422,
+      'Evidence file could not be read: ${error.message}',
+      code: 'EVIDENCE_FILE_UNREADABLE',
+    );
+  } finally {
+    await handle?.close();
+  }
+
+  final detected = _imageMimeFromSignature(header);
+  if (detected == null) {
+    throw const ApiException(
+      422,
+      'Evidence must be a JPEG, PNG, or WEBP image.',
+      code: 'EVIDENCE_FORMAT_UNSUPPORTED',
+    );
+  }
+
+  final extensionMime = switch (path.extension(evidencePath).toLowerCase()) {
+    '.jpg' || '.jpeg' => 'image/jpeg',
+    '.png' => 'image/png',
+    '.webp' => 'image/webp',
+    _ => null,
+  };
+  if (extensionMime != null && extensionMime != detected) {
+    throw const ApiException(
+      422,
+      'Evidence file extension does not match the image content.',
+      code: 'EVIDENCE_FORMAT_MISMATCH',
+    );
+  }
+  return detected;
+}
+
+String? _imageMimeFromSignature(Uint8List bytes) {
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xff &&
+      bytes[1] == 0xd8 &&
+      bytes[2] == 0xff) {
+    return 'image/jpeg';
+  }
+  const png = <int>[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length >= png.length) {
+    var matches = true;
+    for (var index = 0; index < png.length; index++) {
+      if (bytes[index] != png[index]) matches = false;
+    }
+    if (matches) return 'image/png';
+  }
+  if (bytes.length >= 12 &&
+      String.fromCharCodes(bytes.sublist(0, 4)) == 'RIFF' &&
+      String.fromCharCodes(bytes.sublist(8, 12)) == 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
 }

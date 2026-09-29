@@ -52,11 +52,11 @@ void main() {
         await tester.tap(find.byTooltip('Server settings'));
         await tester.pumpAndSettle();
         expect(find.text('Server URL'), findsOneWidget);
-      expect(find.text('TEST CONNECTION'), findsOneWidget);
-      expect(find.text('SAVE'), findsOneWidget);
-      final fields = find.byType(TextField);
-      await tester.enterText(fields.last, 'http://192.168.1.20:8000');
-      expect(find.text('http://192.168.1.20:8000'), findsWidgets);
+        expect(find.text('TEST CONNECTION'), findsOneWidget);
+        expect(find.text('SAVE'), findsOneWidget);
+        final fields = find.byType(TextField);
+        await tester.enterText(fields.last, 'http://192.168.1.20:8000');
+        expect(find.text('http://192.168.1.20:8000'), findsWidgets);
       } else {
         expect(find.text('PILOT / TEST'), findsNothing);
         expect(find.byTooltip('Server settings'), findsNothing);

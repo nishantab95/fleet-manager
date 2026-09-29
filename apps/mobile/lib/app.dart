@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'data/api_client.dart';
@@ -549,6 +550,7 @@ class DriverHomeScreen extends StatefulWidget {
 
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final _picker = ImagePicker();
+  Timer? _syncRetryTimer;
   int _pendingCount = 0;
   late DriverDutyState _duty;
   String? _message;
@@ -562,6 +564,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _duty = widget.duty;
     unawaited(_refreshQueue());
     unawaited(_refreshDuty());
+    unawaited(_syncQueuedEvents());
+  }
+
+  @override
+  void dispose() {
+    _syncRetryTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -628,25 +637,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
-  Future<void> _queue(
+  Future<String?> _queue(
     DriverEventType eventType, {
     Map<String, dynamic> payload = const <String, dynamic>{},
     String? evidencePath,
   }) async {
-    if (_busy) return;
+    if (_busy) return null;
     final assignment = widget.assignment;
-    if (assignment == null) return;
+    if (assignment == null) return null;
     final now = DateTime.now();
     if (_lastQueuedEventType == eventType &&
         _lastQueuedAt != null &&
         now.difference(_lastQueuedAt!) < const Duration(milliseconds: 500)) {
-      return;
+      return null;
     }
     _lastQueuedAt = now;
     _lastQueuedEventType = eventType;
     setState(() => _busy = true);
     try {
-      await widget.dependencies.sync.enqueue(
+      final eventId = await widget.dependencies.sync.enqueue(
         assignment: assignment,
         eventType: eventType,
         payload: payload,
@@ -658,43 +667,84 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         final label = switch (eventType) {
           DriverEventType.tripComplete => 'Trip recorded',
           DriverEventType.diesel => 'Diesel recorded',
-          DriverEventType.emergency => 'Emergency alert sent.',
+          DriverEventType.emergency =>
+            'Emergency saved on phone — not yet delivered',
           DriverEventType.kmReading => 'KM reading saved',
         };
         setState(() => _message = label);
       }
-      unawaited(_syncQueuedEvents());
+      unawaited(
+        _syncQueuedEvents(
+          emergencyEventId: eventType == DriverEventType.emergency
+              ? eventId
+              : null,
+        ),
+      );
+      return eventId;
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _syncQueuedEvents() async {
+  Future<void> _syncQueuedEvents({String? emergencyEventId}) async {
     if (widget.dependencies.api.session == null) return;
     try {
       await widget.dependencies.sync.syncPending();
       await _refreshQueue();
       await _refreshDuty();
+      if (emergencyEventId != null && mounted) {
+        final state = await widget.dependencies.sync.eventSyncState(
+          emergencyEventId,
+        );
+        if (state == SyncState.synced.name) {
+          setState(() => _message = 'Emergency received by server');
+        }
+      }
     } catch (_) {
       // Offline queue errors remain visible through the pending count and
       // diagnostics; the local operational state must stay available.
+    } finally {
+      await _scheduleAutomaticRetryIfUseful();
     }
   }
 
+  Future<void> _scheduleAutomaticRetryIfUseful() async {
+    if (!mounted || await widget.dependencies.sync.pendingCount() == 0) {
+      _syncRetryTimer?.cancel();
+      _syncRetryTimer = null;
+      return;
+    }
+    final category = await widget.dependencies.sync.lastSyncErrorCategory();
+    const retryableCategories = {
+      'BACKEND_UNAVAILABLE',
+      'RETRY_LATER',
+      'LOCAL_OR_NETWORK_ERROR',
+      'AUTH_REQUIRED',
+    };
+    if (category != null && !retryableCategories.contains(category)) return;
+    if (_syncRetryTimer?.isActive == true) return;
+    _syncRetryTimer = Timer(const Duration(seconds: 15), () {
+      _syncRetryTimer = null;
+      unawaited(_syncQueuedEvents());
+    });
+  }
+
   Future<void> _showKmDialog() async {
+    final type = await _chooseKmReadingType();
+    if (type == null || !mounted) return;
     final result = await showDialog<_KmCapture>(
       context: context,
-      builder: (context) => _KmDialog(
-        type: _duty.canEnd
-            ? KmReadingType.endReading
-            : KmReadingType.startReading,
-      ),
+      builder: (context) => _KmDialog(type: type),
     );
     if (result == null) {
       return;
     }
     final photo = await _pickEvidence(mustChoose: true);
     if (photo == null) {
+      return;
+    }
+    if (_duty.canCorrectStart && result.type == KmReadingType.startReading) {
+      await _correctStart(result.value, photo.path);
       return;
     }
     await _queue(
@@ -705,6 +755,59 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       },
       evidencePath: photo.path,
     );
+  }
+
+  Future<KmReadingType?> _chooseKmReadingType() async {
+    if (!_duty.canCorrectStart) {
+      return _duty.canEnd
+          ? KmReadingType.endReading
+          : KmReadingType.startReading;
+    }
+    if (!_duty.canEnd) return KmReadingType.startReading;
+    return showDialog<KmReadingType>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('KM READING'),
+        content: const Text(
+          'Correct the rejected START KM, or record END KM while preserving the correction queue.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, KmReadingType.endReading),
+            child: const Text('END KM'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, KmReadingType.startReading),
+            child: const Text('CORRECT START'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _correctStart(String readingValue, String evidencePath) async {
+    final assignment = widget.assignment;
+    if (_busy || assignment == null) return;
+    setState(() => _busy = true);
+    try {
+      await widget.dependencies.sync.correctStart(
+        assignmentId: assignment.assignmentId,
+        readingValue: readingValue,
+        evidencePath: evidencePath,
+      );
+      await _refreshQueue();
+      await _refreshDuty();
+      if (mounted) {
+        setState(() => _message = 'Corrected START KM saved on phone');
+      }
+      unawaited(_syncQueuedEvents());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _showDieselDialog() async {
@@ -723,7 +826,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
-  Future<void> _sendEmergency() => _queue(DriverEventType.emergency);
+  Future<void> _sendEmergency() async {
+    await _queue(DriverEventType.emergency);
+  }
 
   Future<XFile?> _pickEvidence({required bool mustChoose}) async {
     final source = await showModalBottomSheet<ImageSource>(
@@ -752,7 +857,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       ),
     );
     if (source == null) return null;
-    return _picker.pickImage(source: source, imageQuality: 85);
+    try {
+      return await _picker.pickImage(source: source, imageQuality: 85);
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(() {
+          _message = error.code == 'camera_access_denied'
+              ? 'Camera permission is required to take the KM photograph.'
+              : 'Photo could not be opened. Please try again.';
+        });
+      }
+      return null;
+    }
   }
 
   @override
@@ -874,6 +990,11 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
   DateTime? _lastSuccessfulSync;
   String? _lastSyncError;
   String? _lastSyncErrorMessage;
+  String? _lastSyncHttpStatus;
+  String? _lastSyncErrorCode;
+  String? _lastSyncFailureStage;
+  List<Map<String, String>> _eventRows = const [];
+  List<Map<String, String>> _dutyRows = const [];
 
   @override
   void initState() {
@@ -887,12 +1008,26 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
     final lastSuccessfulSync = await sync.lastSuccessfulSync();
     final lastSyncError = await sync.lastSyncErrorCategory();
     final lastSyncErrorMessage = await sync.lastSyncErrorMessage();
+    final lastSyncHttpStatus = await sync.lastSyncHttpStatus();
+    final lastSyncErrorCode = await sync.lastSyncErrorCode();
+    final lastSyncFailureStage = await sync.lastSyncFailureStage();
+    final eventRows = isPilotBuild
+        ? await sync.diagnosticEventRows()
+        : const <Map<String, String>>[];
+    final dutyRows = isPilotBuild
+        ? await sync.diagnosticDutyRows()
+        : const <Map<String, String>>[];
     if (!mounted) return;
     setState(() {
       _pendingCount = pendingCount;
       _lastSuccessfulSync = lastSuccessfulSync;
       _lastSyncError = lastSyncError;
       _lastSyncErrorMessage = lastSyncErrorMessage;
+      _lastSyncHttpStatus = lastSyncHttpStatus;
+      _lastSyncErrorCode = lastSyncErrorCode;
+      _lastSyncFailureStage = lastSyncFailureStage;
+      _eventRows = eventRows;
+      _dutyRows = dutyRows;
     });
   }
 
@@ -936,6 +1071,35 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
               title: const Text('Last sync error'),
               subtitle: Text(_lastSyncErrorMessage!),
             ),
+          if (_lastSyncHttpStatus != null)
+            ListTile(
+              title: const Text('HTTP status'),
+              subtitle: Text(_lastSyncHttpStatus!),
+            ),
+          if (_lastSyncErrorCode != null && _lastSyncErrorCode!.isNotEmpty)
+            ListTile(
+              title: const Text('Backend error code'),
+              subtitle: Text(_lastSyncErrorCode!),
+            ),
+          if (_lastSyncFailureStage != null)
+            ListTile(
+              title: const Text('Failure stage'),
+              subtitle: Text(_lastSyncFailureStage!),
+            ),
+          if (isPilotBuild) ...[
+            const Divider(height: 32),
+            _DiagnosticRows(
+              title: 'Local event queue (safe)',
+              emptyText: 'No local event rows.',
+              rows: _eventRows,
+            ),
+            const SizedBox(height: 12),
+            _DiagnosticRows(
+              title: 'Local duty sessions (safe)',
+              emptyText: 'No local duty snapshots.',
+              rows: _dutyRows,
+            ),
+          ],
           const SizedBox(height: 12),
           const Text(
             'This screen contains no trip totals, credentials, or auth tokens.',
@@ -947,6 +1111,46 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _DiagnosticRows extends StatelessWidget {
+  const _DiagnosticRows({
+    required this.title,
+    required this.emptyText,
+    required this.rows,
+  });
+
+  final String title;
+  final String emptyText;
+  final List<Map<String, String>> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return ExpansionTile(
+      initiallyExpanded: true,
+      tilePadding: EdgeInsets.zero,
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+      subtitle: Text('${rows.length} row(s)'),
+      children: [
+        if (rows.isEmpty)
+          Align(alignment: Alignment.centerLeft, child: Text(emptyText)),
+        for (var index = 0; index < rows.length; index++)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: SelectableText(
+                [
+                  'row=${index + 1}',
+                  for (final field in rows[index].entries)
+                    '${field.key}=${field.value}',
+                ].join('\n'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

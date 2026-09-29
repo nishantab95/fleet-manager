@@ -43,7 +43,13 @@ extension EmergencyCategoryWire on EmergencyCategory {
   };
 }
 
-enum SyncState { pending, syncing, syncFailed, synced }
+enum SyncState {
+  pending,
+  syncing,
+  syncFailed,
+  blockedPendingStartCorrection,
+  synced,
+}
 
 class SessionTokens {
   const SessionTokens({
@@ -179,28 +185,30 @@ class DriverDutyState {
 
   bool get isActive => status == DriverDutyStatus.active;
   bool get isOperationallyActive => switch (localState) {
-    LocalDutyState.startPendingSync || LocalDutyState.activeConfirmed => true,
-    LocalDutyState.endPendingSync ||
-    LocalDutyState.closedConfirmed ||
-    LocalDutyState.needsAttention => false,
+    LocalDutyState.startPendingSync ||
+    LocalDutyState.activeConfirmed ||
+    LocalDutyState.needsAttention => endedAt == null,
+    LocalDutyState.endPendingSync || LocalDutyState.closedConfirmed => false,
     null => isActive,
   };
   bool get canStart => switch (localState) {
-    LocalDutyState.needsAttention || LocalDutyState.closedConfirmed => true,
+    LocalDutyState.closedConfirmed => true,
     LocalDutyState.startPendingSync ||
     LocalDutyState.activeConfirmed ||
-    LocalDutyState.endPendingSync => false,
+    LocalDutyState.endPendingSync ||
+    LocalDutyState.needsAttention => false,
     null =>
       status == DriverDutyStatus.none || status == DriverDutyStatus.closed,
   };
   bool get canEnd => switch (localState) {
-    LocalDutyState.startPendingSync || LocalDutyState.activeConfirmed => true,
-    LocalDutyState.endPendingSync ||
-    LocalDutyState.closedConfirmed ||
-    LocalDutyState.needsAttention => false,
+    LocalDutyState.startPendingSync ||
+    LocalDutyState.activeConfirmed ||
+    LocalDutyState.needsAttention => endedAt == null,
+    LocalDutyState.endPendingSync || LocalDutyState.closedConfirmed => false,
     null => isActive,
   };
-  bool get canReadKm => canStart || canEnd;
+  bool get canCorrectStart => localState == LocalDutyState.needsAttention;
+  bool get canReadKm => canStart || canEnd || canCorrectStart;
 
   factory DriverDutyState.fromJson(Map<String, dynamic> json) {
     final status = switch (json['status'] as String? ?? 'NONE') {
