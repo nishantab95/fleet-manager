@@ -39,16 +39,22 @@ class DriverAppDependencies {
   final SyncEngine sync;
   final String installationIdentifier;
 
-  Future<void> registerDriverAccount(SessionTokens tokens) async {
-    try {
-      await api.registerDevice(installationIdentifier: installationIdentifier);
+  Future<void> registerDriverAccount(
+    SessionTokens tokens, {
+    bool allowOffline = false,
+  }) async {
+    if (allowOffline) {
       await sync.activateAccount(
         serverIdentity: api.baseUrl,
         companyId: tokens.companyId,
         membershipId: tokens.membershipId,
         claimLegacyData: true,
       );
+    }
+    try {
+      await api.registerDevice(installationIdentifier: installationIdentifier);
     } on ApiException catch (error) {
+      if (allowOffline && error.isRetryable) return;
       if (error.code != 'DEVICE_HANDOVER_REQUIRED') rethrow;
       final oldMembershipId =
           error.context?['current_membership_id'] as String?;
@@ -70,10 +76,13 @@ class DriverAppDependencies {
         allowHandover: true,
         localStateClear: true,
       );
+    }
+    if (!allowOffline) {
       await sync.activateAccount(
         serverIdentity: api.baseUrl,
         companyId: tokens.companyId,
         membershipId: tokens.membershipId,
+        claimLegacyData: true,
       );
     }
   }
@@ -117,24 +126,37 @@ class DriverSessionScreen extends StatefulWidget {
   State<DriverSessionScreen> createState() => _DriverSessionScreenState();
 }
 
-class _DriverSessionScreenState extends State<DriverSessionScreen> {
+class _DriverSessionScreenState extends State<DriverSessionScreen>
+    with WidgetsBindingObserver {
   DriverAssignment? _assignment;
   DriverDutyState _duty = const DriverDutyState.none();
   String? _role;
   bool _loading = true;
   String? _error;
+  Future<String?>? _driverRefreshInFlight;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.dependencies.api.setSessionExpiredHandler(_sessionExpired);
     unawaited(_restoreSession());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.dependencies.api.setSessionExpiredHandler(null);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        !_loading &&
+        widget.dependencies.api.session?.role == 'DRIVER') {
+      unawaited(_refreshDriverState());
+    }
   }
 
   Future<void> _sessionExpired() async {
@@ -165,31 +187,13 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
       DriverAssignment? assignment;
       var duty = const DriverDutyState.none();
       if (api.session?.role == 'DRIVER') {
-        await widget.dependencies.registerDriverAccount(api.session!);
-        try {
-          assignment = await api.currentAssignment();
-          if (assignment == null) {
-            assignment = await widget.dependencies.sync.localAssignment();
-            if (assignment != null) {
-              duty = await widget.dependencies.sync.localDutyState(
-                assignment.assignmentId,
-              );
-            }
-          } else {
-            duty = await api.currentDuty();
-            duty = await widget.dependencies.sync.effectiveDuty(
-              assignment.assignmentId,
-              duty,
-            );
-          }
-        } on ApiException catch (error) {
-          if (error.isUnauthorized) rethrow;
-          assignment = await widget.dependencies.sync.localAssignment();
-          if (assignment == null) rethrow;
-          duty = await widget.dependencies.sync.localDutyState(
-            assignment.assignmentId,
-          );
-        }
+        await widget.dependencies.registerDriverAccount(
+          api.session!,
+          allowOffline: true,
+        );
+        final state = await widget.dependencies.sync.reconcileDriverState();
+        assignment = state.assignment;
+        duty = state.duty;
       } else {
         await api.validateSession();
       }
@@ -223,30 +227,9 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
     DriverAssignment? assignment;
     var duty = const DriverDutyState.none();
     if (tokens.role == 'DRIVER') {
-      try {
-        assignment = await widget.dependencies.api.currentAssignment();
-        if (assignment == null) {
-          assignment = await widget.dependencies.sync.localAssignment();
-          if (assignment != null) {
-            duty = await widget.dependencies.sync.localDutyState(
-              assignment.assignmentId,
-            );
-          }
-        } else {
-          duty = await widget.dependencies.api.currentDuty();
-          duty = await widget.dependencies.sync.effectiveDuty(
-            assignment.assignmentId,
-            duty,
-          );
-        }
-      } on ApiException catch (error) {
-        if (error.isUnauthorized) rethrow;
-        assignment = await widget.dependencies.sync.localAssignment();
-        if (assignment == null) rethrow;
-        duty = await widget.dependencies.sync.localDutyState(
-          assignment.assignmentId,
-        );
-      }
+      final state = await widget.dependencies.sync.reconcileDriverState();
+      assignment = state.assignment;
+      duty = state.duty;
     }
     if (!mounted) return;
     setState(() {
@@ -255,6 +238,36 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
       _role = tokens.role;
       _error = null;
     });
+  }
+
+  Future<String?> _refreshDriverState() {
+    final active = _driverRefreshInFlight;
+    if (active != null) return active;
+    final refresh = _performDriverStateRefresh();
+    _driverRefreshInFlight = refresh;
+    return refresh.whenComplete(() {
+      if (identical(_driverRefreshInFlight, refresh)) {
+        _driverRefreshInFlight = null;
+      }
+    });
+  }
+
+  Future<String?> _performDriverStateRefresh() async {
+    try {
+      final state = await widget.dependencies.sync.reconcileDriverState();
+      if (mounted) {
+        setState(() {
+          _assignment = state.assignment;
+          _duty = state.duty;
+        });
+      }
+      return state.warning;
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) {
+        await _sessionExpired();
+      }
+      return error.message;
+    }
   }
 
   Future<void> _signOut() async {
@@ -301,6 +314,7 @@ class _DriverSessionScreenState extends State<DriverSessionScreen> {
         dependencies: widget.dependencies,
         assignment: _assignment,
         duty: _duty,
+        onRefreshState: _refreshDriverState,
         onSignOut: _signOut,
       ),
     };
@@ -612,6 +626,7 @@ class DriverHomeScreen extends StatefulWidget {
     required this.dependencies,
     required this.assignment,
     this.duty = const DriverDutyState.none(),
+    this.onRefreshState,
     required this.onSignOut,
     super.key,
   });
@@ -619,6 +634,7 @@ class DriverHomeScreen extends StatefulWidget {
   final DriverAppDependencies dependencies;
   final DriverAssignment? assignment;
   final DriverDutyState duty;
+  final Future<String?> Function()? onRefreshState;
   final Future<void> Function() onSignOut;
 
   @override
@@ -640,7 +656,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     super.initState();
     _duty = widget.duty;
     unawaited(_refreshQueue());
-    unawaited(_refreshDuty());
     unawaited(_syncQueuedEvents());
   }
 
@@ -697,21 +712,30 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       await widget.dependencies.sync.syncPending();
       await _refreshQueue();
-      await _refreshDuty();
+      final refreshWarning = await _refreshAuthoritativeState();
       final syncError = await widget.dependencies.sync.lastSyncErrorMessage();
       final pending = await widget.dependencies.sync.pendingCount();
       if (mounted) {
         setState(() {
-          _message = pending > 0
-              ? (syncError == null
-                    ? '$pending event(s) pending. Retry when connected.'
-                    : 'Needs attention: $syncError')
-              : 'Synced';
+          _message =
+              refreshWarning ??
+              (pending > 0
+                  ? (syncError == null
+                        ? '$pending event(s) pending. Retry when connected.'
+                        : 'Needs attention: $syncError')
+                  : 'Synced');
         });
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<String?> _refreshAuthoritativeState() async {
+    final refresh = widget.onRefreshState;
+    if (refresh != null) return refresh();
+    await _refreshDuty();
+    return null;
   }
 
   Future<String?> _queue(
@@ -768,7 +792,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       await widget.dependencies.sync.syncPending();
       await _refreshQueue();
-      await _refreshDuty();
+      final refreshWarning = await _refreshAuthoritativeState();
+      if (refreshWarning != null && mounted) {
+        setState(() => _message = refreshWarning);
+      }
       if (emergencyEventId != null && mounted) {
         final state = await widget.dependencies.sync.eventSyncState(
           emergencyEventId,

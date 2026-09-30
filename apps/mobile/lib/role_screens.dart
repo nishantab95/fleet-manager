@@ -177,6 +177,22 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
     }
   }
 
+  Future<void> _changeDriver(
+    SupervisorSite site,
+    SiteDeployedAsset asset,
+  ) async {
+    final changed = await showDriverAssignmentDialog(
+      context,
+      api: widget.api,
+      assetId: asset.assetId,
+      assetLabel: asset.registrationNumber ?? asset.assetCode,
+      siteLabel: site.name,
+      hasAssignment: asset.driverMembershipId != null,
+      supervisorSiteId: site.id,
+    );
+    if (changed == true) await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final openEmergencies = _events
@@ -255,6 +271,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
                 onVerify: _verify,
                 onCall: _call,
                 onEvidence: _showEvidence,
+                onChangeDriver: (asset) => _changeDriver(site, asset),
               ),
           ],
         ),
@@ -282,6 +299,7 @@ class _SiteTippers extends StatelessWidget {
     required this.onVerify,
     required this.onCall,
     required this.onEvidence,
+    required this.onChangeDriver,
   });
 
   final SupervisorSite site;
@@ -290,6 +308,7 @@ class _SiteTippers extends StatelessWidget {
   final Future<void> Function(SupervisorEvent event, String decision) onVerify;
   final Future<void> Function(String? phone) onCall;
   final Future<void> Function(SupervisorEvent event) onEvidence;
+  final Future<void> Function(SiteDeployedAsset asset) onChangeDriver;
 
   @override
   Widget build(BuildContext context) {
@@ -331,9 +350,21 @@ class _SiteTippers extends StatelessWidget {
               leading: const Icon(Icons.local_shipping_outlined),
               title: Text(asset.registrationNumber ?? asset.assetCode),
               subtitle: Text(asset.driverName ?? 'Unassigned'),
-              trailing: asset.pendingReviewCount > 0
-                  ? Chip(label: Text('${asset.pendingReviewCount} pending'))
-                  : null,
+              trailing: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (asset.pendingReviewCount > 0)
+                    Chip(label: Text('${asset.pendingReviewCount} pending')),
+                  if (asset.assetType == 'TIPPER')
+                    TextButton(
+                      key: Key('supervisor-assign-driver-${asset.assetId}'),
+                      onPressed: () => onChangeDriver(asset),
+                      child: Text(
+                        asset.driverMembershipId == null ? 'ASSIGN' : 'CHANGE',
+                      ),
+                    ),
+                ],
+              ),
             ),
           if (grouped.isNotEmpty) const Divider(height: 24),
           for (final entry in grouped.entries)

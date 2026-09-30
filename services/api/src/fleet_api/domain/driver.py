@@ -23,6 +23,7 @@ from fleet_api.db.models import (
     FleetAsset,
     OperationalEvent,
     Site,
+    SupervisorSiteAccess,
     User,
 )
 from fleet_api.db.models.common import utc_now
@@ -37,8 +38,10 @@ from fleet_api.domain.enums import (
     FleetAssetType,
     KmReadingType,
     MembershipRole,
+    MembershipStatus,
     OperationalEventType,
     SiteStatus,
+    UserStatus,
     VerificationStatus,
 )
 from fleet_api.domain.errors import (
@@ -72,8 +75,7 @@ class DriverAssignment:
     assignment: Assignment
     asset: FleetAsset
     site: Site
-    supervisor_membership: CompanyMembership
-    supervisor: User
+    supervisor_names: list[str]
 
 
 @dataclass(frozen=True)
@@ -99,14 +101,9 @@ def _assignment_query(
     at: datetime,
 ) -> DriverAssignment | None:
     row = session.execute(
-        select(Assignment, FleetAsset, Site, CompanyMembership, User)
+        select(Assignment, FleetAsset, Site)
         .join(FleetAsset, FleetAsset.id == Assignment.asset_id)
         .join(Site, Site.id == Assignment.site_id)
-        .join(
-            CompanyMembership,
-            CompanyMembership.id == Assignment.supervisor_membership_id,
-        )
-        .join(User, User.id == CompanyMembership.user_id)
         .where(
             Assignment.company_id == context.company.id,
             Assignment.driver_membership_id == context.membership.id,
@@ -115,14 +112,36 @@ def _assignment_query(
             FleetAsset.asset_type == FleetAssetType.TIPPER,
             FleetAsset.status == FleetAssetStatus.ACTIVE,
             Site.status == SiteStatus.ACTIVE,
-            CompanyMembership.status == "ACTIVE",
         )
         .order_by(Assignment.starts_at.desc(), Assignment.id)
     ).first()
     if row is None:
         return None
-    assignment, asset, site, supervisor_membership, supervisor = row._tuple()
-    return DriverAssignment(assignment, asset, site, supervisor_membership, supervisor)
+    assignment, asset, site = row._tuple()
+    supervisor_names = [
+        membership.display_name or user.display_name
+        for membership, user in session.execute(
+            select(CompanyMembership, User)
+            .join(
+                SupervisorSiteAccess,
+                (SupervisorSiteAccess.company_id == CompanyMembership.company_id)
+                & (
+                    SupervisorSiteAccess.supervisor_membership_id
+                    == CompanyMembership.id
+                ),
+            )
+            .join(User, User.id == CompanyMembership.user_id)
+            .where(
+                SupervisorSiteAccess.company_id == context.company.id,
+                SupervisorSiteAccess.site_id == site.id,
+                CompanyMembership.role == MembershipRole.SUPERVISOR,
+                CompanyMembership.status == MembershipStatus.ACTIVE,
+                User.status == UserStatus.ACTIVE,
+            )
+            .order_by(CompanyMembership.display_name, User.display_name)
+        )
+    ]
+    return DriverAssignment(assignment, asset, site, supervisor_names)
 
 
 def get_current_assignment(session: Session, context: AuthContext) -> DriverAssignment | None:

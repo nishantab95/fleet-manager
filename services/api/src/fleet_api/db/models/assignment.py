@@ -24,9 +24,12 @@ class Assignment(UpdatedTimestampModel):
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
     driver_membership_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
-    supervisor_membership_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    # Legacy compatibility snapshot only. New assignment authorization derives
+    # from SupervisorSiteAccess and never assigns an asset to one supervisor.
+    supervisor_membership_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     asset_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     site_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    asset_site_deployment_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     regular_duty_minutes: Mapped[int] = mapped_column(
@@ -56,6 +59,17 @@ class Assignment(UpdatedTimestampModel):
             ["company_id", "site_id"],
             ["sites.company_id", "sites.id"],
             name="fk_assignments_company_site",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "asset_site_deployment_id", "asset_id", "site_id"],
+            [
+                "asset_site_deployments.company_id",
+                "asset_site_deployments.id",
+                "asset_site_deployments.asset_id",
+                "asset_site_deployments.site_id",
+            ],
+            name="fk_assignments_deployment_asset_site",
             ondelete="RESTRICT",
         ),
         CheckConstraint("ends_at IS NULL OR ends_at > starts_at", name="end_after_start"),

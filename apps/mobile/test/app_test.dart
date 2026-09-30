@@ -248,6 +248,95 @@ void main() {
     );
     await database.close();
   });
+
+  testWidgets(
+    'manual Sync refreshes no-assignment and in-session asset changes',
+    (tester) async {
+      final database = LocalDatabase(NativeDatabase.memory());
+      final dependencies = DriverAppDependencies(
+        api: ApiClient(),
+        sessionStore: SecureSessionStore(),
+        sync: SyncEngine(
+          database: database,
+          remote: _FakeRemote(),
+          installationIdentifier: 'test-device',
+        ),
+        installationIdentifier: 'test-device',
+      );
+      const owned = DriverAssignment(
+        assignmentId: 'assignment-owned',
+        tipperId: 'owned',
+        tipperRegistrationNumber: 'TESTOWN02',
+        tipperShortName: 'Owned tipper 2',
+        siteId: 'site',
+        siteName: 'Test Site B',
+        supervisorName: 'Test Supervisor Two',
+      );
+      const rented = DriverAssignment(
+        assignmentId: 'assignment-rented',
+        tipperId: 'rented',
+        tipperRegistrationNumber: 'TESTRENT03',
+        tipperShortName: 'Rented tipper 3',
+        siteId: 'site',
+        siteName: 'Test Site B',
+        supervisorName: 'Test Supervisor Two',
+      );
+      DriverAssignment? current = owned;
+      DriverAssignment? next;
+      late StateSetter updateHarness;
+
+      await tester.pumpWidget(
+        StatefulBuilder(
+          builder: (context, setState) {
+            updateHarness = setState;
+            return MaterialApp(
+              home: DriverHomeScreen(
+                dependencies: dependencies,
+                assignment: current,
+                onRefreshState: () async {
+                  updateHarness(() => current = next);
+                  return null;
+                },
+                onSignOut: () async {},
+              ),
+            );
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byTooltip('Sync'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('NO ACTIVE ASSIGNMENT'), findsOneWidget);
+      for (final label in [
+        'TRIP COMPLETE',
+        'KM READING',
+        'DIESEL',
+        'EMERGENCY',
+      ]) {
+        expect(
+          tester
+              .widget<FilledButton>(find.widgetWithText(FilledButton, label))
+              .onPressed,
+          isNull,
+        );
+      }
+
+      next = rented;
+      await tester.tap(find.byTooltip('Sync'));
+      await tester.pumpAndSettle();
+      expect(find.text('TESTRENT03'), findsOneWidget);
+      expect(find.text('Site: Test Site B'), findsOneWidget);
+      expect(find.text('TESTOWN02'), findsNothing);
+
+      next = owned;
+      await tester.tap(find.byTooltip('Sync'));
+      await tester.pumpAndSettle();
+      expect(find.text('TESTOWN02'), findsOneWidget);
+      expect(find.text('TESTRENT03'), findsNothing);
+      await database.close();
+    },
+  );
 }
 
 class _FakeRemote implements DriverRemoteApi {

@@ -340,6 +340,47 @@ void main() {
       _closedLegacyDuty().assignmentId,
     );
   });
+
+  test(
+    'session restoration activates scoped offline assignment first',
+    () async {
+      final database = local.LocalDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final api = ApiClient(
+        baseUrl: _server,
+        client: MockClient(
+          (request) async => http.Response('unavailable', 503),
+        ),
+      );
+      const tokens = SessionTokens(
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        expiresIn: 900,
+        membershipId: _driverA,
+        companyId: _company,
+        role: 'DRIVER',
+      );
+      api.setSession(tokens);
+      final sync = SyncEngine(
+        database: database,
+        remote: api,
+        installationIdentifier: 'phone-1',
+      );
+      await _activate(sync, _driverA);
+      await sync.cacheCurrentAssignment(_assignment('assignment-a'));
+      sync.deactivateAccount();
+      final dependencies = DriverAppDependencies(
+        api: api,
+        sessionStore: SecureSessionStore(),
+        sync: sync,
+        installationIdentifier: 'phone-1',
+      );
+
+      await dependencies.registerDriverAccount(tokens, allowOffline: true);
+
+      expect((await sync.localAssignment())?.assignmentId, 'assignment-a');
+    },
+  );
 }
 
 Future<void> _activate(SyncEngine engine, String membershipId) {

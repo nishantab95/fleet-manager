@@ -19,6 +19,7 @@ from fleet_api.db.models import (
     SiteDailyClosureHistory,
     SupervisorSiteAccess,
 )
+from fleet_api.domain.assignments import create_assignment
 from fleet_api.domain.enums import SiteStatus
 from test_supervisor_api import (
     SupervisorStorage,
@@ -45,7 +46,8 @@ def add_reporting_assignment(
     ends_at: datetime | None = None,
 ) -> Assignment:
     company = value(records, "company_a", Company)
-    assignment = Assignment(
+    assignment = create_assignment(
+        db_session,
         company_id=company.id,
         driver_membership_id=value(records, "driver_a", CompanyMembership).id,
         supervisor_membership_id=value(records, "supervisor_a", CompanyMembership).id,
@@ -54,7 +56,6 @@ def add_reporting_assignment(
         starts_at=starts_at,
         ends_at=ends_at,
     )
-    db_session.add(assignment)
     db_session.add(
         SupervisorSiteAccess(
             company_id=company.id,

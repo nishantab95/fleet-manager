@@ -314,20 +314,19 @@ def test_deployment_rejects_inactive_and_cross_company_records(
     assignment_site = add_site(db_session, company, name="Assignment Site")
     mismatch_site = add_site(db_session, company, name="Mismatch Site")
     mismatch_asset = add_asset(db_session, company, code="MISMATCH-A")
-    db_session.add(
-        Assignment(
-            company_id=company.id,
-            driver_membership_id=value(
-                tenant_records, "driver_a", CompanyMembership
-            ).id,
-            supervisor_membership_id=value(
-                tenant_records, "supervisor_a", CompanyMembership
-            ).id,
-            asset_id=mismatch_asset.id,
-            site_id=assignment_site.id,
-            starts_at=datetime.now(UTC) - timedelta(minutes=5),
-            regular_duty_minutes=600,
-        )
+    create_assignment(
+        db_session,
+        company_id=company.id,
+        driver_membership_id=value(
+            tenant_records, "driver_a", CompanyMembership
+        ).id,
+        supervisor_membership_id=value(
+            tenant_records, "supervisor_a", CompanyMembership
+        ).id,
+        asset_id=mismatch_asset.id,
+        site_id=assignment_site.id,
+        starts_at=datetime.now(UTC) - timedelta(minutes=5),
+        regular_duty_minutes=600,
     )
     foreign_asset = value(tenant_records, "tipper_b", FleetAsset)
     foreign_site = value(tenant_records, "site_b", Site)
@@ -357,7 +356,7 @@ def test_deployment_rejects_inactive_and_cross_company_records(
             json={"site_id": str(mismatch_site.id)},
         )
         assert mismatch.status_code == 409
-        assert "must match" in mismatch.json()["detail"]["message"]
+        assert "actively assigned" in mismatch.json()["detail"]["message"]
     finally:
         client.close()
 

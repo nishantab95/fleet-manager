@@ -232,3 +232,19 @@ Tokens and OTP values are never written to handover audit records.
   `ASSET_MOVED_SITE`, and `ASSET_REMOVED_FROM_SITE` audit entries with old and
   new Site identifiers. Credentials, tokens, evidence bytes, and local runtime
   data are never recorded.
+
+## Driver / Operator assignment controls
+
+- Owner assignment routes require `OWNER_ADMIN`. Supervisor assignment routes
+  require both `SUPERVISOR` and current access to the asset's deployed Site.
+  Driver sessions cannot assign themselves.
+- The server derives Site and deployment from the asset; clients cannot choose
+  either value or select a Supervisor. New rows keep the legacy supervisor
+  field null and authorization continues through `SupervisorSiteAccess`.
+- Active membership, active asset, active Site, current deployment, and the
+  existing tipper capability gate are checked before writes. Cross-company
+  identifiers cannot be used to infer or create relationships.
+- Asset/Driver row locks plus PostgreSQL exclusion constraints protect
+  concurrent current assignments. Active duty prevents unassign/reassign.
+- Assignment audit records contain relationship UUIDs only. They never include
+  credentials, tokens, OTPs, evidence bytes, or local runtime data.

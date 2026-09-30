@@ -279,8 +279,8 @@ def _cleanup_migrated_graph(engine: Engine) -> None:
             "(SELECT id FROM operational_events WHERE company_id = :company_id)",
             "DELETE FROM evidence_objects WHERE company_id = :company_id",
             "DELETE FROM operational_events WHERE company_id = :company_id",
-            "DELETE FROM asset_site_deployments WHERE company_id = :company_id",
             "DELETE FROM assignments WHERE company_id = :company_id",
+            "DELETE FROM asset_site_deployments WHERE company_id = :company_id",
             "DELETE FROM devices WHERE company_id = :company_id",
             "DELETE FROM company_memberships WHERE company_id = :company_id",
             "DELETE FROM fleet_assets WHERE company_id = :company_id",
@@ -628,16 +628,27 @@ def test_0013_backfills_assignment_history_as_asset_site_deployments(
                 ),
                 {"company": company_id, "asset": asset_id},
             ) == 2
+            assert connection.scalar(
+                text(
+                    "SELECT count(*) FROM assignments AS a JOIN "
+                    "asset_site_deployments AS d ON "
+                    "d.company_id = a.company_id AND "
+                    "d.id = a.asset_site_deployment_id AND "
+                    "d.asset_id = a.asset_id AND d.site_id = a.site_id "
+                    "WHERE a.company_id = :company AND a.asset_id = :asset"
+                ),
+                {"company": company_id, "asset": asset_id},
+            ) == 2
     finally:
         command.upgrade(config, "head")
         with postgres_engine.begin() as connection:
             params = {"company": company_id}
             connection.execute(
-                text("DELETE FROM asset_site_deployments WHERE company_id = :company"),
-                params,
+                text("DELETE FROM assignments WHERE company_id = :company"), params
             )
             connection.execute(
-                text("DELETE FROM assignments WHERE company_id = :company"), params
+                text("DELETE FROM asset_site_deployments WHERE company_id = :company"),
+                params,
             )
             connection.execute(
                 text("DELETE FROM fleet_assets WHERE company_id = :company"), params

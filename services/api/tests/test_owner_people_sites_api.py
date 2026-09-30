@@ -14,7 +14,6 @@ from fleet_api.auth.providers import FakeOtpProvider
 from fleet_api.auth.service import AuthService
 from fleet_api.core.config import Settings
 from fleet_api.db.models import (
-    Assignment,
     AuditLog,
     CompanyMembership,
     FleetAsset,
@@ -22,6 +21,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.session import get_db as session_get_db
+from fleet_api.domain.assignments import create_assignment
 from fleet_api.domain.enums import (
     MembershipRole,
     MembershipStatus,
@@ -238,7 +238,8 @@ def test_active_dependencies_block_person_and_site_deactivation(
     driver = value(tenant_records, "driver_a", CompanyMembership)
     supervisor = value(tenant_records, "supervisor_a", CompanyMembership)
     site = value(tenant_records, "site_a", Site)
-    assignment = Assignment(
+    create_assignment(
+        db_session,
         company_id=owner.company_id,
         driver_membership_id=driver.id,
         supervisor_membership_id=supervisor.id,
@@ -248,7 +249,6 @@ def test_active_dependencies_block_person_and_site_deactivation(
         ends_at=None,
         regular_duty_minutes=600,
     )
-    db_session.add(assignment)
     db_session.commit()
     client = owner_client(db_session, owner)
     try:

@@ -46,6 +46,13 @@ class AssetSiteDeployment(UpdatedTimestampModel):
         UniqueConstraint(
             "company_id", "id", name="uq_asset_site_deployments_company_id"
         ),
+        UniqueConstraint(
+            "company_id",
+            "id",
+            "asset_id",
+            "site_id",
+            name="uq_asset_site_deployments_assignment_ref",
+        ),
         CheckConstraint(
             "ends_at IS NULL OR ends_at > starts_at",
             name="ck_asset_site_deployments_end_after_start",

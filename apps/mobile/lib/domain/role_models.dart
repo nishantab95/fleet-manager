@@ -357,6 +357,7 @@ class OwnerAssetAssignment {
     required this.siteName,
     required this.driverMembershipId,
     required this.driverName,
+    required this.startsAt,
   });
 
   final String assignmentId;
@@ -364,6 +365,7 @@ class OwnerAssetAssignment {
   final String siteName;
   final String driverMembershipId;
   final String driverName;
+  final DateTime? startsAt;
 
   factory OwnerAssetAssignment.fromJson(Map<String, dynamic> json) =>
       OwnerAssetAssignment(
@@ -372,6 +374,66 @@ class OwnerAssetAssignment {
         siteName: '${json['site_name'] ?? 'Site'}',
         driverMembershipId: '${json['driver_membership_id']}',
         driverName: '${json['driver_name'] ?? 'Driver'}',
+        startsAt: _date(json['starts_at']),
+      );
+}
+
+class DriverCandidate {
+  const DriverCandidate({
+    required this.membershipId,
+    required this.displayName,
+  });
+
+  final String membershipId;
+  final String displayName;
+
+  factory DriverCandidate.fromJson(Map<String, dynamic> json) =>
+      DriverCandidate(
+        membershipId: '${json['membership_id']}',
+        displayName: '${json['display_name'] ?? 'Driver / Operator'}',
+      );
+}
+
+class DriverAssetAssignment {
+  const DriverAssetAssignment({
+    required this.assignmentId,
+    required this.assetId,
+    required this.assetCode,
+    required this.driverMembershipId,
+    required this.driverName,
+    required this.deploymentId,
+    required this.siteId,
+    required this.siteName,
+    required this.startsAt,
+    required this.endsAt,
+    required this.regularDutyMinutes,
+  });
+
+  final String assignmentId;
+  final String assetId;
+  final String assetCode;
+  final String driverMembershipId;
+  final String driverName;
+  final String deploymentId;
+  final String siteId;
+  final String siteName;
+  final DateTime? startsAt;
+  final DateTime? endsAt;
+  final int regularDutyMinutes;
+
+  factory DriverAssetAssignment.fromJson(Map<String, dynamic> json) =>
+      DriverAssetAssignment(
+        assignmentId: '${json['assignment_id']}',
+        assetId: '${json['asset_id']}',
+        assetCode: '${json['asset_code'] ?? ''}',
+        driverMembershipId: '${json['driver_membership_id']}',
+        driverName: '${json['driver_name'] ?? 'Driver / Operator'}',
+        deploymentId: '${json['asset_site_deployment_id']}',
+        siteId: '${json['site_id']}',
+        siteName: '${json['site_name'] ?? 'Site'}',
+        startsAt: _date(json['starts_at']),
+        endsAt: _date(json['ends_at']),
+        regularDutyMinutes: _int(json['regular_duty_minutes']),
       );
 }
 
@@ -582,6 +644,10 @@ class OwnerPerson {
     required this.sites,
     required this.hasActiveAssignment,
     required this.hasActiveDuty,
+    required this.currentAssetId,
+    required this.currentAssetCode,
+    required this.currentSiteId,
+    required this.currentSiteName,
   });
 
   final String userId;
@@ -593,6 +659,10 @@ class OwnerPerson {
   final List<OwnerPersonSite> sites;
   final bool hasActiveAssignment;
   final bool hasActiveDuty;
+  final String? currentAssetId;
+  final String? currentAssetCode;
+  final String? currentSiteId;
+  final String? currentSiteName;
 
   bool get isActive => status == 'ACTIVE';
   bool get isInvited => status == 'INVITED';
@@ -611,6 +681,10 @@ class OwnerPerson {
         .toList(),
     hasActiveAssignment: json['has_active_assignment'] == true,
     hasActiveDuty: json['has_active_duty'] == true,
+    currentAssetId: json['current_asset_id'] as String?,
+    currentAssetCode: json['current_asset_code'] as String?,
+    currentSiteId: json['current_site_id'] as String?,
+    currentSiteName: json['current_site_name'] as String?,
   );
 }
 

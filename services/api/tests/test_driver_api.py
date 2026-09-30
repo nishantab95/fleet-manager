@@ -27,9 +27,11 @@ from fleet_api.db.models import (
     FleetAsset,
     OperationalEvent,
     Site,
+    SupervisorSiteAccess,
     User,
 )
 from fleet_api.db.session import get_db as session_get_db
+from fleet_api.domain.assignments import create_assignment
 from fleet_api.domain.enums import (
     AssetOwnershipType,
     FleetAssetStatus,
@@ -131,7 +133,8 @@ def add_assignment(
     starts_at: datetime | None = None,
     ends_at: datetime | None = None,
 ) -> Assignment:
-    assignment = Assignment(
+    return create_assignment(
+        db_session,
         company_id=value(records, "company_a", Company).id,
         driver_membership_id=value(records, driver_key, CompanyMembership).id,
         supervisor_membership_id=value(records, "supervisor_a", CompanyMembership).id,
@@ -140,9 +143,6 @@ def add_assignment(
         starts_at=starts_at or datetime.now(UTC) - timedelta(hours=1),
         ends_at=ends_at,
     )
-    db_session.add(assignment)
-    db_session.flush()
-    return assignment
 
 
 def event_payload(
@@ -762,6 +762,13 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
     driver_membership = value(tenant_records, "driver_a", CompanyMembership)
     supervisor_membership = value(tenant_records, "supervisor_a", CompanyMembership)
     supervisor_membership.display_name = "Assigned Supervisor"
+    db_session.add(
+        SupervisorSiteAccess(
+            company_id=assignment.company_id,
+            supervisor_membership_id=supervisor_membership.id,
+            site_id=assignment.site_id,
+        )
+    )
     db_session.flush()
     driver_token = session_for_user(db_session, driver, driver_membership)
     client = driver_app(db_session, driver_token, storage=InMemoryStorage())
@@ -771,6 +778,7 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
         assert current.json()["assignment_id"] == str(assignment.id)
         assert current.json()["site_name"] == "Alpha Site"
         assert current.json()["supervisor_name"] == "Assigned Supervisor"
+        assert current.json()["supervisor_names"] == ["Assigned Supervisor"]
 
         event_id = str(uuid4())
         start_duty(client)

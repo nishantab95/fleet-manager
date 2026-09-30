@@ -181,6 +181,13 @@ database directly; do not reset it. The migration regression test covers both
 current and historical Assignment rows and verifies that their UUIDs and data
 remain unchanged.
 
+Phase 1B.2C adds `0014_driver_asset_assignments`. It links every Assignment to
+the exact deployment with a composite company/deployment/asset/Site foreign
+key, backfills existing rows in place, and makes the legacy supervisor column
+nullable. Upgrade the Pilot database directly from `0013`; never reset it.
+The migration aborts if any historical Assignment cannot be matched to a
+deployment, preserving IDs and history instead of inventing partial data.
+
 The backend test suite uses PostgreSQL and includes reporting, closure,
 tenant-isolation, assignment-transfer, evidence-authorization, timezone, and
 openpyxl workbook checks. The web shell has a lightweight Vitest/jsdom suite:

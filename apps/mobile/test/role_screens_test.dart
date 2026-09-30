@@ -21,7 +21,7 @@ void main() {
       expect(find.text('SITES / ASSETS'), findsOneWidget);
       expect(find.text('PILOT-12'), findsWidgets);
       expect(find.text('EXC-07'), findsOneWidget);
-      expect(find.text('Unassigned'), findsOneWidget);
+      expect(find.text('Unassigned'), findsNWidgets(2));
       expect(find.text('OPEN EMERGENCIES'), findsOneWidget);
       expect(find.text('ACKNOWLEDGE'), findsOneWidget);
     },
@@ -53,6 +53,61 @@ void main() {
       expect(find.text('ACKNOWLEDGE'), findsOneWidget);
     },
   );
+
+  testWidgets('supervisor changes driver from an authorized site asset', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _FakeRoleApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const Key('supervisor-assign-driver-pilot-asset')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('CHANGE DRIVER / OPERATOR · PILOT-12'), findsOneWidget);
+    expect(find.byKey(const Key('assignment-site')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-driver-assignment')));
+    await tester.pumpAndSettle();
+
+    expect(api.assignedDriverId, 'driver-2');
+    expect(api.assignmentSiteId, 'site-1');
+  });
+
+  testWidgets('supervisor assigns an unassigned Tipper but not machinery', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _FakeRoleApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('supervisor-assign-driver-excavator-7')),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const Key('supervisor-assign-driver-rent-t03')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('ASSIGN DRIVER / OPERATOR · RENT-T03'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-driver-assignment')));
+    await tester.pumpAndSettle();
+
+    expect(api.assignedAssetId, 'rent-t03');
+    expect(api.assignedDriverId, 'driver-2');
+  });
 
   test(
     'physical event statuses yield zero normal review items after approval',
@@ -128,6 +183,9 @@ class _FakeRoleApi extends ApiClient {
 
   final _site = const SupervisorSite(id: 'site-1', name: 'Pilot Site');
   String? approvedEventId;
+  String? assignedAssetId;
+  String? assignedDriverId;
+  String? assignmentSiteId;
 
   static SupervisorEvent event({
     required String id,
@@ -179,6 +237,27 @@ class _FakeRoleApi extends ApiClient {
       'pending_review_count': 1,
     }),
     SiteDeployedAsset.fromJson({
+      'asset_id': 'rent-t03',
+      'asset_code': 'RENT-T03',
+      'asset_type': 'TIPPER',
+      'ownership_type': 'RENTED',
+      'registration_number': 'RENT-T03',
+      'short_name': 'Rental Tipper 03',
+      'status': 'ACTIVE',
+      'current_deployment': {
+        'id': 'deployment-2',
+        'asset_id': 'rent-t03',
+        'site_id': siteId,
+        'site_name': 'Pilot Site',
+        'starts_at': '2026-09-26T05:00:00Z',
+        'ends_at': null,
+      },
+      'driver_membership_id': null,
+      'driver_name': null,
+      'duty_status': null,
+      'pending_review_count': 0,
+    }),
+    SiteDeployedAsset.fromJson({
       'asset_id': 'excavator-7',
       'asset_code': 'EXCAVATOR-07',
       'asset_type': 'EXCAVATOR',
@@ -187,7 +266,7 @@ class _FakeRoleApi extends ApiClient {
       'short_name': 'Excavator 7',
       'status': 'ACTIVE',
       'current_deployment': {
-        'id': 'deployment-2',
+        'id': 'deployment-3',
         'asset_id': 'excavator-7',
         'site_id': siteId,
         'site_name': 'Pilot Site',
@@ -218,6 +297,39 @@ class _FakeRoleApi extends ApiClient {
       verificationStatus: 'PENDING_VERIFICATION',
     ),
   ];
+
+  @override
+  Future<List<DriverCandidate>> eligibleDrivers(
+    String assetId, {
+    String? supervisorSiteId,
+  }) async => const [
+    DriverCandidate(membershipId: 'driver-2', displayName: 'Second Driver'),
+  ];
+
+  @override
+  Future<DriverAssetAssignment> assignDriver(
+    String assetId,
+    String driverMembershipId, {
+    String? supervisorSiteId,
+    bool reassign = false,
+  }) async {
+    assignedAssetId = assetId;
+    assignedDriverId = driverMembershipId;
+    assignmentSiteId = supervisorSiteId;
+    return DriverAssetAssignment.fromJson({
+      'assignment_id': 'assignment-2',
+      'asset_id': assetId,
+      'asset_code': 'TIPPER-12',
+      'driver_membership_id': driverMembershipId,
+      'driver_name': 'Second Driver',
+      'asset_site_deployment_id': 'deployment-1',
+      'site_id': supervisorSiteId,
+      'site_name': 'Pilot Site',
+      'starts_at': '2026-09-30T08:00:00Z',
+      'ends_at': null,
+      'regular_duty_minutes': 600,
+    });
+  }
 
   @override
   Future<SupervisorEvent> verifySupervisorEvent(

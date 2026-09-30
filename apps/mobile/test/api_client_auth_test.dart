@@ -170,6 +170,40 @@ void main() {
     },
   );
 
+  test('Driver assignment calls use owner and supervisor paths', () async {
+    final paths = <String>[];
+    final api = ApiClient(
+      baseUrl: 'http://test',
+      client: MockClient((request) async {
+        paths.add('${request.method} ${request.url.path}');
+        if (request.url.path.endsWith('/eligible-drivers')) {
+          return http.Response(
+            jsonEncode([
+              {'membership_id': 'driver-1', 'display_name': 'Driver One'},
+            ]),
+            200,
+          );
+        }
+        expect(jsonDecode(request.body), {'driver_membership_id': 'driver-1'});
+        return http.Response(jsonEncode(_assignmentJson()), 200);
+      }),
+    )..setSession(_tokens(role: 'OWNER_ADMIN', access: 'owner-access'));
+
+    final candidates = await api.eligibleDrivers('asset-1');
+    expect(candidates.single.displayName, 'Driver One');
+    final assignment = await api.assignDriver(
+      'asset-1',
+      'driver-1',
+      supervisorSiteId: 'site-1',
+      reassign: true,
+    );
+    expect(assignment.driverName, 'Driver One');
+    expect(paths, [
+      'GET /api/v1/owner/assets/asset-1/eligible-drivers',
+      'POST /api/v1/supervisor/sites/site-1/assets/asset-1/assignment/reassign',
+    ]);
+  });
+
   test('Driver ordinary request refreshes and retries once', () async {
     final counts = <String, int>{};
     final api = _refreshingApi(
@@ -363,6 +397,20 @@ Map<String, dynamic> _deploymentJson() => {
   'site_name': 'Pilot Site',
   'starts_at': '2026-09-29T08:00:00Z',
   'ends_at': null,
+};
+
+Map<String, dynamic> _assignmentJson() => {
+  'assignment_id': 'assignment-1',
+  'asset_id': 'asset-1',
+  'asset_code': 'TIPPER-1',
+  'driver_membership_id': 'driver-1',
+  'driver_name': 'Driver One',
+  'asset_site_deployment_id': 'deployment-1',
+  'site_id': 'site-1',
+  'site_name': 'Pilot Site',
+  'starts_at': '2026-09-30T08:00:00Z',
+  'ends_at': null,
+  'regular_duty_minutes': 600,
 };
 
 Future<ApiException> _apiError(Future<Object?> request) async {

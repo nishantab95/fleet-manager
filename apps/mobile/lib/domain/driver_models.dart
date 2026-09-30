@@ -121,6 +121,7 @@ class DriverAssignment {
     required this.siteId,
     required this.siteName,
     required this.supervisorName,
+    this.supervisorNames = const [],
   });
 
   final String assignmentId;
@@ -130,8 +131,14 @@ class DriverAssignment {
   final String siteId;
   final String siteName;
   final String supervisorName;
+  final List<String> supervisorNames;
 
   factory DriverAssignment.fromJson(Map<String, dynamic> json) {
+    final supervisorNames =
+        (json['supervisor_names'] as List<dynamic>? ?? const [])
+            .whereType<String>()
+            .toList();
+    final legacySupervisor = json['supervisor_name'] as String?;
     return DriverAssignment(
       assignmentId: json['assignment_id'] as String,
       tipperId: json['tipper_id'] as String,
@@ -139,9 +146,44 @@ class DriverAssignment {
       tipperShortName: json['tipper_short_name'] as String?,
       siteId: json['site_id'] as String,
       siteName: json['site_name'] as String,
-      supervisorName: json['supervisor_name'] as String,
+      supervisorName: supervisorNames.isNotEmpty
+          ? supervisorNames.join(', ')
+          : legacySupervisor ?? 'Site supervisors',
+      supervisorNames: supervisorNames,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'assignment_id': assignmentId,
+    'tipper_id': tipperId,
+    'tipper_registration_number': tipperRegistrationNumber,
+    'tipper_short_name': tipperShortName,
+    'site_id': siteId,
+    'site_name': siteName,
+    'supervisor_name': supervisorName,
+    'supervisor_names': supervisorNames,
+  };
+}
+
+enum DriverAssignmentAuthority {
+  serverAssignment,
+  serverNoAssignment,
+  offlineCache,
+  protectedLocalWork,
+}
+
+class DriverStateReconciliation {
+  const DriverStateReconciliation({
+    required this.assignment,
+    required this.duty,
+    required this.authority,
+    this.warning,
+  });
+
+  final DriverAssignment? assignment;
+  final DriverDutyState duty;
+  final DriverAssignmentAuthority authority;
+  final String? warning;
 }
 
 enum DriverDutyStatus { none, active, closed }

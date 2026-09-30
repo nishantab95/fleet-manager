@@ -34,6 +34,32 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('Driver detail shows the current Asset and Site read only', (
+    tester,
+  ) async {
+    final person = OwnerPerson.fromJson({
+      ..._personJson(1),
+      'has_active_assignment': true,
+      'current_asset_id': 'asset-1',
+      'current_asset_code': 'OWN-T02',
+      'current_site_id': 'site-1',
+      'current_site_name': 'Test Site B',
+    });
+    final api = _FakePeopleSitesApi(people: [person]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: OwnerPeopleScreen(api: api)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('person-membership-1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('person-current-assignment')), findsOneWidget);
+    expect(find.text('OWN-T02'), findsOneWidget);
+    expect(find.text('Test Site B'), findsOneWidget);
+  });
+
   testWidgets('sites list renders 50 records and opens supervisor detail', (
     tester,
   ) async {

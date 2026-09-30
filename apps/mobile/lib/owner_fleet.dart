@@ -120,6 +120,20 @@ class _OwnerFleetScreenState extends State<OwnerFleetScreen> {
     await _load();
   }
 
+  Future<void> _changeDriver(OwnerAsset asset) async {
+    final api = widget.api;
+    if (api is! DriverAssignmentApi) return;
+    final changed = await showDriverAssignmentDialog(
+      context,
+      api: api as DriverAssignmentApi,
+      assetId: asset.id,
+      assetLabel: asset.registrationNumber ?? asset.assetCode,
+      siteLabel: asset.currentDeployment!.siteName,
+      hasAssignment: asset.activeAssignment != null,
+    );
+    if (changed == true) await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final visible = _visibleAssets;
@@ -243,6 +257,9 @@ class _OwnerFleetScreenState extends State<OwnerFleetScreen> {
                     onView: () => _view(asset),
                     onEdit: () => _edit(asset),
                     onAssign: () => _assign(asset),
+                    onDriver: widget.api is DriverAssignmentApi
+                        ? () => _changeDriver(asset)
+                        : null,
                   );
                 },
               ),
@@ -284,6 +301,7 @@ class OwnerAssetCard extends StatelessWidget {
     required this.onView,
     required this.onEdit,
     required this.onAssign,
+    this.onDriver,
     super.key,
   });
 
@@ -291,6 +309,7 @@ class OwnerAssetCard extends StatelessWidget {
   final VoidCallback onView;
   final VoidCallback onEdit;
   final VoidCallback onAssign;
+  final VoidCallback? onDriver;
 
   @override
   Widget build(BuildContext context) {
@@ -339,8 +358,10 @@ class OwnerAssetCard extends StatelessWidget {
             Text('Site: ${deployment?.siteName ?? 'Not assigned'}'),
             Text('Driver: ${assignment?.driverName ?? 'Unassigned'}'),
             const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 if (asset.isActive && deployment == null) ...[
                   OutlinedButton(
@@ -348,10 +369,19 @@ class OwnerAssetCard extends StatelessWidget {
                     onPressed: onAssign,
                     child: const Text('ASSIGN TO SITE'),
                   ),
-                  const SizedBox(width: 8),
                 ],
+                if (asset.isActive &&
+                    asset.assetType == 'TIPPER' &&
+                    deployment != null &&
+                    onDriver != null)
+                  OutlinedButton(
+                    key: Key('assign-driver-${asset.id}'),
+                    onPressed: onDriver,
+                    child: Text(
+                      assignment == null ? 'ASSIGN DRIVER' : 'CHANGE DRIVER',
+                    ),
+                  ),
                 OutlinedButton(onPressed: onView, child: const Text('VIEW')),
-                const SizedBox(width: 8),
                 FilledButton.tonal(
                   onPressed: onEdit,
                   child: const Text('EDIT'),
@@ -766,6 +796,20 @@ class _OwnerAssetDetailScreenState extends State<OwnerAssetDetailScreen> {
     }
   }
 
+  Future<void> _changeDriver() async {
+    final api = widget.api;
+    if (api is! DriverAssignmentApi) return;
+    final changed = await showDriverAssignmentDialog(
+      context,
+      api: api as DriverAssignmentApi,
+      assetId: _asset.id,
+      assetLabel: _asset.registrationNumber ?? _asset.assetCode,
+      siteLabel: _asset.currentDeployment!.siteName,
+      hasAssignment: _asset.activeAssignment != null,
+    );
+    if (changed == true) await _reload();
+  }
+
   Future<void> _reload() async {
     final updated = await widget.api.ownerAsset(_asset.id);
     if (mounted) setState(() => _asset = updated);
@@ -798,6 +842,17 @@ class _OwnerAssetDetailScreenState extends State<OwnerAssetDetailScreen> {
               'Model': _asset.model ?? '—',
             },
           ),
+          if (_asset.isActive &&
+              _asset.assetType == 'TIPPER' &&
+              deployment != null &&
+              widget.api is DriverAssignmentApi)
+            FilledButton.tonal(
+              key: const Key('asset-driver-action'),
+              onPressed: _busy ? null : _changeDriver,
+              child: Text(
+                assignment == null ? 'ASSIGN DRIVER' : 'CHANGE DRIVER',
+              ),
+            ),
           _DetailSection(
             title: 'Ownership and status',
             rows: {
@@ -847,12 +902,14 @@ class _OwnerAssetDetailScreenState extends State<OwnerAssetDetailScreen> {
           ),
           const SizedBox(height: 12),
           _DetailSection(
+            key: const Key('current-driver-assignment'),
             title: 'Current Driver assignment',
             rows: assignment == null
                 ? const {'Status': 'No active assignment'}
                 : {
                     'Site': assignment.siteName,
                     'Driver': assignment.driverName,
+                    'Assigned since': _dateText(assignment.startsAt),
                   },
           ),
           if (_error != null)
@@ -1033,7 +1090,7 @@ class _OwnerAssetDeploymentScreenState
 }
 
 class _DetailSection extends StatelessWidget {
-  const _DetailSection({required this.title, required this.rows});
+  const _DetailSection({required this.title, required this.rows, super.key});
 
   final String title;
   final Map<String, String> rows;
@@ -1077,3 +1134,163 @@ String? _nullable(String value) {
 
 String _dateText(DateTime? value) =>
     value == null ? 'Not set' : value.toIso8601String().substring(0, 10);
+
+Future<bool?> showDriverAssignmentDialog(
+  BuildContext context, {
+  required DriverAssignmentApi api,
+  required String assetId,
+  required String assetLabel,
+  required String siteLabel,
+  required bool hasAssignment,
+  String? supervisorSiteId,
+}) async {
+  var drivers = <DriverCandidate>[];
+  String? selected;
+  String? error;
+  var loading = true;
+  var saving = false;
+  var requested = false;
+  return showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        if (!requested) {
+          requested = true;
+          Future<void>.microtask(() async {
+            try {
+              final value = await api.eligibleDrivers(
+                assetId,
+                supervisorSiteId: supervisorSiteId,
+              );
+              if (!dialogContext.mounted) return;
+              setDialogState(() {
+                drivers = value;
+                selected = value.isEmpty ? null : value.first.membershipId;
+                loading = false;
+              });
+            } on Object catch (caught) {
+              if (!dialogContext.mounted) return;
+              setDialogState(() {
+                error = caught is ApiException
+                    ? caught.message
+                    : 'Drivers could not be loaded.';
+                loading = false;
+              });
+            }
+          });
+        }
+        Future<void> save() async {
+          final driverId = selected;
+          if (driverId == null) return;
+          setDialogState(() => saving = true);
+          try {
+            await api.assignDriver(
+              assetId,
+              driverId,
+              supervisorSiteId: supervisorSiteId,
+              reassign: hasAssignment,
+            );
+            if (dialogContext.mounted) Navigator.pop(dialogContext, true);
+          } on ApiException catch (caught) {
+            setDialogState(() {
+              error = caught.message;
+              saving = false;
+            });
+          }
+        }
+
+        Future<void> unassign() async {
+          setDialogState(() => saving = true);
+          try {
+            await api.unassignDriver(
+              assetId,
+              supervisorSiteId: supervisorSiteId,
+            );
+            if (dialogContext.mounted) Navigator.pop(dialogContext, true);
+          } on ApiException catch (caught) {
+            setDialogState(() {
+              error = caught.message;
+              saving = false;
+            });
+          }
+        }
+
+        return AlertDialog(
+          title: Text(
+            hasAssignment
+                ? 'CHANGE DRIVER / OPERATOR · $assetLabel'
+                : 'ASSIGN DRIVER / OPERATOR · $assetLabel',
+          ),
+          content: SizedBox(
+            width: 420,
+            child: loading
+                ? const LinearProgressIndicator()
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      InputDecorator(
+                        key: const Key('assignment-site'),
+                        decoration: const InputDecoration(labelText: 'Site'),
+                        child: Text(siteLabel),
+                      ),
+                      const SizedBox(height: 12),
+                      if (drivers.isEmpty)
+                        const Text(
+                          'No eligible Driver / Operator is available.',
+                        )
+                      else
+                        DropdownButtonFormField<String>(
+                          key: const Key('eligible-driver'),
+                          initialValue: selected,
+                          decoration: const InputDecoration(
+                            labelText: 'Driver / Operator',
+                          ),
+                          items: drivers
+                              .map(
+                                (driver) => DropdownMenuItem(
+                                  value: driver.membershipId,
+                                  child: Text(driver.displayName),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: saving
+                              ? null
+                              : (value) =>
+                                    setDialogState(() => selected = value),
+                        ),
+                      if (error != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          error!,
+                          key: const Key('driver-assignment-error'),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+          ),
+          actions: [
+            if (hasAssignment)
+              TextButton(
+                key: const Key('unassign-driver'),
+                onPressed: saving ? null : unassign,
+                child: const Text('UNASSIGN'),
+              ),
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(dialogContext),
+              child: const Text('CANCEL'),
+            ),
+            FilledButton(
+              key: const Key('confirm-driver-assignment'),
+              onPressed: saving || loading || selected == null ? null : save,
+              child: Text(saving ? 'SAVING…' : 'SAVE'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}

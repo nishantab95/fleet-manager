@@ -7,9 +7,17 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from fleet_api.api.dependencies import get_app_settings, get_object_storage, require_supervisor
+from fleet_api.api.dependencies import (
+    get_app_settings,
+    get_object_storage,
+    get_supervisor_driver_assignment_service,
+    require_supervisor,
+)
 from fleet_api.api.schemas import (
     AssetSiteDeploymentResponse,
+    DriverAssetAssignmentRequest,
+    DriverAssetAssignmentResponse,
+    DriverCandidateResponse,
     SiteDeployedAssetResponse,
     SupervisorBatchVerificationRequest,
     SupervisorBatchVerificationResponse,
@@ -22,6 +30,10 @@ from fleet_api.api.schemas import (
 from fleet_api.auth.service import AuthContext
 from fleet_api.core.config import Settings
 from fleet_api.db.session import get_db
+from fleet_api.domain.driver_assignments import (
+    DriverAssetAssignmentService,
+    DriverAssetAssignmentView,
+)
 from fleet_api.domain.enums import VerificationStatus
 from fleet_api.domain.errors import (
     ConflictError,
@@ -92,6 +104,25 @@ def _service(db: Session, context: AuthContext) -> SupervisorService:
     return SupervisorService(db, context)
 
 
+def _assignment_response(
+    view: DriverAssetAssignmentView,
+) -> DriverAssetAssignmentResponse:
+    return DriverAssetAssignmentResponse(
+        assignment_id=view.assignment.id,
+        asset_id=view.asset.id,
+        asset_code=view.asset.asset_code,
+        registration_number=view.asset.registration_number,
+        driver_membership_id=view.driver_membership.id,
+        driver_name=view.driver_membership.display_name or view.driver.display_name,
+        asset_site_deployment_id=view.deployment.id,
+        site_id=view.site.id,
+        site_name=view.site.name,
+        starts_at=view.assignment.starts_at,
+        ends_at=view.assignment.ends_at,
+        regular_duty_minutes=view.assignment.regular_duty_minutes,
+    )
+
+
 def _evidence_headers(view: SupervisorEvent) -> dict[str, str]:
     return {
         "Cache-Control": "private, no-store",
@@ -157,6 +188,147 @@ def list_supervisor_site_assets(
             for view in _service(db, context).list_site_assets(site_id)
         ]
     except DomainError as exc:
+        _fail(exc)
+
+
+@router.get(
+    "/sites/{site_id}/assets/{asset_id}/assignment",
+    response_model=DriverAssetAssignmentResponse,
+    responses={204: {"description": "Asset has no current Driver / Operator"}},
+)
+def current_asset_assignment(
+    site_id: UUID,
+    asset_id: UUID,
+    service: DriverAssetAssignmentService = Depends(
+        get_supervisor_driver_assignment_service
+    ),
+) -> DriverAssetAssignmentResponse | Response:
+    try:
+        service.ensure_asset_site(asset_id, site_id)
+        view = service.current(asset_id)
+        if view is None:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        return _assignment_response(view)
+    except DomainError as exc:
+        service.session.rollback()
+        _fail(exc)
+
+
+@router.get(
+    "/sites/{site_id}/assets/{asset_id}/assignments",
+    response_model=list[DriverAssetAssignmentResponse],
+)
+def asset_assignment_history(
+    site_id: UUID,
+    asset_id: UUID,
+    service: DriverAssetAssignmentService = Depends(
+        get_supervisor_driver_assignment_service
+    ),
+) -> list[DriverAssetAssignmentResponse]:
+    try:
+        service.ensure_asset_site(asset_id, site_id)
+        return [_assignment_response(view) for view in service.history(asset_id)]
+    except DomainError as exc:
+        service.session.rollback()
+        _fail(exc)
+
+
+@router.get(
+    "/sites/{site_id}/assets/{asset_id}/eligible-drivers",
+    response_model=list[DriverCandidateResponse],
+)
+def eligible_asset_drivers(
+    site_id: UUID,
+    asset_id: UUID,
+    service: DriverAssetAssignmentService = Depends(
+        get_supervisor_driver_assignment_service
+    ),
+) -> list[DriverCandidateResponse]:
+    try:
+        service.ensure_asset_site(asset_id, site_id)
+        return [
+            DriverCandidateResponse(
+                membership_id=item.membership.id,
+                display_name=item.membership.display_name or item.user.display_name,
+            )
+            for item in service.eligible_drivers(asset_id)
+        ]
+    except DomainError as exc:
+        service.session.rollback()
+        _fail(exc)
+
+
+@router.post(
+    "/sites/{site_id}/assets/{asset_id}/assignment",
+    response_model=DriverAssetAssignmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def assign_asset_driver(
+    site_id: UUID,
+    asset_id: UUID,
+    payload: DriverAssetAssignmentRequest,
+    service: DriverAssetAssignmentService = Depends(
+        get_supervisor_driver_assignment_service
+    ),
+) -> DriverAssetAssignmentResponse:
+    try:
+        service.ensure_asset_site(asset_id, site_id)
+        view = service.assign(
+            asset_id,
+            payload.driver_membership_id,
+            regular_duty_minutes=payload.regular_duty_minutes or 600,
+        )
+        service.session.commit()
+        return _assignment_response(view)
+    except DomainError as exc:
+        service.session.rollback()
+        _fail(exc)
+
+
+@router.delete(
+    "/sites/{site_id}/assets/{asset_id}/assignment",
+    response_model=DriverAssetAssignmentResponse,
+)
+def unassign_asset_driver(
+    site_id: UUID,
+    asset_id: UUID,
+    service: DriverAssetAssignmentService = Depends(
+        get_supervisor_driver_assignment_service
+    ),
+) -> DriverAssetAssignmentResponse:
+    try:
+        service.ensure_asset_site(asset_id, site_id)
+        view = service.unassign(asset_id)
+        service.session.commit()
+        return _assignment_response(view)
+    except DomainError as exc:
+        service.session.rollback()
+        _fail(exc)
+
+
+@router.post(
+    "/sites/{site_id}/assets/{asset_id}/assignment/reassign",
+    response_model=DriverAssetAssignmentResponse,
+)
+def reassign_asset_driver(
+    site_id: UUID,
+    asset_id: UUID,
+    payload: DriverAssetAssignmentRequest,
+    service: DriverAssetAssignmentService = Depends(
+        get_supervisor_driver_assignment_service
+    ),
+) -> DriverAssetAssignmentResponse:
+    try:
+        service.ensure_asset_site(asset_id, site_id)
+        view = service.reassign(
+            asset_id,
+            payload.driver_membership_id,
+            regular_duty_minutes=payload.regular_duty_minutes,
+        )
+        service.session.commit()
+        return _assignment_response(view)
+    except DomainError as exc:
+        service.session.rollback()
         _fail(exc)
 
 

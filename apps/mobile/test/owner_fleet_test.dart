@@ -5,6 +5,90 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('assigns an eligible driver to a deployed asset', (tester) async {
+    final api = _AssignmentOwnerApi([_asset(4, deployed: true)]);
+    await _pumpFleet(tester, api);
+
+    await tester.tap(find.byKey(const Key('assign-driver-4')));
+    await tester.pumpAndSettle();
+    expect(find.text('ASSIGN DRIVER / OPERATOR · KA01AB0004'), findsOneWidget);
+    expect(find.byKey(const Key('assignment-site')), findsOneWidget);
+    expect(find.text('Pilot Site'), findsWidgets);
+    await tester.tap(find.byKey(const Key('confirm-driver-assignment')));
+    await tester.pumpAndSettle();
+
+    expect(api.assignedDriverIds, ['driver-available']);
+  });
+
+  testWidgets('changes and unassigns a Driver from an assigned asset', (
+    tester,
+  ) async {
+    final api = _AssignmentOwnerApi([_asset(1)]);
+    await _pumpFleet(tester, api);
+
+    await tester.tap(find.byKey(const Key('assign-driver-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('CHANGE DRIVER / OPERATOR · KA01AB0001'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-driver-assignment')));
+    await tester.pumpAndSettle();
+    expect(api.reassignFlags, [true]);
+
+    await tester.tap(find.byKey(const Key('assign-driver-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('unassign-driver')));
+    await tester.pumpAndSettle();
+    expect(api.unassignedAssetIds, ['1']);
+  });
+
+  testWidgets('assignment picker handles 30 available Drivers', (tester) async {
+    final api = _AssignmentOwnerApi([
+      _asset(4, deployed: true),
+    ], candidateCount: 30);
+    await _pumpFleet(tester, api);
+
+    await tester.tap(find.byKey(const Key('assign-driver-4')));
+    await tester.pumpAndSettle();
+    final dropdown = tester.widget<DropdownButton<String>>(
+      find.byType(DropdownButton<String>),
+    );
+    expect(dropdown.items, hasLength(30));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('assigned detail shows Driver Site and assignment start', (
+    tester,
+  ) async {
+    final api = _AssignmentOwnerApi([_asset(1)]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OwnerAssetDetailScreen(api: api, asset: api.assets.single),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('current-driver-assignment')),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Current Driver assignment'), findsOneWidget);
+    expect(find.text('Ramesh'), findsOneWidget);
+    expect(find.text('Pilot Site'), findsWidgets);
+    expect(find.text('2026-09-30'), findsOneWidget);
+    expect(find.byKey(const Key('asset-driver-action')), findsOneWidget);
+  });
+
+  testWidgets('machinery does not expose Driver assignment controls', (
+    tester,
+  ) async {
+    final api = _AssignmentOwnerApi([
+      _asset(4, deployed: true, assetType: 'EXCAVATOR'),
+    ]);
+    await _pumpFleet(tester, api);
+
+    expect(find.byKey(const Key('assign-driver-4')), findsNothing);
+  });
+
   testWidgets(
     'fleet list shows owned and rented cards with filters and search',
     (tester) async {
@@ -245,10 +329,11 @@ OwnerAsset _asset(
   String status = 'ACTIVE',
   String? rentalParty,
   bool? deployed,
+  String assetType = 'TIPPER',
 }) => OwnerAsset.fromJson({
   'id': '$index',
   'asset_code': 'TIPPER-$index',
-  'asset_type': 'TIPPER',
+  'asset_type': assetType,
   'ownership_type': ownership,
   'registration_number': 'KA01AB${index.toString().padLeft(4, '0')}',
   'short_name': 'Tipper $index',
@@ -276,6 +361,7 @@ OwnerAsset _asset(
           'site_name': 'Pilot Site',
           'driver_membership_id': 'driver-1',
           'driver_name': 'Ramesh',
+          'starts_at': '2026-09-30T08:00:00Z',
         }
       : null,
 });
@@ -432,6 +518,75 @@ class _FakeOwnerAssetApi implements OwnerAssetApi {
       });
 }
 
+class _AssignmentOwnerApi extends _FakeOwnerAssetApi
+    implements DriverAssignmentApi {
+  _AssignmentOwnerApi(super.assets, {this.candidateCount = 1});
+
+  final int candidateCount;
+  final List<String> assignedDriverIds = [];
+  final List<bool> reassignFlags = [];
+  final List<String> unassignedAssetIds = [];
+
+  @override
+  Future<List<DriverCandidate>> eligibleDrivers(
+    String assetId, {
+    String? supervisorSiteId,
+  }) async => [
+    for (var index = 1; index <= candidateCount; index++)
+      DriverCandidate(
+        membershipId: candidateCount == 1
+            ? 'driver-available'
+            : 'driver-$index',
+        displayName: candidateCount == 1 ? 'Available Driver' : 'Driver $index',
+      ),
+  ];
+
+  @override
+  Future<DriverAssetAssignment> assignDriver(
+    String assetId,
+    String driverMembershipId, {
+    String? supervisorSiteId,
+    bool reassign = false,
+  }) async {
+    assignedDriverIds.add(driverMembershipId);
+    reassignFlags.add(reassign);
+    return DriverAssetAssignment.fromJson({
+      'assignment_id': 'assignment-new',
+      'asset_id': assetId,
+      'asset_code': 'TIPPER-4',
+      'driver_membership_id': driverMembershipId,
+      'driver_name': 'Available Driver',
+      'asset_site_deployment_id': 'deployment-1',
+      'site_id': 'site-1',
+      'site_name': 'Pilot Site',
+      'starts_at': '2026-09-30T08:00:00Z',
+      'ends_at': null,
+      'regular_duty_minutes': 600,
+    });
+  }
+
+  @override
+  Future<DriverAssetAssignment> unassignDriver(
+    String assetId, {
+    String? supervisorSiteId,
+  }) async {
+    unassignedAssetIds.add(assetId);
+    return DriverAssetAssignment.fromJson({
+      'assignment_id': 'assignment-closed',
+      'asset_id': assetId,
+      'asset_code': 'TIPPER-$assetId',
+      'driver_membership_id': 'driver-1',
+      'driver_name': 'Ramesh',
+      'asset_site_deployment_id': 'deployment-$assetId',
+      'site_id': 'site-1',
+      'site_name': 'Pilot Site',
+      'starts_at': '2026-09-30T08:00:00Z',
+      'ends_at': '2026-09-30T09:00:00Z',
+      'regular_duty_minutes': 600,
+    });
+  }
+}
+
 OwnerManagedSite _site(String id, String name) => OwnerManagedSite.fromJson({
   'id': id,
   'name': name,
@@ -467,6 +622,7 @@ OwnerAsset _copyAsset(
           'site_name': asset.activeAssignment!.siteName,
           'driver_membership_id': asset.activeAssignment!.driverMembershipId,
           'driver_name': asset.activeAssignment!.driverName,
+          'starts_at': asset.activeAssignment!.startsAt?.toIso8601String(),
         },
 });
 

@@ -17,6 +17,7 @@ from fleet_api.db.models import (
     Assignment,
     CompanyMembership,
     DutySession,
+    FleetAsset,
     Site,
     SupervisorSiteAccess,
     User,
@@ -45,6 +46,10 @@ class PersonView:
     sites: list[PersonSite]
     has_active_assignment: bool
     has_active_duty: bool
+    current_asset_id: UUID | None
+    current_asset_code: str | None
+    current_site_id: UUID | None
+    current_site_name: str | None
 
 
 @dataclass(frozen=True)
@@ -144,23 +149,43 @@ class OwnerPeopleSiteService:
                 .order_by(Site.name, Site.id)
             ).scalars()
         ]
-        assignment_predicate = or_(
-            Assignment.driver_membership_id == membership.id,
-            Assignment.supervisor_membership_id == membership.id,
-        )
-        has_assignment = (
-            self.session.scalar(
-                select(Assignment.id)
+        current_asset_id: UUID | None = None
+        current_asset_code: str | None = None
+        current_site_id: UUID | None = None
+        current_site_name: str | None = None
+        has_assignment = False
+        if membership.role == MembershipRole.DRIVER:
+            current_assignment = self.session.execute(
+                select(Assignment, FleetAsset, Site)
+                .join(
+                    FleetAsset,
+                    and_(
+                        FleetAsset.company_id == Assignment.company_id,
+                        FleetAsset.id == Assignment.asset_id,
+                    ),
+                )
+                .join(
+                    Site,
+                    and_(
+                        Site.company_id == Assignment.company_id,
+                        Site.id == Assignment.site_id,
+                    ),
+                )
                 .where(
                     Assignment.company_id == self.company_id,
-                    assignment_predicate,
+                    Assignment.driver_membership_id == membership.id,
                     Assignment.starts_at <= now,
                     or_(Assignment.ends_at.is_(None), Assignment.ends_at > now),
                 )
                 .limit(1)
-            )
-            is not None
-        )
+            ).first()
+            if current_assignment is not None:
+                _assignment, asset, site = current_assignment._tuple()
+                has_assignment = True
+                current_asset_id = asset.id
+                current_asset_code = asset.asset_code
+                current_site_id = site.id
+                current_site_name = site.name
         has_duty = (
             self.session.scalar(
                 select(DutySession.id)
@@ -173,7 +198,17 @@ class OwnerPeopleSiteService:
             )
             is not None
         )
-        return PersonView(membership, user, sites, has_assignment, has_duty)
+        return PersonView(
+            membership,
+            user,
+            sites,
+            has_assignment,
+            has_duty,
+            current_asset_id,
+            current_asset_code,
+            current_site_id,
+            current_site_name,
+        )
 
     def list_people(self) -> list[PersonView]:
         rows = self.session.execute(

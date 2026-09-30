@@ -194,7 +194,8 @@ class _OwnerPeopleScreenState extends State<OwnerPeopleScreen> {
                 title: Text(person.displayName),
                 subtitle: Text(
                   '${person.role == 'DRIVER' ? 'Operator' : 'Supervisor'} · ${person.phone}\n'
-                  '${person.status}${person.sites.isEmpty ? '' : ' · ${person.sites.map((site) => site.name).join(', ')}'}',
+                  '${person.status}${person.sites.isEmpty ? '' : ' · ${person.sites.map((site) => site.name).join(', ')}'}'
+                  '${person.currentAssetCode == null ? '' : '\nCurrent: ${person.currentAssetCode} · ${person.currentSiteName ?? 'Site'}'}',
                 ),
                 isThreeLine: true,
                 onTap: () => _form(person),
@@ -311,6 +312,19 @@ class _PersonFormState extends State<_PersonForm> {
                 ? (value) => setState(() => _role = value!)
                 : null,
           ),
+          if (widget.person?.currentAssetCode != null) ...[
+            const SizedBox(height: 12),
+            InputDecorator(
+              key: const Key('person-current-assignment'),
+              decoration: const InputDecoration(labelText: 'Current Asset'),
+              child: Text(widget.person!.currentAssetCode!),
+            ),
+            const SizedBox(height: 12),
+            InputDecorator(
+              decoration: const InputDecoration(labelText: 'Site'),
+              child: Text(widget.person!.currentSiteName ?? 'Site'),
+            ),
+          ],
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 12),

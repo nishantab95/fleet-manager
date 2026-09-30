@@ -41,6 +41,7 @@ class ActiveAssetAssignment:
     site_name: str
     driver_membership_id: UUID
     driver_name: str
+    starts_at: datetime
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,7 @@ class OwnerAssetService:
                 site_name=assignment_site.name,
                 driver_membership_id=membership.id,
                 driver_name=membership.display_name or user.display_name,
+                starts_at=assignment.starts_at,
             )
         return OwnerAssetView(
             asset=asset,

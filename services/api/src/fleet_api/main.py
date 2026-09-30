@@ -13,6 +13,7 @@ from fleet_api.api.admin import router as admin_router
 from fleet_api.api.auth import router as auth_router
 from fleet_api.api.driver import router as driver_router
 from fleet_api.api.owner import router as owner_router
+from fleet_api.api.owner_assignments import router as owner_assignments_router
 from fleet_api.api.owner_deployments import router as owner_deployments_router
 from fleet_api.api.owner_people_sites import router as owner_people_sites_router
 from fleet_api.api.reports import router as reports_router
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_router)
     app.include_router(driver_router)
     app.include_router(owner_router)
+    app.include_router(owner_assignments_router)
     app.include_router(owner_people_sites_router)
     app.include_router(owner_deployments_router)
     app.include_router(supervisor_router)

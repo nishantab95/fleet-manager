@@ -24,6 +24,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.session import get_db as session_get_db
+from fleet_api.domain.assignments import create_assignment
 from fleet_api.main import create_app
 
 pytestmark = pytest.mark.postgres
@@ -112,7 +113,8 @@ def client_for(
 
 
 def add_assignment(db_session: Session, records: dict[str, object]) -> Assignment:
-    assignment = Assignment(
+    assignment = create_assignment(
+        db_session,
         company_id=value(records, "company_a", Company).id,
         driver_membership_id=value(records, "driver_a", CompanyMembership).id,
         supervisor_membership_id=value(records, "supervisor_a", CompanyMembership).id,
@@ -120,7 +122,6 @@ def add_assignment(db_session: Session, records: dict[str, object]) -> Assignmen
         site_id=value(records, "site_a", Site).id,
         starts_at=datetime.now(UTC) - timedelta(hours=1),
     )
-    db_session.add(assignment)
     db_session.add(
         SupervisorSiteAccess(
             company_id=assignment.company_id,

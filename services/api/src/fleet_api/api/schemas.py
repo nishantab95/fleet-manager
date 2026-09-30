@@ -180,6 +180,32 @@ class OwnerAssetAssignmentResponse(BaseModel):
     site_name: str
     driver_membership_id: UUID
     driver_name: str
+    starts_at: datetime
+
+
+class DriverAssetAssignmentRequest(BaseModel):
+    driver_membership_id: UUID
+    regular_duty_minutes: int | None = Field(default=None, ge=1, le=1440)
+
+
+class DriverCandidateResponse(BaseModel):
+    membership_id: UUID
+    display_name: str
+
+
+class DriverAssetAssignmentResponse(BaseModel):
+    assignment_id: UUID
+    asset_id: UUID
+    asset_code: str
+    registration_number: str | None
+    driver_membership_id: UUID
+    driver_name: str
+    asset_site_deployment_id: UUID
+    site_id: UUID
+    site_name: str
+    starts_at: datetime
+    ends_at: datetime | None
+    regular_duty_minutes: int
 
 
 class AssetSiteDeploymentResponse(BaseModel):
@@ -254,6 +280,10 @@ class OwnerPersonResponse(BaseModel):
     sites: list[OwnerPersonSiteResponse]
     has_active_assignment: bool
     has_active_duty: bool
+    current_asset_id: UUID | None
+    current_asset_code: str | None
+    current_site_id: UUID | None
+    current_site_name: str | None
 
 
 class OwnerSiteCreateRequest(BaseModel):
@@ -346,7 +376,7 @@ class AssignmentResponse(BaseModel):
     id: UUID
     driver_membership_id: UUID
     driver_name: str
-    supervisor_membership_id: UUID
+    supervisor_membership_id: UUID | None
     supervisor_name: str
     tipper_id: UUID
     registration_number: str
@@ -364,7 +394,8 @@ class DriverAssignmentResponse(BaseModel):
     tipper_short_name: str | None
     site_id: UUID
     site_name: str
-    supervisor_name: str
+    supervisor_name: str | None
+    supervisor_names: list[str] = Field(default_factory=list)
     regular_duty_minutes: int
 
 

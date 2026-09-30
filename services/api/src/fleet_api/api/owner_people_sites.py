@@ -57,6 +57,10 @@ def _person_response(view: PersonView) -> OwnerPersonResponse:
         ],
         has_active_assignment=view.has_active_assignment,
         has_active_duty=view.has_active_duty,
+        current_asset_id=view.current_asset_id,
+        current_asset_code=view.current_asset_code,
+        current_site_id=view.current_site_id,
+        current_site_name=view.current_site_name,
     )
 
 

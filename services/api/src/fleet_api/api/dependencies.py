@@ -20,6 +20,7 @@ from fleet_api.db.models import CompanyMembership
 from fleet_api.db.session import get_db
 from fleet_api.domain.admin import AdminService
 from fleet_api.domain.deployments import OwnerDeploymentService
+from fleet_api.domain.driver_assignments import DriverAssetAssignmentService
 from fleet_api.domain.enums import MembershipRole
 from fleet_api.domain.errors import (
     AuthConfigurationError,
@@ -139,6 +140,30 @@ def get_owner_deployment_service(
     context: Annotated[AuthContext, Depends(require_owner_admin)],
 ) -> OwnerDeploymentService:
     return OwnerDeploymentService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_owner_driver_assignment_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> DriverAssetAssignmentService:
+    return DriverAssetAssignmentService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_supervisor_driver_assignment_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_supervisor)],
+) -> DriverAssetAssignmentService:
+    return DriverAssetAssignmentService(
         db,
         context,
         request_id=request.headers.get("x-request-id"),

@@ -180,8 +180,10 @@ foreign keys to reject cross-tenant relationships.
 
 ## Effective-dated assignments
 
-An assignment is the source of operational ownership. It contains driver and
-supervisor memberships, fleet asset, site, and a half-open effective interval. The
+An assignment is the source of operational ownership. It contains the Driver
+membership, Fleet Asset, deployment reference, immutable Site snapshot, and a
+half-open effective interval. Supervisor authority comes from
+`SupervisorSiteAccess`; the nullable supervisor column is legacy history only. The
 database enables `btree_gist` and uses PostgreSQL GiST exclusion constraints
 over timestamp ranges to protect both driver and asset histories under
 concurrent writes. No `current_driver_id` is stored on `FleetAsset`.
@@ -348,3 +350,22 @@ views read the same relationship, so every active deployed asset is visible to
 an authorized Supervisor even when it has no Driver and no events. Event review
 and Driver reporting remain Assignment-based and retain their existing totals
 and behavior.
+
+## Phase 1B.2C Driver / Operator assignment boundary
+
+The existing `Assignment` aggregate owns the Driver/Operator-to-FleetAsset
+lifecycle; no second current-driver relationship exists. New rows reference the
+current `AssetSiteDeployment`, so Site is derived from physical placement and
+stored on Assignment only as a historical snapshot. Assign, unassign, and
+reassign preserve half-open history and are audited.
+
+Owners may manage any same-company deployed supported asset. Supervisors may
+manage only assets currently deployed to Sites granted through
+`SupervisorSiteAccess`; neither flow asks the user to choose a Site or a
+Supervisor. Active duty blocks changes. PostgreSQL driver and asset exclusion
+constraints remain the concurrency authority.
+
+Driver current-assignment responses expose every active Site supervisor. Owner
+People views expose a Driver's current asset and Site. Reports continue to join
+events through their historical Assignment and use a compatibility label for
+new rows that have no legacy supervisor value.

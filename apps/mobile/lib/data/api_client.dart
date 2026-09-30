@@ -67,6 +67,10 @@ abstract class DriverDutyLookup {
   Future<DriverDutyState> currentDuty();
 }
 
+abstract class DriverStateLookup implements DriverDutyLookup {
+  Future<DriverAssignment?> currentAssignment();
+}
+
 abstract class OwnerAssetApi {
   Future<List<OwnerAsset>> ownerAssets({
     String? status,
@@ -115,6 +119,23 @@ abstract class OwnerPeopleSiteApi {
   );
 }
 
+abstract class DriverAssignmentApi {
+  Future<List<DriverCandidate>> eligibleDrivers(
+    String assetId, {
+    String? supervisorSiteId,
+  });
+  Future<DriverAssetAssignment> assignDriver(
+    String assetId,
+    String driverMembershipId, {
+    String? supervisorSiteId,
+    bool reassign = false,
+  });
+  Future<DriverAssetAssignment> unassignDriver(
+    String assetId, {
+    String? supervisorSiteId,
+  });
+}
+
 class ApiException implements Exception {
   const ApiException(this.statusCode, this.message, {this.code, this.context});
 
@@ -141,9 +162,10 @@ class ApiException implements Exception {
 class ApiClient
     implements
         DriverRemoteApi,
-        DriverDutyLookup,
+        DriverStateLookup,
         OwnerAssetApi,
-        OwnerPeopleSiteApi {
+        OwnerPeopleSiteApi,
+        DriverAssignmentApi {
   ApiClient({
     String? baseUrl,
     http.Client? client,
@@ -284,6 +306,7 @@ class ApiClient
     await _request('GET', '/api/v1/auth/me', authenticated: true);
   }
 
+  @override
   Future<DriverAssignment?> currentAssignment() async {
     final response = await _request(
       'GET',
@@ -555,6 +578,57 @@ class ApiClient
       authenticated: true,
     );
     return _jsonList(response).map(SiteDeployedAsset.fromJson).toList();
+  }
+
+  @override
+  Future<List<DriverCandidate>> eligibleDrivers(
+    String assetId, {
+    String? supervisorSiteId,
+  }) async {
+    final prefix = supervisorSiteId == null
+        ? '/api/v1/owner/assets/$assetId'
+        : '/api/v1/supervisor/sites/$supervisorSiteId/assets/$assetId';
+    final response = await _request(
+      'GET',
+      '$prefix/eligible-drivers',
+      authenticated: true,
+    );
+    return _jsonList(response).map(DriverCandidate.fromJson).toList();
+  }
+
+  @override
+  Future<DriverAssetAssignment> assignDriver(
+    String assetId,
+    String driverMembershipId, {
+    String? supervisorSiteId,
+    bool reassign = false,
+  }) async {
+    final prefix = supervisorSiteId == null
+        ? '/api/v1/owner/assets/$assetId'
+        : '/api/v1/supervisor/sites/$supervisorSiteId/assets/$assetId';
+    final response = await _request(
+      'POST',
+      '$prefix/assignment${reassign ? '/reassign' : ''}',
+      authenticated: true,
+      body: {'driver_membership_id': driverMembershipId},
+    );
+    return DriverAssetAssignment.fromJson(_json(response));
+  }
+
+  @override
+  Future<DriverAssetAssignment> unassignDriver(
+    String assetId, {
+    String? supervisorSiteId,
+  }) async {
+    final prefix = supervisorSiteId == null
+        ? '/api/v1/owner/assets/$assetId'
+        : '/api/v1/supervisor/sites/$supervisorSiteId/assets/$assetId';
+    final response = await _request(
+      'DELETE',
+      '$prefix/assignment',
+      authenticated: true,
+    );
+    return DriverAssetAssignment.fromJson(_json(response));
   }
 
   @override

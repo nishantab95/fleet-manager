@@ -30,6 +30,7 @@ class SyncEngine {
   static const lastSyncHttpStatusKey = 'last_sync_http_status';
   static const lastSyncErrorCodeKey = 'last_sync_error_code';
   static const lastSyncFailureStageKey = 'last_sync_failure_stage';
+  static const currentAssignmentKey = 'current_driver_assignment';
   bool _syncInProgress = false;
 
   static String accountScope({
@@ -203,10 +204,29 @@ class SyncEngine {
     return session.startClientEventUuid;
   }
 
+  Future<void> cacheCurrentAssignment(DriverAssignment? assignment) {
+    return database.setAccountMetadata(
+      currentAssignmentKey,
+      assignment == null ? 'null' : jsonEncode(assignment.toJson()),
+    );
+  }
+
   Future<DriverAssignment?> localAssignment() async {
+    final cached = await database.accountMetadata(currentAssignmentKey);
+    if (cached == 'null') return null;
+    if (cached != null) {
+      try {
+        final decoded = jsonDecode(cached);
+        if (decoded is Map<String, dynamic>) {
+          return DriverAssignment.fromJson(decoded);
+        }
+      } on Object {
+        // Fall through to the one-time legacy snapshot migration below.
+      }
+    }
     final row = await database.latestLocalDutySession();
     if (row == null) return null;
-    return DriverAssignment(
+    final assignment = DriverAssignment(
       assignmentId: row.assignmentId,
       tipperId: row.tipperId,
       tipperRegistrationNumber: row.tipperRegistrationNumber,
@@ -214,6 +234,75 @@ class SyncEngine {
       siteId: row.siteId,
       siteName: row.siteName,
       supervisorName: row.supervisorName,
+    );
+    await cacheCurrentAssignment(assignment);
+    return assignment;
+  }
+
+  Future<DriverStateReconciliation> reconcileDriverState() async {
+    if (remote is! DriverStateLookup) {
+      throw StateError('Driver remote does not support assignment lookup.');
+    }
+    final lookup = remote as DriverStateLookup;
+    final local = await localAssignment();
+    try {
+      final server = await lookup.currentAssignment();
+      if (server == null) {
+        final protected = await _protectedLocalState(local);
+        if (protected != null) return protected;
+        await cacheCurrentAssignment(null);
+        return const DriverStateReconciliation(
+          assignment: null,
+          duty: DriverDutyState.none(),
+          authority: DriverAssignmentAuthority.serverNoAssignment,
+        );
+      }
+
+      if (local != null && local.assignmentId != server.assignmentId) {
+        final protected = await _protectedLocalState(local);
+        if (protected != null) return protected;
+      }
+
+      await cacheCurrentAssignment(server);
+      var duty = await lookup.currentDuty();
+      duty = await effectiveDuty(server.assignmentId, duty);
+      return DriverStateReconciliation(
+        assignment: server,
+        duty: duty,
+        authority: DriverAssignmentAuthority.serverAssignment,
+      );
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) rethrow;
+      final hasExplicitCache =
+          await database.accountMetadata(currentAssignmentKey) != null;
+      final fallback = await localAssignment();
+      if (fallback == null && !hasExplicitCache) rethrow;
+      final duty = fallback == null
+          ? const DriverDutyState.none()
+          : await localDutyState(fallback.assignmentId);
+      return DriverStateReconciliation(
+        assignment: fallback,
+        duty: duty,
+        authority: DriverAssignmentAuthority.offlineCache,
+        warning: 'Offline — showing the last server-confirmed assignment.',
+      );
+    }
+  }
+
+  Future<DriverStateReconciliation?> _protectedLocalState(
+    DriverAssignment? local,
+  ) async {
+    if (local == null) return null;
+    final duty = await localDutyState(local.assignmentId);
+    final pending = await pendingCount();
+    if (pending == 0 && !duty.isOperationallyActive) return null;
+    return DriverStateReconciliation(
+      assignment: local,
+      duty: duty,
+      authority: DriverAssignmentAuthority.protectedLocalWork,
+      warning:
+          'Assignment changed on the server while this phone still has active '
+          'or unsynced work. Sync or resolve the local work before switching assets.',
     );
   }
 

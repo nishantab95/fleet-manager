@@ -5,7 +5,7 @@ from datetime import datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, func, select
+from sqlalchemy import String, func, literal, select
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
@@ -493,6 +493,7 @@ class AdminService:
                         func.coalesce(
                             supervisor_membership.display_name,
                             supervisor_user.display_name,
+                            literal("Site supervisors"),
                         ),
                         String,
                     ),
@@ -504,11 +505,11 @@ class AdminService:
                     driver_membership.id == Assignment.driver_membership_id,
                 )
                 .join(driver_user, driver_user.id == driver_membership.user_id)
-                .join(
+                .outerjoin(
                     supervisor_membership,
                     supervisor_membership.id == Assignment.supervisor_membership_id,
                 )
-                .join(supervisor_user, supervisor_user.id == supervisor_membership.user_id)
+                .outerjoin(supervisor_user, supervisor_user.id == supervisor_membership.user_id)
                 .where(Assignment.company_id == self.company_id)
                 .order_by(Assignment.starts_at.desc(), Assignment.id)
             ).all()

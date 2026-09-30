@@ -7,7 +7,7 @@ from decimal import Decimal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, and_, func, select
+from sqlalchemy import String, and_, func, literal, select
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.orm import Session, aliased
 
@@ -336,7 +336,11 @@ class ReportingService:
                     String,
                 ),
                 sql_cast(
-                    func.coalesce(supervisor_membership.display_name, supervisor_user.display_name),
+                    func.coalesce(
+                        supervisor_membership.display_name,
+                        supervisor_user.display_name,
+                        literal("Site supervisors"),
+                    ),
                     String,
                 ),
             )
@@ -344,11 +348,11 @@ class ReportingService:
             .join(Site, Site.id == Assignment.site_id)
             .join(driver_membership, driver_membership.id == Assignment.driver_membership_id)
             .join(driver_user, driver_user.id == driver_membership.user_id)
-            .join(
+            .outerjoin(
                 supervisor_membership,
                 supervisor_membership.id == Assignment.supervisor_membership_id,
             )
-            .join(supervisor_user, supervisor_user.id == supervisor_membership.user_id)
+            .outerjoin(supervisor_user, supervisor_user.id == supervisor_membership.user_id)
             .where(
                 Assignment.company_id == self.company_id,
                 Assignment.starts_at < day.end_utc,
@@ -390,7 +394,11 @@ class ReportingService:
                 ),
                 driver_user.phone_number,
                 sql_cast(
-                    func.coalesce(supervisor_membership.display_name, supervisor_user.display_name),
+                    func.coalesce(
+                        supervisor_membership.display_name,
+                        supervisor_user.display_name,
+                        literal("Site supervisors"),
+                    ),
                     String,
                 ),
             )
@@ -399,11 +407,11 @@ class ReportingService:
             .join(Site, Site.id == Assignment.site_id)
             .join(driver_membership, driver_membership.id == Assignment.driver_membership_id)
             .join(driver_user, driver_user.id == driver_membership.user_id)
-            .join(
+            .outerjoin(
                 supervisor_membership,
                 supervisor_membership.id == Assignment.supervisor_membership_id,
             )
-            .join(supervisor_user, supervisor_user.id == supervisor_membership.user_id)
+            .outerjoin(supervisor_user, supervisor_user.id == supervisor_membership.user_id)
             .where(
                 OperationalEvent.company_id == self.company_id,
                 OperationalEvent.assignment_id.in_(assignment_ids),

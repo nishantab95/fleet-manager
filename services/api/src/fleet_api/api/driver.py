@@ -130,8 +130,11 @@ def current_assignment(
         site_id=current.site.id,
         site_name=current.site.name,
         supervisor_name=(
-            current.supervisor_membership.display_name or current.supervisor.display_name
+            current.supervisor_names[0]
+            if len(current.supervisor_names) == 1
+            else None
         ),
+        supervisor_names=current.supervisor_names,
         regular_duty_minutes=current.assignment.regular_duty_minutes,
     )
 

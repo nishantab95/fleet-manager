@@ -100,7 +100,7 @@ def create_assignment(
         raise DomainError("asset type does not support the current duty workflow")
     _require_owned_record(session, company_id=company_id, record_id=site_id, model=Site)
 
-    ensure_deployment_for_assignment(
+    deployment = ensure_deployment_for_assignment(
         session,
         company_id=company_id,
         asset_id=asset_id,
@@ -115,6 +115,7 @@ def create_assignment(
         supervisor_membership_id=supervisor_membership_id,
         asset_id=asset_id,
         site_id=site_id,
+        asset_site_deployment_id=deployment.id,
         starts_at=starts_at,
         ends_at=ends_at,
         regular_duty_minutes=regular_duty_minutes,

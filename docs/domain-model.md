@@ -19,7 +19,7 @@ without adding a new persistence boundary.
 | `Site` | Company-scoped work location with company-scoped name/code uniqueness. |
 | `FleetAsset` | Canonical company fleet record with type, ownership, stable asset code, optional road registration, status, and optional rental metadata. |
 | `SupervisorSiteAccess` | Explicit company-consistent supervisor-to-site grant. |
-| `Assignment` | Effective-dated driver, supervisor, fleet asset, and site relationship. |
+| `Assignment` | Effective-dated Driver/Operator-to-FleetAsset relationship linked to its deployment; Site is an immutable history snapshot. |
 | `Device` | Minimal installation identifier, platform, membership association, and active/revoked state. |
 | `OperationalEvent` | Common server event envelope and company-scoped client UUID idempotency boundary. |
 | `TripEvent` | Trip-complete payload attached to an operational event. |
@@ -47,9 +47,9 @@ erDiagram
     COMPANY_MEMBERSHIPS ||--o{ SUPERVISOR_SITE_ACCESS : grants
     SITES ||--o{ SUPERVISOR_SITE_ACCESS : permits
     COMPANY_MEMBERSHIPS ||--o{ ASSIGNMENTS : drives
-    COMPANY_MEMBERSHIPS ||--o{ ASSIGNMENTS : supervises
     SITES ||--o{ ASSIGNMENTS : serves
     FLEET_ASSETS ||--o{ ASSIGNMENTS : operates
+    ASSET_SITE_DEPLOYMENTS ||--o{ ASSIGNMENTS : anchors
     FLEET_ASSETS ||--o{ DUTY_SESSIONS : snapshots
     ASSIGNMENTS ||--o{ DUTY_SESSIONS : contains
     ASSIGNMENTS ||--o{ OPERATIONAL_EVENTS : records
@@ -199,6 +199,16 @@ append-only and requires an owner reason.
     deployment history without rewriting Assignment, duty, event, evidence, or
     reporting ownership. Driver capture and report aggregation remain based on
     their existing Assignment relationships.
+35. A current Driver/Operator assignment has `ends_at IS NULL`. Database
+    exclusion constraints permit at most one current assignment per Driver and
+    per Fleet Asset, including concurrent writes. Every assignment references
+    the exact `AssetSiteDeployment` whose company, asset, and Site match.
+36. New assignments do not select or own a Supervisor. Supervisor authority is
+    derived from current `SupervisorSiteAccess`; the nullable legacy supervisor
+    column is retained only to read preserved history.
+37. Reassignment closes the prior half-open interval and inserts a new row.
+    Active duty blocks unassign/reassign, while events before the old end remain
+    valid and events at or after it cannot attach to that history.
 
 ## PC V1 emergency contract
 
