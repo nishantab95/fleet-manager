@@ -703,5 +703,40 @@ class DriverDutyReportResponse(BaseModel):
     status: Literal["ACTIVE", "CLOSED"]
 
 
+class ReportTemplateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    is_builtin: bool
+    is_default: bool
+    included_sheets: list[str]
+    management_dashboard_columns: list[str]
+    tipper_daily_columns: list[str]
+    machinery_daily_columns: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportTemplateCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    included_sheets: list[str] = Field(min_length=1, max_length=8)
+    management_dashboard_columns: list[str] = Field(min_length=1)
+    tipper_daily_columns: list[str] = Field(min_length=1)
+    machinery_daily_columns: list[str] = Field(min_length=1)
+
+
+class ReportTemplateUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    included_sheets: list[str] | None = Field(default=None, min_length=1, max_length=8)
+    management_dashboard_columns: list[str] | None = Field(default=None, min_length=1)
+    tipper_daily_columns: list[str] | None = Field(default=None, min_length=1)
+    machinery_daily_columns: list[str] | None = Field(default=None, min_length=1)
+
+
+class ReportTemplateDuplicateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
 class ClosureActionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)

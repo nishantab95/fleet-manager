@@ -839,6 +839,119 @@ class OwnerSiteInput {
   };
 }
 
+const reportSheetLabels = <String, String>{
+  'management_dashboard': 'Management Dashboard',
+  'tipper_daily': 'Tipper Daily',
+  'machinery_daily': 'Machinery Daily',
+  'trip_register': 'Trip Register',
+  'meter_readings': 'Meter Readings',
+  'diesel_register': 'Diesel Register',
+  'duty_register': 'Duty Register',
+  'exceptions': 'Exceptions',
+};
+
+const managementReportColumnLabels = <String, String>{
+  'asset': 'Asset',
+  'asset_type': 'Type',
+  'site': 'Site',
+  'operator': 'Driver / Operator',
+  'assignment_status': 'Assignment Status',
+  'duty_status': 'Duty Status',
+  'trips': 'Trips',
+  'distance_km': 'Distance KM',
+  'machine_hours': 'Machine Hours',
+  'verified_diesel_l': 'Verified Diesel L',
+  'pending_status': 'Pending / Status',
+};
+
+const tipperReportColumnLabels = <String, String>{
+  'asset': 'Asset',
+  'site': 'Site',
+  'registration': 'Registration',
+  'driver': 'Driver',
+  'start_km': 'Start KM',
+  'end_km': 'End KM',
+  'distance_km': 'Distance KM',
+  'approved_trips': 'Approved Trips',
+  'diesel_l': 'Diesel L',
+  'duty_start': 'Duty Start',
+  'duty_end': 'Duty End',
+  'pending': 'Pending',
+  'status': 'Status',
+};
+
+const machineryReportColumnLabels = <String, String>{
+  'asset': 'Asset',
+  'asset_type': 'Asset Type',
+  'site': 'Site',
+  'operator': 'Operator',
+  'start_hmr': 'Start HMR',
+  'end_hmr': 'End HMR',
+  'machine_hours': 'Machine Hours',
+  'diesel_l': 'Diesel L',
+  'duty_start': 'Duty Start',
+  'duty_end': 'Duty End',
+  'pending': 'Pending',
+  'status': 'Status',
+};
+
+class ReportTemplate {
+  const ReportTemplate({
+    required this.id,
+    required this.name,
+    required this.isBuiltin,
+    required this.isDefault,
+    required this.includedSheets,
+    required this.managementDashboardColumns,
+    required this.tipperDailyColumns,
+    required this.machineryDailyColumns,
+  });
+
+  final String id;
+  final String name;
+  final bool isBuiltin;
+  final bool isDefault;
+  final List<String> includedSheets;
+  final List<String> managementDashboardColumns;
+  final List<String> tipperDailyColumns;
+  final List<String> machineryDailyColumns;
+
+  factory ReportTemplate.fromJson(Map<String, dynamic> json) => ReportTemplate(
+    id: '${json['id']}',
+    name: '${json['name']}',
+    isBuiltin: json['is_builtin'] == true,
+    isDefault: json['is_default'] == true,
+    includedSheets: _strings(json['included_sheets']),
+    managementDashboardColumns: _strings(json['management_dashboard_columns']),
+    tipperDailyColumns: _strings(json['tipper_daily_columns']),
+    machineryDailyColumns: _strings(json['machinery_daily_columns']),
+  );
+}
+
+class ReportTemplateInput {
+  const ReportTemplateInput({
+    required this.name,
+    required this.includedSheets,
+    required this.managementDashboardColumns,
+    required this.tipperDailyColumns,
+    required this.machineryDailyColumns,
+  });
+
+  final String name;
+  final List<String> includedSheets;
+  final List<String> managementDashboardColumns;
+  final List<String> tipperDailyColumns;
+  final List<String> machineryDailyColumns;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'included_sheets': includedSheets,
+    'management_dashboard_columns': managementDashboardColumns,
+    'tipper_daily_columns': tipperDailyColumns,
+    'machinery_daily_columns': machineryDailyColumns,
+  };
+}
+
 DateTime? _date(Object? value) =>
     value is String ? DateTime.tryParse(value) : null;
 double? _number(Object? value) => switch (value) {
@@ -852,6 +965,9 @@ int _int(Object? value) => switch (value) {
   String v => int.tryParse(v) ?? 0,
   _ => 0,
 };
+
+List<String> _strings(Object? value) =>
+    (value as List<dynamic>? ?? const []).map((item) => '$item').toList();
 
 String? _wireDate(DateTime? value) => value?.toIso8601String().substring(0, 10);
 

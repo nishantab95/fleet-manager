@@ -924,12 +924,17 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
             onUnauthorized: widget.onSignOut,
           ),
           _OwnerAlertsBody(alerts: _alerts, onEvidence: _showEvidence),
-          _OwnerReportsBody(
-            date: _date,
-            duties: _duties,
-            onPickDate: _pickDate,
-            onExport: _export,
-          ),
+          if (_tab == 6)
+            _OwnerReportsBody(
+              api: widget.api,
+              date: _date,
+              duties: _duties,
+              onPickDate: _pickDate,
+              onExport: _export,
+              onUnauthorized: widget.onSignOut,
+            )
+          else
+            const SizedBox.shrink(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -982,12 +987,19 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
     );
   }
 
-  Future<void> _export() async {
+  Future<void> _export(ReportTemplate template) async {
     try {
-      final bytes = await widget.api.dailyExcel(date: _date);
+      final bytes = await widget.api.dailyExcel(
+        date: _date,
+        templateId: template.id,
+      );
       final directory = await getTemporaryDirectory();
+      final templateSegment = template.name
+          .trim()
+          .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '-')
+          .replaceAll(RegExp(r'^-+|-+$'), '');
       final path =
-          '${directory.path}${Platform.pathSeparator}fleet-report-${_date.toIso8601String().substring(0, 10)}.xlsx';
+          '${directory.path}${Platform.pathSeparator}FleetManager-${_date.toIso8601String().substring(0, 10)}-$templateSegment.xlsx';
       await File(path).writeAsBytes(bytes, flush: true);
       final file = XFile(
         path,
@@ -1205,17 +1217,153 @@ class _OwnerAlertsBody extends StatelessWidget {
   );
 }
 
-class _OwnerReportsBody extends StatelessWidget {
+class _OwnerReportsBody extends StatefulWidget {
   const _OwnerReportsBody({
+    required this.api,
     required this.date,
     required this.duties,
     required this.onPickDate,
     required this.onExport,
+    required this.onUnauthorized,
   });
+  final ApiClient api;
   final DateTime date;
   final List<OwnerDutyReport> duties;
   final Future<void> Function() onPickDate;
-  final Future<void> Function() onExport;
+  final Future<void> Function(ReportTemplate template) onExport;
+  final SignOut onUnauthorized;
+
+  @override
+  State<_OwnerReportsBody> createState() => _OwnerReportsBodyState();
+}
+
+class _OwnerReportsBodyState extends State<_OwnerReportsBody> {
+  List<ReportTemplate> _templates = const [];
+  String? _selectedTemplateId;
+  bool _loading = true;
+  String? _error;
+
+  ReportTemplate? get _selectedTemplate {
+    for (final template in _templates) {
+      if (template.id == _selectedTemplateId) return template;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTemplates();
+  }
+
+  Future<void> _loadTemplates() async {
+    if (mounted) setState(() => _loading = true);
+    try {
+      final templates = await widget.api.reportTemplates();
+      if (!mounted) return;
+      final retained = templates.any((item) => item.id == _selectedTemplateId)
+          ? _selectedTemplateId
+          : null;
+      setState(() {
+        _templates = templates;
+        _selectedTemplateId = retained ?? _preferredTemplateId(templates);
+        _error = null;
+      });
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) {
+        await widget.onUnauthorized();
+        return;
+      }
+      if (mounted) setState(() => _error = _friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _mutate(Future<void> Function() action) async {
+    try {
+      await action();
+      await _loadTemplates();
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) {
+        await widget.onUnauthorized();
+        return;
+      }
+      if (mounted) setState(() => _error = _friendlyError(error));
+    }
+  }
+
+  Future<void> _createOrEdit([ReportTemplate? existing]) async {
+    final seed = existing ?? _selectedTemplate;
+    if (seed == null) return;
+    final input = await _showReportTemplateDialog(
+      context,
+      existing: existing,
+      seed: seed,
+    );
+    if (input == null) return;
+    await _mutate(() async {
+      final saved = existing == null
+          ? await widget.api.createReportTemplate(input)
+          : await widget.api.updateReportTemplate(existing.id, input);
+      _selectedTemplateId = saved.id;
+    });
+  }
+
+  Future<void> _duplicate(ReportTemplate template) async {
+    final name = await _showTemplateNameDialog(
+      context,
+      title: 'Duplicate template',
+      initialName: '${template.name} Copy',
+    );
+    if (name == null) return;
+    await _mutate(() async {
+      final saved = await widget.api.duplicateReportTemplate(template.id, name);
+      _selectedTemplateId = saved.id;
+    });
+  }
+
+  Future<void> _delete(ReportTemplate template) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete report template?'),
+        content: Text('${template.name} will be permanently removed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('CANCEL'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('DELETE'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _mutate(() => widget.api.deleteReportTemplate(template.id));
+  }
+
+  Future<void> _templateAction(ReportTemplate template, String action) async {
+    switch (action) {
+      case 'edit':
+        await _createOrEdit(template);
+        return;
+      case 'duplicate':
+        await _duplicate(template);
+        return;
+      case 'default':
+        await _mutate(() async {
+          await widget.api.setDefaultReportTemplate(template.id);
+          _selectedTemplateId = template.id;
+        });
+        return;
+      case 'delete':
+        await _delete(template);
+        return;
+    }
+  }
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -1225,33 +1373,311 @@ class _OwnerReportsBody extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              'Reports · ${date.toIso8601String().substring(0, 10)}',
+              'Reports · ${widget.date.toIso8601String().substring(0, 10)}',
               style: Theme.of(context).textTheme.titleLarge,
             ),
           ),
           IconButton(
-            onPressed: onPickDate,
+            onPressed: widget.onPickDate,
             icon: const Icon(Icons.calendar_today_outlined),
           ),
         ],
       ),
+      if (_error != null) ...[
+        _ErrorBanner(message: _error!, onRetry: _loadTemplates),
+        const SizedBox(height: 8),
+      ],
+      if (_loading)
+        const LinearProgressIndicator()
+      else if (_templates.isNotEmpty)
+        DropdownButtonFormField<String>(
+          key: const Key('report-template-selector'),
+          initialValue: _selectedTemplateId,
+          decoration: const InputDecoration(
+            labelText: 'Report template',
+            border: OutlineInputBorder(),
+          ),
+          items: [
+            for (final template in _templates)
+              DropdownMenuItem(
+                value: template.id,
+                child: Text(
+                  '${template.name}${template.isDefault ? ' · DEFAULT' : ''}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: (value) => setState(() => _selectedTemplateId = value),
+        ),
+      const SizedBox(height: 10),
       FilledButton.icon(
-        onPressed: onExport,
+        key: const Key('export-template-excel'),
+        onPressed: _selectedTemplate == null
+            ? null
+            : () => widget.onExport(_selectedTemplate!),
         icon: const Icon(Icons.ios_share_outlined),
-        label: const Text('DOWNLOAD / SHARE EXCEL'),
+        label: const Text('EXPORT EXCEL'),
       ),
+      const SizedBox(height: 20),
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              'REPORT TEMPLATES',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+          ),
+          FilledButton.tonalIcon(
+            key: const Key('new-report-template'),
+            onPressed: _templates.isEmpty ? null : _createOrEdit,
+            icon: const Icon(Icons.add),
+            label: const Text('NEW'),
+          ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      for (final template in _templates)
+        Card(
+          key: Key('report-template-${template.id}'),
+          child: ListTile(
+            leading: Icon(template.isBuiltin ? Icons.lock_outline : Icons.tune),
+            title: Text(template.name),
+            subtitle: Text(
+              '${template.isBuiltin ? 'Built-in' : 'Custom'} · '
+              '${template.includedSheets.length} sheets'
+              '${template.isDefault ? ' · Default' : ''}',
+            ),
+            trailing: PopupMenuButton<String>(
+              onSelected: (action) => _templateAction(template, action),
+              itemBuilder: (context) => [
+                if (!template.isBuiltin)
+                  const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                const PopupMenuItem(
+                  value: 'duplicate',
+                  child: Text('Duplicate'),
+                ),
+                if (!template.isDefault)
+                  const PopupMenuItem(
+                    value: 'default',
+                    child: Text('Set as default'),
+                  ),
+                if (!template.isBuiltin)
+                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+              ],
+            ),
+          ),
+        ),
       const SizedBox(height: 20),
       Text(
         'DRIVER DUTY / OVERTIME',
         style: Theme.of(context).textTheme.titleLarge,
       ),
       const SizedBox(height: 8),
-      if (duties.isEmpty)
+      if (widget.duties.isEmpty)
         const _EmptyCard(
           icon: Icons.schedule_outlined,
           text: 'No duty sessions for this day.',
         ),
-      for (final duty in duties) _DutyCard(duty: duty),
+      for (final duty in widget.duties) _DutyCard(duty: duty),
+    ],
+  );
+}
+
+String? _preferredTemplateId(List<ReportTemplate> templates) {
+  for (final template in templates) {
+    if (template.isDefault) return template.id;
+  }
+  return templates.isEmpty ? null : templates.first.id;
+}
+
+Future<String?> _showTemplateNameDialog(
+  BuildContext context, {
+  required String title,
+  required String initialName,
+}) async {
+  var name = initialName;
+  return showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      content: TextFormField(
+        key: const Key('report-template-name'),
+        initialValue: initialName,
+        autofocus: true,
+        onChanged: (value) => name = value,
+        decoration: const InputDecoration(labelText: 'Template name'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('CANCEL'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final trimmed = name.trim();
+            if (trimmed.isNotEmpty) Navigator.pop(context, trimmed);
+          },
+          child: const Text('SAVE'),
+        ),
+      ],
+    ),
+  );
+}
+
+Future<ReportTemplateInput?> _showReportTemplateDialog(
+  BuildContext context, {
+  required ReportTemplate? existing,
+  required ReportTemplate seed,
+}) async {
+  var name = existing?.name ?? '';
+  final sheets = {...seed.includedSheets};
+  final management = {...seed.managementDashboardColumns, 'asset'};
+  final tipper = {...seed.tipperDailyColumns, 'asset'};
+  final machinery = {...seed.machineryDailyColumns, 'asset'};
+  String? validation;
+  return showDialog<ReportTemplateInput>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: Text(existing == null ? 'New report template' : 'Edit template'),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  key: const Key('report-template-editor-name'),
+                  initialValue: name,
+                  onChanged: (value) => name = value,
+                  decoration: const InputDecoration(labelText: 'Template name'),
+                ),
+                const SizedBox(height: 16),
+                Text('SHEETS', style: Theme.of(context).textTheme.titleMedium),
+                for (final entry in reportSheetLabels.entries)
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(entry.value),
+                    value: sheets.contains(entry.key),
+                    onChanged: (checked) => setDialogState(() {
+                      checked == true
+                          ? sheets.add(entry.key)
+                          : sheets.remove(entry.key);
+                    }),
+                  ),
+                _ReportColumnSelector(
+                  title: 'MANAGEMENT DASHBOARD COLUMNS',
+                  labels: managementReportColumnLabels,
+                  selected: management,
+                  onChanged: () => setDialogState(() {}),
+                ),
+                _ReportColumnSelector(
+                  title: 'TIPPER DAILY COLUMNS',
+                  labels: tipperReportColumnLabels,
+                  selected: tipper,
+                  onChanged: () => setDialogState(() {}),
+                ),
+                _ReportColumnSelector(
+                  title: 'MACHINERY DAILY COLUMNS',
+                  labels: machineryReportColumnLabels,
+                  selected: machinery,
+                  onChanged: () => setDialogState(() {}),
+                ),
+                if (validation != null)
+                  Text(
+                    validation!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('CANCEL'),
+          ),
+          FilledButton(
+            key: const Key('save-report-template'),
+            onPressed: () {
+              final trimmedName = name.trim();
+              if (trimmedName.isEmpty || sheets.isEmpty) {
+                setDialogState(() {
+                  validation = trimmedName.isEmpty
+                      ? 'Enter a template name.'
+                      : 'Select at least one sheet.';
+                });
+                return;
+              }
+              Navigator.pop(
+                context,
+                ReportTemplateInput(
+                  name: trimmedName,
+                  includedSheets: [
+                    for (final id in reportSheetLabels.keys)
+                      if (sheets.contains(id)) id,
+                  ],
+                  managementDashboardColumns: [
+                    for (final id in managementReportColumnLabels.keys)
+                      if (management.contains(id)) id,
+                  ],
+                  tipperDailyColumns: [
+                    for (final id in tipperReportColumnLabels.keys)
+                      if (tipper.contains(id)) id,
+                  ],
+                  machineryDailyColumns: [
+                    for (final id in machineryReportColumnLabels.keys)
+                      if (machinery.contains(id)) id,
+                  ],
+                ),
+              );
+            },
+            child: const Text('SAVE'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ReportColumnSelector extends StatelessWidget {
+  const _ReportColumnSelector({
+    required this.title,
+    required this.labels,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String title;
+  final Map<String, String> labels;
+  final Set<String> selected;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) => ExpansionTile(
+    tilePadding: EdgeInsets.zero,
+    title: Text(title, style: Theme.of(context).textTheme.titleSmall),
+    children: [
+      for (final entry in labels.entries)
+        CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: Text(entry.value),
+          subtitle: entry.key == 'asset' ? const Text('Required') : null,
+          value: selected.contains(entry.key),
+          onChanged: entry.key == 'asset'
+              ? null
+              : (checked) {
+                  checked == true
+                      ? selected.add(entry.key)
+                      : selected.remove(entry.key);
+                  onChanged();
+                },
+        ),
     ],
   );
 }

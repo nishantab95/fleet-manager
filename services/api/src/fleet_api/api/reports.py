@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -54,6 +55,22 @@ from fleet_api.domain.errors import (
     ObjectStorageUnavailableError,
     RoleViolationError,
     TenantConsistencyError,
+)
+from fleet_api.domain.report_templates import (
+    DIESEL_REGISTER,
+    DUTY_REGISTER,
+    EXCEPTIONS,
+    MACHINERY_DAILY,
+    MANAGEMENT_DASHBOARD,
+    METER_READINGS,
+    SHEET_IDS,
+    STANDARD_MACHINERY_COLUMNS,
+    STANDARD_MANAGEMENT_COLUMNS,
+    STANDARD_TIPPER_COLUMNS,
+    TIPPER_DAILY,
+    TRIP_REGISTER,
+    ReportTemplateConfig,
+    ReportTemplateService,
 )
 from fleet_api.domain.reporting import (
     AssetDailyReport,
@@ -535,6 +552,86 @@ class _ExcelFormula:
     value: str
 
 
+@dataclass(frozen=True)
+class _SummaryColumn:
+    field_id: str
+    label: str
+    value_index: int
+
+
+MANAGEMENT_COLUMN_REGISTRY = (
+    _SummaryColumn("asset", "Asset", 0),
+    _SummaryColumn("asset_type", "Type", 1),
+    _SummaryColumn("site", "Site", 2),
+    _SummaryColumn("operator", "Driver / Operator", 3),
+    _SummaryColumn("assignment_status", "Assignment Status", 4),
+    _SummaryColumn("duty_status", "Duty Status", 5),
+    _SummaryColumn("trips", "Trips", 6),
+    _SummaryColumn("distance_km", "Distance KM", 7),
+    _SummaryColumn("machine_hours", "Machine Hours", 8),
+    _SummaryColumn("verified_diesel_l", "Verified Diesel L", 9),
+    _SummaryColumn("pending_status", "Pending / Status", 10),
+)
+TIPPER_COLUMN_REGISTRY = (
+    _SummaryColumn("asset", "Asset", 2),
+    _SummaryColumn("site", "Site", 1),
+    _SummaryColumn("registration", "Registration", 3),
+    _SummaryColumn("driver", "Driver", 4),
+    _SummaryColumn("start_km", "Start KM", 6),
+    _SummaryColumn("end_km", "End KM", 7),
+    _SummaryColumn("distance_km", "Distance KM", 8),
+    _SummaryColumn("approved_trips", "Approved Trips", 9),
+    _SummaryColumn("diesel_l", "Diesel L", 10),
+    _SummaryColumn("duty_start", "Duty Start", 11),
+    _SummaryColumn("duty_end", "Duty End", 12),
+    _SummaryColumn("pending", "Pending", 13),
+    _SummaryColumn("status", "Status", 14),
+)
+MACHINERY_COLUMN_REGISTRY = (
+    _SummaryColumn("asset", "Asset", 2),
+    _SummaryColumn("asset_type", "Asset Type", 3),
+    _SummaryColumn("site", "Site", 1),
+    _SummaryColumn("operator", "Operator", 4),
+    _SummaryColumn("start_hmr", "Start HMR", 6),
+    _SummaryColumn("end_hmr", "End HMR", 7),
+    _SummaryColumn("machine_hours", "Machine Hours", 8),
+    _SummaryColumn("diesel_l", "Diesel L", 9),
+    _SummaryColumn("duty_start", "Duty Start", 10),
+    _SummaryColumn("duty_end", "Duty End", 11),
+    _SummaryColumn("pending", "Pending", 12),
+    _SummaryColumn("status", "Status", 13),
+)
+
+
+def _select_summary_columns(
+    registry: tuple[_SummaryColumn, ...],
+    selected_ids: tuple[str, ...],
+    rows: list[list[object]],
+) -> tuple[list[str], list[list[object]]]:
+    selected = set(selected_ids)
+    columns = [column for column in registry if column.field_id in selected]
+    return (
+        [column.label for column in columns],
+        [[row[column.value_index] for column in columns] for row in rows],
+    )
+
+
+def _detailed_template_config() -> ReportTemplateConfig:
+    return ReportTemplateConfig(
+        id=UUID(int=0),
+        name="Detailed Operations",
+        included_sheets=SHEET_IDS,
+        management_dashboard_columns=STANDARD_MANAGEMENT_COLUMNS,
+        tipper_daily_columns=STANDARD_TIPPER_COLUMNS,
+        machinery_daily_columns=STANDARD_MACHINERY_COLUMNS,
+    )
+
+
+def _template_filename_segment(name: str) -> str:
+    segment = "-".join(part for part in re.split(r"[^A-Za-z0-9]+", name) if part)
+    return segment or "Report"
+
+
 def _evidence_formula(base_url: str, event_id: UUID) -> _ExcelFormula:
     url = _evidence_application_url(base_url, event_id)
     return _ExcelFormula(f'=HYPERLINK("{url}","Open Evidence")')
@@ -673,24 +770,14 @@ def _build_workbook(
     *,
     web_public_base_url: str,
     duty_reports: list[DriverDutyReportResponse] | None = None,
+    template: ReportTemplateConfig | None = None,
 ) -> bytes:
     workbook = Workbook()
     workbook.remove(workbook.active)
+    selected_template = template or _detailed_template_config()
+    included_sheets = set(selected_template.included_sheets)
     timezone_name = report.operational_day.reporting_timezone
     reporting_zone = ZoneInfo(timezone_name)
-    management_headers = [
-        "Asset",
-        "Type",
-        "Site",
-        "Driver / Operator",
-        "Assignment Status",
-        "Duty Status",
-        "Trips",
-        "Distance KM",
-        "Machine Hours",
-        "Verified Diesel L",
-        "Pending / Status",
-    ]
     management_rows: list[list[object]] = []
     tipper_rows: list[list[object]] = []
     machinery_rows: list[list[object]] = []
@@ -699,9 +786,7 @@ def _build_workbook(
     diesel_rows: list[list[object]] = []
     exception_rows: list[list[object]] = []
     duty_rows: list[list[object]] = []
-    duty_by_assignment = {
-        duty.assignment_id: duty for duty in (duty_reports or [])
-    }
+    duty_by_assignment = {duty.assignment_id: duty for duty in (duty_reports or [])}
     for site in report.sites:
         for row in site.rows:
             assignment_status = _assignment_status(row.assignment)
@@ -912,98 +997,153 @@ def _build_workbook(
                 duty.status,
             ]
         )
-    dashboard = workbook.create_sheet("Management Dashboard")
-    dashboard.append([])
-    dashboard.append([])
-    dashboard.append([])
-    dashboard.append(management_headers)
-    for row_values in management_rows:
-        _append_excel_row(dashboard, row_values)
-    dashboard["C2"] = "Operational Date"
-    dashboard["D2"] = report.operational_day.operational_date
-    _format_report_sheet(
-        dashboard,
-        title="Management Dashboard",
-        timezone_name=timezone_name,
-    )
-    _add_report_sheet(
-        workbook,
-        title="Tipper Daily",
-        timezone_name=timezone_name,
-        headers=[
-            "Date", "Site", "Asset", "Registration", "Driver", "Assignment Status",
-            "Start KM", "End KM", "Distance KM", "Approved Trips", "Verified Diesel L",
-            "Duty Start", "Duty End", "Pending", "Status",
-        ],
-        rows=tipper_rows,
-    )
-    _add_report_sheet(
-        workbook,
-        title="Machinery Daily",
-        timezone_name=timezone_name,
-        headers=[
-            "Date", "Site", "Asset", "Asset Type", "Operator", "Assignment Status",
-            "Start HMR", "End HMR", "Machine Hours", "Verified Diesel L", "Duty Start",
-            "Duty End", "Pending", "Status",
-        ],
-        rows=machinery_rows,
-    )
-    _add_report_sheet(
-        workbook,
-        title="Trip Register",
-        timezone_name=timezone_name,
-        headers=[
-            "Date", "Site", "Asset", "Driver", "Assignment Status", "Trip Event Time",
-            "Verification", "Verified By", "Verified At", "Previous Approved Trip Time",
-            "Interval Since Previous Approved Trip",
-        ],
-        rows=trip_rows,
-    )
-    _add_report_sheet(
-        workbook,
-        title="Meter Readings",
-        timezone_name=timezone_name,
-        headers=[
-            "Date/Time", "Site", "Asset", "Asset Type", "Driver / Operator",
-            "Assignment Status", "Meter Type", "Reading Type", "Value", "Unit",
-            "Verification", "Evidence",
-        ],
-        rows=meter_rows,
-    )
-    _add_report_sheet(
-        workbook,
-        title="Diesel Register",
-        timezone_name=timezone_name,
-        headers=[
-            "Date/Time", "Site", "Asset", "Type", "Driver / Operator", "Assignment Status",
-            "Diesel L", "Verification", "Evidence",
-        ],
-        rows=diesel_rows,
-    )
-    _add_report_sheet(
-        workbook,
-        title="Duty Register",
-        timezone_name=timezone_name,
-        headers=[
-            "Date", "Site", "Asset", "Type", "Driver / Operator", "Assignment Status",
-            "Duty Start", "Duty End", "Duration", "Meter Start", "Meter End", "Meter Unit",
-            "Usage", "Status",
-        ],
-        rows=duty_rows,
-    )
-    exceptions_sheet = _add_report_sheet(
-        workbook,
-        title="Exceptions",
-        timezone_name=timezone_name,
-        headers=[
-            "Date", "Site", "Asset", "Type", "Assignment Status", "Exception Type",
-            "Description", "Status",
-        ],
-        rows=exception_rows,
-    )
-    exceptions_sheet.column_dimensions["G"].width = 48
-    for cell in exceptions_sheet["G"]:
-        cell.alignment = Alignment(vertical="top", wrap_text=True)
+    if MANAGEMENT_DASHBOARD in included_sheets:
+        management_headers, selected_management_rows = _select_summary_columns(
+            MANAGEMENT_COLUMN_REGISTRY,
+            selected_template.management_dashboard_columns,
+            management_rows,
+        )
+        dashboard = _add_report_sheet(
+            workbook,
+            title="Management Dashboard",
+            timezone_name=timezone_name,
+            headers=management_headers,
+            rows=selected_management_rows,
+        )
+        dashboard["C2"] = "Operational Date"
+        dashboard["D2"] = report.operational_day.operational_date
+        dashboard["D2"].number_format = "yyyy-mm-dd"
+    if TIPPER_DAILY in included_sheets:
+        tipper_headers, selected_tipper_rows = _select_summary_columns(
+            TIPPER_COLUMN_REGISTRY,
+            selected_template.tipper_daily_columns,
+            tipper_rows,
+        )
+        _add_report_sheet(
+            workbook,
+            title="Tipper Daily",
+            timezone_name=timezone_name,
+            headers=tipper_headers,
+            rows=selected_tipper_rows,
+        )
+    if MACHINERY_DAILY in included_sheets:
+        machinery_headers, selected_machinery_rows = _select_summary_columns(
+            MACHINERY_COLUMN_REGISTRY,
+            selected_template.machinery_daily_columns,
+            machinery_rows,
+        )
+        _add_report_sheet(
+            workbook,
+            title="Machinery Daily",
+            timezone_name=timezone_name,
+            headers=machinery_headers,
+            rows=selected_machinery_rows,
+        )
+    if TRIP_REGISTER in included_sheets:
+        _add_report_sheet(
+            workbook,
+            title="Trip Register",
+            timezone_name=timezone_name,
+            headers=[
+                "Date",
+                "Site",
+                "Asset",
+                "Driver",
+                "Assignment Status",
+                "Trip Event Time",
+                "Verification",
+                "Verified By",
+                "Verified At",
+                "Previous Approved Trip Time",
+                "Interval Since Previous Approved Trip",
+            ],
+            rows=trip_rows,
+        )
+    if METER_READINGS in included_sheets:
+        _add_report_sheet(
+            workbook,
+            title="Meter Readings",
+            timezone_name=timezone_name,
+            headers=[
+                "Date/Time",
+                "Site",
+                "Asset",
+                "Asset Type",
+                "Driver / Operator",
+                "Assignment Status",
+                "Meter Type",
+                "Reading Type",
+                "Value",
+                "Unit",
+                "Verification",
+                "Evidence",
+            ],
+            rows=meter_rows,
+        )
+    if DIESEL_REGISTER in included_sheets:
+        _add_report_sheet(
+            workbook,
+            title="Diesel Register",
+            timezone_name=timezone_name,
+            headers=[
+                "Date/Time",
+                "Site",
+                "Asset",
+                "Type",
+                "Driver / Operator",
+                "Assignment Status",
+                "Diesel L",
+                "Verification",
+                "Evidence",
+            ],
+            rows=diesel_rows,
+        )
+    if DUTY_REGISTER in included_sheets:
+        _add_report_sheet(
+            workbook,
+            title="Duty Register",
+            timezone_name=timezone_name,
+            headers=[
+                "Date",
+                "Site",
+                "Asset",
+                "Type",
+                "Driver / Operator",
+                "Assignment Status",
+                "Duty Start",
+                "Duty End",
+                "Duration",
+                "Meter Start",
+                "Meter End",
+                "Meter Unit",
+                "Usage",
+                "Status",
+            ],
+            rows=duty_rows,
+        )
+    if EXCEPTIONS in included_sheets:
+        exceptions_sheet = _add_report_sheet(
+            workbook,
+            title="Exceptions",
+            timezone_name=timezone_name,
+            headers=[
+                "Date",
+                "Site",
+                "Asset",
+                "Type",
+                "Assignment Status",
+                "Exception Type",
+                "Description",
+                "Status",
+            ],
+            rows=exception_rows,
+        )
+        description_column = next(
+            cell.column_letter for cell in exceptions_sheet[4] if cell.value == "Description"
+        )
+        exceptions_sheet.column_dimensions[description_column].width = 48
+        for cell in exceptions_sheet[description_column]:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
@@ -1012,11 +1152,14 @@ def _build_workbook(
 @router.get("/daily.xlsx")
 def daily_excel(
     operational_date: date | None = Query(default=None),
+    template_id: UUID | None = Query(default=None),
     context: AuthContext = Depends(require_owner_admin),
     settings: Settings = Depends(get_app_settings),
     db: Session = Depends(get_db),
 ) -> Response:
     try:
+        template_service = ReportTemplateService(db, context)
+        report_template = template_service.resolve_for_export(template_id)
         report = _service(db, context).dashboard(operational_date)
         duties = _duty_reports(
             db,
@@ -1028,14 +1171,21 @@ def daily_excel(
             report,
             web_public_base_url=settings.web_public_base_url,
             duty_reports=duties,
+            template=template_service.config(report_template),
         )
-        filename = f"fleet-report-{report.operational_day.operational_date.isoformat()}.xlsx"
+        db.commit()
+        template_segment = _template_filename_segment(report_template.name)
+        filename = (
+            f"FleetManager-{report.operational_day.operational_date.isoformat()}-"
+            f"{template_segment}.xlsx"
+        )
         return Response(
             content=content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except DomainError as exc:
+        db.rollback()
         _fail(exc)
 
 

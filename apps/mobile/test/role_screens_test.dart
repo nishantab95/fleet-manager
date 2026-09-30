@@ -314,6 +314,8 @@ void main() {
   testWidgets('owner home exposes management dashboard and duty monitoring', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 3200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = _FakeRoleApi();
     await tester.pumpWidget(
       MaterialApp(
@@ -338,6 +340,156 @@ void main() {
     expect(find.text('END HMR'), findsOneWidget);
     expect(find.text('MACHINE HOURS'), findsOneWidget);
     expect(find.text('1.50 h'), findsOneWidget);
+  });
+
+  testWidgets('owner reports creates and selects a custom report template', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _FakeRoleApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OwnerHomeScreen(api: api, onSignOut: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('REPORTS'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('report-template-selector')), findsOneWidget);
+    expect(find.text('Management Summary'), findsWidgets);
+    expect(find.text('Detailed Operations'), findsOneWidget);
+    expect(find.text('Diesel Report'), findsOneWidget);
+    expect(find.byKey(const Key('export-template-excel')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('new-report-template')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('report-template-editor-name')),
+      'Custom Minimal',
+    );
+    await tester.tap(find.text('MANAGEMENT DASHBOARD COLUMNS'));
+    await tester.pumpAndSettle();
+    final assetTile = tester.widget<CheckboxListTile>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is CheckboxListTile &&
+            widget.title is Text &&
+            (widget.title as Text).data == 'Asset',
+      ),
+    );
+    expect(assetTile.value, isTrue);
+    expect(assetTile.onChanged, isNull);
+    await tester.tap(find.text('MANAGEMENT DASHBOARD COLUMNS'));
+    await tester.pumpAndSettle();
+    for (final sheet in const [
+      'Management Dashboard',
+      'Tipper Daily',
+      'Machinery Daily',
+      'Exceptions',
+    ]) {
+      await tester.tap(find.text(sheet).last);
+    }
+    await tester.tap(find.byKey(const Key('save-report-template')));
+    await tester.pump();
+    expect(find.text('Select at least one sheet.'), findsOneWidget);
+    await tester.tap(find.text('Management Dashboard').last);
+    await tester.tap(find.byKey(const Key('save-report-template')));
+    await tester.pumpAndSettle();
+
+    expect(api.createdTemplate?.name, 'Custom Minimal');
+    expect(api.createdTemplate?.includedSheets, ['management_dashboard']);
+    expect(api.createdTemplate?.managementDashboardColumns.first, 'asset');
+    expect(find.text('Custom Minimal'), findsWidgets);
+
+    final builtinCard = find.byKey(
+      const Key('report-template-management-summary'),
+    );
+    await tester.tap(
+      find.descendant(
+        of: builtinCard,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Duplicate'), findsOneWidget);
+    expect(find.text('Edit'), findsNothing);
+    expect(find.text('Delete'), findsNothing);
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+
+    final customCard = find.byKey(const Key('report-template-custom-minimal'));
+    await tester.tap(
+      find.descendant(
+        of: customCard,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Set as default'));
+    await tester.pumpAndSettle();
+    expect(api.defaultTemplateId, 'custom-minimal');
+
+    await tester.tap(
+      find.descendant(
+        of: customCard,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('report-template-editor-name')),
+      'Custom Edited',
+    );
+    await tester.tap(find.byKey(const Key('save-report-template')));
+    await tester.pumpAndSettle();
+    expect(api.updatedTemplateName, 'Custom Edited');
+
+    await tester.tap(
+      find.descendant(
+        of: customCard,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Duplicate'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('report-template-name')),
+      'Custom Copy',
+    );
+    await tester.tap(find.text('SAVE'));
+    await tester.pumpAndSettle();
+    expect(api.duplicatedTemplateName, 'Custom Copy');
+
+    await tester.tap(
+      find.descendant(
+        of: customCard,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('DELETE'));
+    await tester.pumpAndSettle();
+    expect(api.deletedTemplateId, 'custom-minimal');
+
+    await tester.tap(find.byKey(const Key('new-report-template')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('report-template-editor-name')),
+      'management summary',
+    );
+    await tester.tap(find.byKey(const Key('save-report-template')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('A report template with this name already exists.'),
+      findsOneWidget,
+    );
   });
 }
 
@@ -371,6 +523,59 @@ class _FakeRoleApi extends ApiClient {
   String? assignedAssetId;
   String? assignedDriverId;
   String? assignmentSiteId;
+  ReportTemplateInput? createdTemplate;
+  String? defaultTemplateId;
+  String? updatedTemplateName;
+  String? duplicatedTemplateName;
+  String? deletedTemplateId;
+  final List<ReportTemplate> _reportTemplates = [
+    ReportTemplate(
+      id: 'management-summary',
+      name: 'Management Summary',
+      isBuiltin: true,
+      isDefault: true,
+      includedSheets: const [
+        'management_dashboard',
+        'tipper_daily',
+        'machinery_daily',
+        'exceptions',
+      ],
+      managementDashboardColumns: managementReportColumnLabels.keys.toList(),
+      tipperDailyColumns: tipperReportColumnLabels.keys.toList(),
+      machineryDailyColumns: machineryReportColumnLabels.keys.toList(),
+    ),
+    ReportTemplate(
+      id: 'detailed-operations',
+      name: 'Detailed Operations',
+      isBuiltin: true,
+      isDefault: false,
+      includedSheets: reportSheetLabels.keys.toList(),
+      managementDashboardColumns: managementReportColumnLabels.keys.toList(),
+      tipperDailyColumns: tipperReportColumnLabels.keys.toList(),
+      machineryDailyColumns: machineryReportColumnLabels.keys.toList(),
+    ),
+    ReportTemplate(
+      id: 'diesel-report',
+      name: 'Diesel Report',
+      isBuiltin: true,
+      isDefault: false,
+      includedSheets: const [
+        'management_dashboard',
+        'diesel_register',
+        'exceptions',
+      ],
+      managementDashboardColumns: const [
+        'asset',
+        'asset_type',
+        'site',
+        'operator',
+        'verified_diesel_l',
+        'pending_status',
+      ],
+      tipperDailyColumns: tipperReportColumnLabels.keys.toList(),
+      machineryDailyColumns: machineryReportColumnLabels.keys.toList(),
+    ),
+  ];
 
   static SupervisorEvent event({
     required String id,
@@ -620,6 +825,110 @@ class _FakeRoleApi extends ApiClient {
       'status': 'CLOSED',
     }),
   ];
+
+  @override
+  Future<List<ReportTemplate>> reportTemplates() async =>
+      List.unmodifiable(_reportTemplates);
+
+  @override
+  Future<ReportTemplate> createReportTemplate(ReportTemplateInput input) async {
+    if (_reportTemplates.any(
+      (item) => item.name.toLowerCase() == input.name.toLowerCase(),
+    )) {
+      throw const ApiException(
+        409,
+        'A report template with this name already exists.',
+      );
+    }
+    createdTemplate = input;
+    final template = ReportTemplate(
+      id: 'custom-minimal',
+      name: input.name,
+      isBuiltin: false,
+      isDefault: false,
+      includedSheets: input.includedSheets,
+      managementDashboardColumns: input.managementDashboardColumns,
+      tipperDailyColumns: input.tipperDailyColumns,
+      machineryDailyColumns: input.machineryDailyColumns,
+    );
+    _reportTemplates.add(template);
+    return template;
+  }
+
+  @override
+  Future<ReportTemplate> updateReportTemplate(
+    String templateId,
+    ReportTemplateInput input,
+  ) async {
+    updatedTemplateName = input.name;
+    final index = _reportTemplates.indexWhere((item) => item.id == templateId);
+    final current = _reportTemplates[index];
+    final updated = ReportTemplate(
+      id: current.id,
+      name: input.name,
+      isBuiltin: current.isBuiltin,
+      isDefault: current.isDefault,
+      includedSheets: input.includedSheets,
+      managementDashboardColumns: input.managementDashboardColumns,
+      tipperDailyColumns: input.tipperDailyColumns,
+      machineryDailyColumns: input.machineryDailyColumns,
+    );
+    _reportTemplates[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<ReportTemplate> duplicateReportTemplate(
+    String templateId,
+    String name,
+  ) async {
+    duplicatedTemplateName = name;
+    final source = _reportTemplates.firstWhere((item) => item.id == templateId);
+    final duplicate = ReportTemplate(
+      id: 'custom-copy',
+      name: name,
+      isBuiltin: false,
+      isDefault: false,
+      includedSheets: source.includedSheets,
+      managementDashboardColumns: source.managementDashboardColumns,
+      tipperDailyColumns: source.tipperDailyColumns,
+      machineryDailyColumns: source.machineryDailyColumns,
+    );
+    _reportTemplates.add(duplicate);
+    return duplicate;
+  }
+
+  @override
+  Future<void> deleteReportTemplate(String templateId) async {
+    deletedTemplateId = templateId;
+    final wasDefault = _reportTemplates
+        .firstWhere((item) => item.id == templateId)
+        .isDefault;
+    _reportTemplates.removeWhere((item) => item.id == templateId);
+    if (wasDefault) await setDefaultReportTemplate('management-summary');
+  }
+
+  @override
+  Future<ReportTemplate> setDefaultReportTemplate(String templateId) async {
+    defaultTemplateId = templateId;
+    final updated = [
+      for (final item in _reportTemplates)
+        ReportTemplate(
+          id: item.id,
+          name: item.name,
+          isBuiltin: item.isBuiltin,
+          isDefault: item.id == templateId,
+          includedSheets: item.includedSheets,
+          managementDashboardColumns: item.managementDashboardColumns,
+          tipperDailyColumns: item.tipperDailyColumns,
+          machineryDailyColumns: item.machineryDailyColumns,
+        ),
+    ];
+    _reportTemplates
+      ..clear()
+      ..addAll(updated);
+    return _reportTemplates.firstWhere((item) => item.id == templateId);
+  }
 }
 
 class _ScaleRoleApi extends _FakeRoleApi {

@@ -672,3 +672,58 @@ def test_0013_backfills_assignment_history_as_asset_site_deployments(
             connection.execute(
                 text("DELETE FROM companies WHERE id = :company"), params
             )
+
+
+def test_0016_seeds_exact_builtin_report_templates_for_existing_company(
+    postgres_engine: Engine,
+) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("60000000-0000-0000-0000-000000000001")
+    command.downgrade(config, "0015_machinery_hmr")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'Template Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.connect() as connection:
+            templates = connection.execute(
+                text(
+                    "SELECT name, builtin_key, is_builtin, is_default, included_sheets "
+                    "FROM report_templates WHERE company_id = :company "
+                    "ORDER BY name"
+                ),
+                {"company": company_id},
+            ).mappings().all()
+            assert len(templates) == 3
+            assert {row["name"] for row in templates} == {
+                "Management Summary",
+                "Detailed Operations",
+                "Diesel Report",
+            }
+            assert all(row["is_builtin"] for row in templates)
+            assert [row["name"] for row in templates if row["is_default"]] == [
+                "Management Summary"
+            ]
+            detailed = next(
+                row for row in templates if row["name"] == "Detailed Operations"
+            )
+            assert len(detailed["included_sheets"]) == 8
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM report_templates WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :company"),
+                {"company": company_id},
+            )

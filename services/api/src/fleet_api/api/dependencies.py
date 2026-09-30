@@ -30,6 +30,7 @@ from fleet_api.domain.errors import (
 )
 from fleet_api.domain.owner_assets import OwnerAssetService
 from fleet_api.domain.owner_people_sites import OwnerPeopleSiteService
+from fleet_api.domain.report_templates import ReportTemplateService
 from fleet_api.storage.objects import ObjectStorage, build_object_storage
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -181,6 +182,18 @@ def get_owner_people_site_service(
         context,
         request_id=request.headers.get("x-request-id"),
         phone_default_region=settings.phone_default_region,
+    )
+
+
+def get_report_template_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> ReportTemplateService:
+    return ReportTemplateService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
     )
 
 

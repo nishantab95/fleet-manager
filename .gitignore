@@ -24,6 +24,7 @@ apps/web/next-env.d.ts
 *.tsbuildinfo
 out/
 dist/
+/outputs/
 npm-debug.log*
 pnpm-debug.log*
 

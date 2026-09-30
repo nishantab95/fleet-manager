@@ -137,6 +137,85 @@ void main() {
     expect(counts, {'protected': 2, 'refresh': 1});
   });
 
+  test('Owner report template request uses shared refresh and retry', () async {
+    final counts = <String, int>{};
+    final api = _refreshingApi(
+      role: 'OWNER_ADMIN',
+      protectedPath: '/api/v1/owner/report-templates',
+      successBody: jsonEncode([_reportTemplateJson()]),
+      counts: counts,
+    );
+
+    final templates = await api.reportTemplates();
+
+    expect(templates.single.name, 'Management Summary');
+    expect(templates.single.isDefault, isTrue);
+    expect(counts, {'protected': 2, 'refresh': 1});
+  });
+
+  test('Excel export sends selected template and report date', () async {
+    late Uri requested;
+    final api = ApiClient(
+      baseUrl: 'http://test',
+      client: MockClient((request) async {
+        requested = request.url;
+        return http.Response.bytes([1, 2, 3], 200);
+      }),
+    )..setSession(_tokens(role: 'OWNER_ADMIN', access: 'owner-access'));
+
+    final bytes = await api.dailyExcel(
+      date: DateTime(2026, 9, 30),
+      templateId: 'template-1',
+    );
+
+    expect(bytes, [1, 2, 3]);
+    expect(requested.path, '/api/v1/reports/daily.xlsx');
+    expect(requested.queryParameters, {
+      'operational_date': '2026-09-30',
+      'template_id': 'template-1',
+    });
+  });
+
+  test('Owner template mutations use scoped endpoints and payloads', () async {
+    final requests = <String>[];
+    final bodies = <Map<String, dynamic>>[];
+    final api = ApiClient(
+      baseUrl: 'http://test',
+      client: MockClient((request) async {
+        requests.add('${request.method} ${request.url.path}');
+        if (request.body.isNotEmpty) {
+          bodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+        }
+        if (request.method == 'DELETE') return http.Response('', 204);
+        return http.Response(jsonEncode(_reportTemplateJson()), 200);
+      }),
+    )..setSession(_tokens(role: 'OWNER_ADMIN', access: 'owner-access'));
+    const input = ReportTemplateInput(
+      name: 'Custom Minimal',
+      includedSheets: ['management_dashboard'],
+      managementDashboardColumns: ['asset', 'site'],
+      tipperDailyColumns: ['asset', 'site'],
+      machineryDailyColumns: ['asset', 'site'],
+    );
+
+    await api.createReportTemplate(input);
+    await api.updateReportTemplate('template-1', input);
+    await api.duplicateReportTemplate('template-1', 'Custom Copy');
+    await api.setDefaultReportTemplate('template-1');
+    await api.deleteReportTemplate('template-1');
+
+    expect(requests, [
+      'POST /api/v1/owner/report-templates',
+      'PATCH /api/v1/owner/report-templates/template-1',
+      'POST /api/v1/owner/report-templates/template-1/duplicate',
+      'POST /api/v1/owner/report-templates/template-1/default',
+      'DELETE /api/v1/owner/report-templates/template-1',
+    ]);
+    expect(bodies[0], input.toJson());
+    expect(bodies[1], input.toJson());
+    expect(bodies[2], {'name': 'Custom Copy'});
+  });
+
   test(
     'Supervisor deployed asset request uses shared refresh and retry',
     () async {
@@ -411,6 +490,22 @@ Map<String, dynamic> _assignmentJson() => {
   'starts_at': '2026-09-30T08:00:00Z',
   'ends_at': null,
   'regular_duty_minutes': 600,
+};
+
+Map<String, dynamic> _reportTemplateJson() => {
+  'id': 'template-1',
+  'name': 'Management Summary',
+  'is_builtin': true,
+  'is_default': true,
+  'included_sheets': [
+    'management_dashboard',
+    'tipper_daily',
+    'machinery_daily',
+    'exceptions',
+  ],
+  'management_dashboard_columns': ['asset', 'site'],
+  'tipper_daily_columns': ['asset', 'approved_trips'],
+  'machinery_daily_columns': ['asset', 'machine_hours'],
 };
 
 Future<ApiException> _apiError(Future<Object?> request) async {

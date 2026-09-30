@@ -119,6 +119,21 @@ abstract class OwnerPeopleSiteApi {
   );
 }
 
+abstract class OwnerReportTemplateApi {
+  Future<List<ReportTemplate>> reportTemplates();
+  Future<ReportTemplate> createReportTemplate(ReportTemplateInput input);
+  Future<ReportTemplate> updateReportTemplate(
+    String templateId,
+    ReportTemplateInput input,
+  );
+  Future<ReportTemplate> duplicateReportTemplate(
+    String templateId,
+    String name,
+  );
+  Future<ReportTemplate> setDefaultReportTemplate(String templateId);
+  Future<void> deleteReportTemplate(String templateId);
+}
+
 abstract class DriverAssignmentApi {
   Future<List<DriverCandidate>> eligibleDrivers(
     String assetId, {
@@ -165,6 +180,7 @@ class ApiClient
         DriverStateLookup,
         OwnerAssetApi,
         OwnerPeopleSiteApi,
+        OwnerReportTemplateApi,
         DriverAssignmentApi {
   ApiClient({
     String? baseUrl,
@@ -756,6 +772,74 @@ class ApiClient
     return OwnerManagedSite.fromJson(_json(response));
   }
 
+  @override
+  Future<List<ReportTemplate>> reportTemplates() async {
+    final response = await _request(
+      'GET',
+      '/api/v1/owner/report-templates',
+      authenticated: true,
+    );
+    return _jsonList(response).map(ReportTemplate.fromJson).toList();
+  }
+
+  @override
+  Future<ReportTemplate> createReportTemplate(ReportTemplateInput input) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/report-templates',
+      authenticated: true,
+      body: input.toJson(),
+    );
+    return ReportTemplate.fromJson(_json(response));
+  }
+
+  @override
+  Future<ReportTemplate> updateReportTemplate(
+    String templateId,
+    ReportTemplateInput input,
+  ) async {
+    final response = await _request(
+      'PATCH',
+      '/api/v1/owner/report-templates/$templateId',
+      authenticated: true,
+      body: input.toJson(),
+    );
+    return ReportTemplate.fromJson(_json(response));
+  }
+
+  @override
+  Future<ReportTemplate> duplicateReportTemplate(
+    String templateId,
+    String name,
+  ) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/report-templates/$templateId/duplicate',
+      authenticated: true,
+      body: {'name': name},
+    );
+    return ReportTemplate.fromJson(_json(response));
+  }
+
+  @override
+  Future<ReportTemplate> setDefaultReportTemplate(String templateId) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/report-templates/$templateId/default',
+      authenticated: true,
+    );
+    return ReportTemplate.fromJson(_json(response));
+  }
+
+  @override
+  Future<void> deleteReportTemplate(String templateId) async {
+    await _request(
+      'DELETE',
+      '/api/v1/owner/report-templates/$templateId',
+      authenticated: true,
+    );
+  }
+
   Future<Uint8List> evidenceBytes(
     String eventId, {
     required String role,
@@ -767,8 +851,14 @@ class ApiClient
     return response.bodyBytes;
   }
 
-  Future<Uint8List> dailyExcel({DateTime? date}) async {
-    final suffix = date == null ? '' : '?operational_date=${_dateParam(date)}';
+  Future<Uint8List> dailyExcel({DateTime? date, String? templateId}) async {
+    final query = <String, String>{
+      if (date != null) 'operational_date': _dateParam(date),
+      if (templateId != null) 'template_id': templateId,
+    };
+    final suffix = query.isEmpty
+        ? ''
+        : '?${query.entries.map((entry) => '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}').join('&')}';
     final response = await _request(
       'GET',
       '/api/v1/reports/daily.xlsx$suffix',

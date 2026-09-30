@@ -288,9 +288,17 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
         assert float(tipper_report.json()[0]["distance_km"]) == 120
         assert float(tipper_report.json()[0]["verified_diesel_issued"]) == 30
 
+        templates = client.get("/api/v1/owner/report-templates")
+        assert templates.status_code == 200
+        detailed_template_id = next(
+            item["id"] for item in templates.json() if item["name"] == "Detailed Operations"
+        )
         workbook_response = client.get(
             "/api/v1/reports/daily.xlsx",
-            params={"operational_date": report_date},
+            params={
+                "operational_date": report_date,
+                "template_id": detailed_template_id,
+            },
         )
         assert workbook_response.status_code == 200
         workbook = load_workbook(BytesIO(workbook_response.content), read_only=True, data_only=True)

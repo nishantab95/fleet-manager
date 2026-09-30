@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
@@ -80,6 +82,15 @@ def owner_client(
         db_session,
         access_token(db_session, owner, value(records, "owner_a", CompanyMembership)),
         storage=storage,
+    )
+
+
+def report_template_id(client: TestClient, name: str) -> str:
+    response = client.get("/api/v1/owner/report-templates")
+    assert response.status_code == 200, response.text
+    return cast(
+        str,
+        next(item["id"] for item in response.json() if item["name"] == name),
     )
 
 
@@ -280,7 +291,10 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
 
         workbook_response = owner.get(
             "/api/v1/reports/daily.xlsx",
-            params={"operational_date": REPORT_DATE.isoformat()},
+            params={
+                "operational_date": REPORT_DATE.isoformat(),
+                "template_id": report_template_id(owner, "Detailed Operations"),
+            },
         )
         assert workbook_response.status_code == 200
         workbook = load_workbook(BytesIO(workbook_response.content), data_only=False)
@@ -296,12 +310,30 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         ]
         assert workbook["Duty Register"]["A4"].value == "Date"
         assert workbook["Tipper Daily"]["B5"].value == "'=Unsafe Site"
-        assert workbook["Tipper Daily"]["I5"].value == 120
+        tipper_headers = [cell.value for cell in workbook["Tipper Daily"][4]]
+        tipper_values = dict(
+            zip(
+                tipper_headers,
+                next(workbook["Tipper Daily"].iter_rows(min_row=5, values_only=True)),
+                strict=True,
+            )
+        )
+        assert tipper_values["Distance KM"] == 120
+        assert tipper_values["Approved Trips"] == 8
+        assert tipper_values["Diesel L"] == 30
         assert workbook["Management Dashboard"]["A4"].value == "Asset"
-        assert workbook["Management Dashboard"]["H5"].value == 120
-        assert workbook["Management Dashboard"]["J5"].value == 30
+        dashboard_headers = [cell.value for cell in workbook["Management Dashboard"][4]]
+        dashboard_values = dict(
+            zip(
+                dashboard_headers,
+                next(workbook["Management Dashboard"].iter_rows(min_row=5, values_only=True)),
+                strict=True,
+            )
+        )
+        assert dashboard_values["Distance KM"] == 120
+        assert dashboard_values["Verified Diesel L"] == 30
         assert workbook["Management Dashboard"].freeze_panes == "A5"
-        assert workbook["Management Dashboard"].max_column == 11
+        assert workbook["Management Dashboard"].max_column == 10
         trip_rows = list(workbook["Trip Register"].iter_rows(min_row=5, values_only=True))
         assert len(trip_rows) == 11
         assert (
@@ -310,12 +342,8 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         )
         assert workbook["Tipper Daily"].freeze_panes == "A5"
         assert workbook["Tipper Daily"].auto_filter.ref
-        meter_rows = list(
-            workbook["Meter Readings"].iter_rows(min_row=5, values_only=True)
-        )
-        diesel_rows = list(
-            workbook["Diesel Register"].iter_rows(min_row=5, values_only=True)
-        )
+        meter_rows = list(workbook["Meter Readings"].iter_rows(min_row=5, values_only=True))
+        diesel_rows = list(workbook["Diesel Register"].iter_rows(min_row=5, values_only=True))
         assert any(
             isinstance(row[11], str)
             and row[11].startswith('=HYPERLINK("http://localhost:3000/evidence/')
@@ -391,12 +419,8 @@ def test_mixed_tipper_and_machinery_report_is_capability_aware(
     machinery_assignment = create_assignment(
         db_session,
         company_id=company.id,
-        driver_membership_id=value(
-            tenant_records, "driver_a2", CompanyMembership
-        ).id,
-        supervisor_membership_id=value(
-            tenant_records, "supervisor_a", CompanyMembership
-        ).id,
+        driver_membership_id=value(tenant_records, "driver_a2", CompanyMembership).id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
         asset_id=excavator.id,
         site_id=site.id,
         starts_at=DAY_START - timedelta(hours=1),
@@ -535,41 +559,185 @@ def test_mixed_tipper_and_machinery_report_is_capability_aware(
         workbook = load_workbook(BytesIO(workbook_response.content), data_only=False)
         dashboard_rows = {
             row[0]: row
-            for row in workbook["Management Dashboard"].iter_rows(
-                min_row=5, values_only=True
-            )
+            for row in workbook["Management Dashboard"].iter_rows(min_row=5, values_only=True)
         }
-        assert dashboard_rows["ALPHA-ONE"][6:10] == (6, 100, "—", 20)
-        assert dashboard_rows["EXC-01"][6:10] == ("—", "—", 1.5, 10)
+        dashboard_headers = [cell.value for cell in workbook["Management Dashboard"][4]]
+        dashboard_values = {
+            asset: dict(zip(dashboard_headers, row, strict=True))
+            for asset, row in dashboard_rows.items()
+        }
+        assert dashboard_values["ALPHA-ONE"]["Trips"] == 6
+        assert dashboard_values["ALPHA-ONE"]["Distance KM"] == 100
+        assert dashboard_values["ALPHA-ONE"]["Machine Hours"] == "—"
+        assert dashboard_values["ALPHA-ONE"]["Verified Diesel L"] == 20
+        assert dashboard_values["EXC-01"]["Trips"] == "—"
+        assert dashboard_values["EXC-01"]["Distance KM"] == "—"
+        assert dashboard_values["EXC-01"]["Machine Hours"] == 1.5
+        assert dashboard_values["EXC-01"]["Verified Diesel L"] == 10
         machinery_row = next(
             row
-            for row in workbook["Machinery Daily"].iter_rows(
-                min_row=5, values_only=True
-            )
-            if row[2] == "EXC-01"
+            for row in workbook["Machinery Daily"].iter_rows(min_row=5, values_only=True)
+            if row[0] == "EXC-01"
         )
-        assert machinery_row[3] == "EXCAVATOR"
-        assert machinery_row[6:10] == (1000, 1001.5, 1.5, 10)
+        machinery_headers = [cell.value for cell in workbook["Machinery Daily"][4]]
+        machinery_values = dict(zip(machinery_headers, machinery_row, strict=True))
+        assert machinery_values["Asset Type"] == "EXCAVATOR"
+        assert machinery_values["Start HMR"] == 1000
+        assert machinery_values["End HMR"] == 1001.5
+        assert machinery_values["Machine Hours"] == 1.5
+        assert machinery_values["Diesel L"] == 10
+
+        detailed_template_id = next(
+            item["id"]
+            for item in owner.get("/api/v1/owner/report-templates").json()
+            if item["name"] == "Detailed Operations"
+        )
+        detailed_response = owner.get(
+            "/api/v1/reports/daily.xlsx",
+            params={**params, "template_id": detailed_template_id},
+        )
+        assert detailed_response.status_code == 200, detailed_response.text
+        detailed_workbook = load_workbook(BytesIO(detailed_response.content), data_only=False)
         meter_rows = list(
-            workbook["Meter Readings"].iter_rows(min_row=5, values_only=True)
+            detailed_workbook["Meter Readings"].iter_rows(min_row=5, values_only=True)
         )
         assert {row[6] for row in meter_rows} == {"ODOMETER", "HMR"}
         assert {row[9] for row in meter_rows} == {"km", "h"}
-        exceptions = list(
-            workbook["Exceptions"].iter_rows(min_row=5, values_only=True)
-        )
-        assert not any(
-            row[2] == "EXC-01" and "KM" in f"{row[5]} {row[6]}"
-            for row in exceptions
-        )
+        exceptions = list(detailed_workbook["Exceptions"].iter_rows(min_row=5, values_only=True))
+        assert not any(row[2] == "EXC-01" and "KM" in f"{row[5]} {row[6]}" for row in exceptions)
         trip_time = next(
             row[5]
-            for row in workbook["Trip Register"].iter_rows(
-                min_row=5, values_only=True
-            )
+            for row in detailed_workbook["Trip Register"].iter_rows(min_row=5, values_only=True)
         )
         assert trip_time.hour == 1  # 20:00 UTC + 05:30 on the next local day.
         assert workbook["Management Dashboard"]["B2"].value == "Asia/Kolkata"
+
+        templates_response = owner.get("/api/v1/owner/report-templates")
+        assert templates_response.status_code == 200, templates_response.text
+        templates = {item["name"]: item for item in templates_response.json()}
+        expected_sheets = {
+            "Management Summary": [
+                "Management Dashboard",
+                "Tipper Daily",
+                "Machinery Daily",
+                "Exceptions",
+            ],
+            "Detailed Operations": [
+                "Management Dashboard",
+                "Tipper Daily",
+                "Machinery Daily",
+                "Trip Register",
+                "Meter Readings",
+                "Diesel Register",
+                "Duty Register",
+                "Exceptions",
+            ],
+            "Diesel Report": [
+                "Management Dashboard",
+                "Diesel Register",
+                "Exceptions",
+            ],
+        }
+        sample_directory = os.getenv("FLEET_REPORT_SAMPLE_DIR")
+        for name, sheet_names in expected_sheets.items():
+            export = owner.get(
+                "/api/v1/reports/daily.xlsx",
+                params={**params, "template_id": templates[name]["id"]},
+            )
+            assert export.status_code == 200, export.text
+            assert name.replace(" ", "-") in export.headers["content-disposition"]
+            selected = load_workbook(BytesIO(export.content), data_only=False)
+            assert selected.sheetnames == sheet_names
+            if sample_directory:
+                Path(sample_directory, f"{name.replace(' ', '-')}.xlsx").write_bytes(export.content)
+
+        custom_response = owner.post(
+            "/api/v1/owner/report-templates",
+            json={
+                "name": "Custom Minimal",
+                "included_sheets": [
+                    "management_dashboard",
+                    "tipper_daily",
+                    "machinery_daily",
+                ],
+                "management_dashboard_columns": [
+                    "asset",
+                    "site",
+                    "trips",
+                    "distance_km",
+                    "machine_hours",
+                    "verified_diesel_l",
+                ],
+                "tipper_daily_columns": [
+                    "asset",
+                    "site",
+                    "approved_trips",
+                    "distance_km",
+                    "diesel_l",
+                ],
+                "machinery_daily_columns": [
+                    "asset",
+                    "site",
+                    "machine_hours",
+                    "diesel_l",
+                ],
+            },
+        )
+        assert custom_response.status_code == 201, custom_response.text
+        custom_id = custom_response.json()["id"]
+        custom_export = owner.get(
+            "/api/v1/reports/daily.xlsx",
+            params={**params, "template_id": custom_id},
+        )
+        assert custom_export.status_code == 200, custom_export.text
+        if sample_directory:
+            Path(sample_directory, "Custom-Minimal.xlsx").write_bytes(custom_export.content)
+        custom_workbook = load_workbook(BytesIO(custom_export.content), data_only=False)
+        assert custom_workbook.sheetnames == [
+            "Management Dashboard",
+            "Tipper Daily",
+            "Machinery Daily",
+        ]
+        assert tuple(cell.value for cell in custom_workbook["Management Dashboard"][4]) == (
+            "Asset",
+            "Site",
+            "Trips",
+            "Distance KM",
+            "Machine Hours",
+            "Verified Diesel L",
+        )
+        custom_rows = {
+            row[0]: row
+            for row in custom_workbook["Management Dashboard"].iter_rows(
+                min_row=5, values_only=True
+            )
+        }
+        assert custom_rows["ALPHA-ONE"] == (
+            "ALPHA-ONE",
+            "Alpha Site",
+            6,
+            100,
+            "—",
+            20,
+        )
+        assert custom_rows["EXC-01"] == (
+            "EXC-01",
+            "Alpha Site",
+            "—",
+            "—",
+            1.5,
+            10,
+        )
+
+        made_default = owner.post(f"/api/v1/owner/report-templates/{custom_id}/default")
+        assert made_default.status_code == 200, made_default.text
+        default_export = owner.get("/api/v1/reports/daily.xlsx", params=params)
+        assert default_export.status_code == 200, default_export.text
+        assert load_workbook(BytesIO(default_export.content)).sheetnames == [
+            "Management Dashboard",
+            "Tipper Daily",
+            "Machinery Daily",
+        ]
     finally:
         owner.close()
 
@@ -664,14 +832,15 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
             BytesIO(
                 owner.get(
                     "/api/v1/reports/daily.xlsx",
-                    params={"operational_date": REPORT_DATE.isoformat()},
+                    params={
+                        "operational_date": REPORT_DATE.isoformat(),
+                        "template_id": report_template_id(owner, "Detailed Operations"),
+                    },
                 ).content
             ),
             data_only=False,
         )
-        meter_rows = list(
-            workbook["Meter Readings"].iter_rows(min_row=5, values_only=True)
-        )
+        meter_rows = list(workbook["Meter Readings"].iter_rows(min_row=5, values_only=True))
         assert all("5676543455" not in str(row) for row in meter_rows)
     finally:
         owner.close()
@@ -738,8 +907,16 @@ def test_phase6_smoke_fixture_approves_pending_work_then_closes_day(
             BytesIO(owner.get("/api/v1/reports/daily.xlsx", params=params).content),
             data_only=False,
         )
-        assert workbook["Tipper Daily"]["J5"].value == 8
-        assert workbook["Tipper Daily"]["I5"].value == 120
+        tipper_headers = [cell.value for cell in workbook["Tipper Daily"][4]]
+        tipper_values = dict(
+            zip(
+                tipper_headers,
+                next(workbook["Tipper Daily"].iter_rows(min_row=5, values_only=True)),
+                strict=True,
+            )
+        )
+        assert tipper_values["Approved Trips"] == 8
+        assert tipper_values["Distance KM"] == 120
         blocked = owner.post(
             f"/api/v1/reports/sites/{site.id}/closure/close",
             params=params,
