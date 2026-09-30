@@ -69,6 +69,7 @@ class DeviceStatus(StrEnum):
 class OperationalEventType(StrEnum):
     TRIP_COMPLETE = "TRIP_COMPLETE"
     KM_READING = "KM_READING"
+    HMR_READING = "HMR_READING"
     DIESEL = "DIESEL"
     EMERGENCY = "EMERGENCY"
 
@@ -82,6 +83,11 @@ class VerificationStatus(StrEnum):
 
 
 class KmReadingType(StrEnum):
+    START_READING = "START_READING"
+    END_READING = "END_READING"
+
+
+class HourMeterReadingType(StrEnum):
     START_READING = "START_READING"
     END_READING = "END_READING"
 

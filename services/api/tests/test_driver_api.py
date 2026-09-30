@@ -25,12 +25,14 @@ from fleet_api.db.models import (
     EmergencyEvent,
     EvidenceObject,
     FleetAsset,
+    HourMeterReading,
     OperationalEvent,
     Site,
     SupervisorSiteAccess,
     User,
 )
 from fleet_api.db.session import get_db as session_get_db
+from fleet_api.domain.assets import create_fleet_asset
 from fleet_api.domain.assignments import create_assignment
 from fleet_api.domain.enums import (
     AssetOwnershipType,
@@ -214,6 +216,227 @@ def submit_km(
         },
     )
     return response
+
+
+def submit_hmr(
+    client: TestClient,
+    *,
+    reading_type: str,
+    reading_value: str,
+    created_at: datetime,
+    installation_identifier: str = "machinery-test-device",
+) -> Response:
+    client_event_uuid = str(uuid4())
+    uploaded = client.post(
+        "/api/v1/driver/evidence",
+        params={"client_event_uuid": client_event_uuid},
+        files={"file": ("hmr.jpg", b"\xff\xd8\xffhmr", "image/jpeg")},
+    )
+    assert uploaded.status_code == 200
+    return client.post(
+        "/api/v1/driver/events",
+        json={
+            "client_event_uuid": client_event_uuid,
+            "event_type": "HMR_READING",
+            "device_created_at": created_at.isoformat(),
+            "installation_identifier": installation_identifier,
+            "platform": "ANDROID",
+            "reading_type": reading_type,
+            "reading_value": reading_value,
+            "object_reference": uploaded.json()["object_reference"],
+        },
+    )
+
+
+def test_machinery_hmr_duty_capabilities_and_continuity(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    excavator = create_fleet_asset(
+        db_session,
+        company_id=company.id,
+        asset_type=FleetAssetType.EXCAVATOR,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="EXC-HMR-01",
+        registration_number=None,
+        short_name="CAT 320",
+    )
+    assignment = add_assignment(db_session, tenant_records, tipper=excavator)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    token = session_for_user(db_session, user_by_name(db_session, "Driver A"), driver)
+    client = driver_app(db_session, token, storage=InMemoryStorage())
+
+    current = client.get("/api/v1/driver/assignment/current")
+    assert current.status_code == 200
+    assert current.json()["asset_type"] == "EXCAVATOR"
+    assert current.json()["asset_code"] == "EXC-HMR-01"
+    assert current.json()["tipper_registration_number"] is None
+
+    unsupported_trip = client.post(
+        "/api/v1/driver/events",
+        json=event_payload(str(uuid4()), installation_identifier="machinery-test-device"),
+    )
+    assert unsupported_trip.status_code == 422
+    assert "not supported" in unsupported_trip.json()["detail"]["message"]
+    unsupported_km = client.post(
+        "/api/v1/driver/events",
+        json={
+            **event_payload(
+                str(uuid4()), installation_identifier="machinery-test-device"
+            ),
+            "event_type": "KM_READING",
+            "reading_type": "START_READING",
+            "reading_value": "10",
+        },
+    )
+    assert unsupported_km.status_code == 422
+
+    started_at = datetime.now(UTC) - timedelta(minutes=10)
+    started = submit_hmr(
+        client,
+        reading_type="START_READING",
+        reading_value="3240.50",
+        created_at=started_at,
+    )
+    assert started.status_code == 200
+    duty = client.get("/api/v1/driver/duty/current")
+    assert duty.status_code == 200
+    assert duty.json()["status"] == "ACTIVE"
+    assert duty.json()["start_hmr"] == "3240.50"
+    assert duty.json()["start_km"] is None
+
+    diesel = client.post(
+        "/api/v1/driver/events",
+        json={
+            **event_payload(
+                str(uuid4()),
+                created_at=started_at + timedelta(minutes=2),
+                installation_identifier="machinery-test-device",
+            ),
+            "event_type": "DIESEL",
+            "litres": "40",
+        },
+    )
+    assert diesel.status_code == 200
+    emergency = client.post(
+        "/api/v1/driver/events",
+        json={
+            **event_payload(
+                str(uuid4()),
+                created_at=started_at + timedelta(minutes=3),
+                installation_identifier="machinery-test-device",
+            ),
+            "event_type": "EMERGENCY",
+        },
+    )
+    assert emergency.status_code == 200
+
+    invalid_end = submit_hmr(
+        client,
+        reading_type="END_READING",
+        reading_value="3239",
+        created_at=started_at + timedelta(minutes=4),
+    )
+    assert invalid_end.status_code == 422
+    assert invalid_end.json()["detail"]["code"] == "INVALID_END_HMR"
+
+    ended = submit_hmr(
+        client,
+        reading_type="END_READING",
+        reading_value="3248.00",
+        created_at=started_at + timedelta(minutes=5),
+    )
+    assert ended.status_code == 200
+    closed = client.get("/api/v1/driver/duty/current")
+    assert closed.json()["status"] == "CLOSED"
+    assert closed.json()["end_hmr"] == "3248.00"
+    assert closed.json()["machine_hours"] == "7.50"
+
+    owner = value(tenant_records, "owner_a", CompanyMembership)
+    owner_token = session_for_user(
+        db_session, user_by_name(db_session, "Owner A"), owner
+    )
+    owner_api = driver_app(db_session, owner_token)
+    duty_report = owner_api.get("/api/v1/reports/duty")
+    assert duty_report.status_code == 200
+    machinery_row = next(
+        item
+        for item in duty_report.json()
+        if item["assignment_id"] == str(assignment.id)
+    )
+    assert machinery_row["asset_type"] == "EXCAVATOR"
+    assert machinery_row["start_hmr"] == "3240.50"
+    assert machinery_row["end_hmr"] == "3248.00"
+    assert machinery_row["machine_hours"] == "7.50"
+    daily_report = owner_api.get(f"/api/v1/reports/tippers/{excavator.id}/daily")
+    assert daily_report.status_code == 200
+    daily_row = daily_report.json()[0]
+    assert daily_row["asset_type"] == "EXCAVATOR"
+    assert daily_row["start_hmr"] == "3240.50"
+    assert daily_row["end_hmr"] == "3248.00"
+    assert daily_row["machine_hours"] == "7.50"
+    assert daily_row["approved_trip_count"] is None
+    assert daily_row["distance_km"] is None
+    assert daily_row["km_per_approved_trip"] is None
+    daily_workbook = owner_api.get("/api/v1/reports/daily.xlsx")
+    assert daily_workbook.status_code == 200
+    assert daily_workbook.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert daily_workbook.content.startswith(b"PK")
+
+    supervisor = value(tenant_records, "supervisor_a", CompanyMembership)
+    site = value(tenant_records, "site_a", Site)
+    db_session.add(
+        SupervisorSiteAccess(
+            company_id=company.id,
+            supervisor_membership_id=supervisor.id,
+            site_id=site.id,
+        )
+    )
+    db_session.commit()
+    supervisor_token = session_for_user(
+        db_session, user_by_name(db_session, "Supervisor A"), supervisor
+    )
+    supervisor_api = driver_app(db_session, supervisor_token)
+    event_list = supervisor_api.get(f"/api/v1/supervisor/sites/{site.id}/events")
+    assert event_list.status_code == 200
+    hmr_events = [
+        event for event in event_list.json() if event["event_type"] == "HMR_READING"
+    ]
+    assert [event["reading_value"] for event in reversed(hmr_events)] == [
+        "3240.50",
+        "3248.00",
+    ]
+    verified = supervisor_api.post(
+        f"/api/v1/supervisor/events/{hmr_events[0]['event_id']}/verify",
+        json={"decision": "APPROVED"},
+    )
+    assert verified.status_code == 200
+    assert verified.json()["verification_status"] == "APPROVED"
+
+    regressed = submit_hmr(
+        client,
+        reading_type="START_READING",
+        reading_value="3240",
+        created_at=started_at + timedelta(minutes=6),
+    )
+    assert regressed.status_code == 422
+    assert regressed.json()["detail"]["code"] == "HOUR_METER_CONTINUITY"
+    assert regressed.json()["detail"]["previous_end_hmr"] == "3248.00"
+
+    readings = db_session.scalars(select(HourMeterReading)).all()
+    assert [reading.reading_value for reading in readings] == [
+        pytest.approx(3240.5),
+        pytest.approx(3248.0),
+    ]
+    session = db_session.scalar(
+        select(DutySession).where(DutySession.assignment_id == assignment.id)
+    )
+    assert session is not None
+    assert session.start_hmr is not None and session.end_hmr is not None
+    assert session.end_hmr - session.start_hmr == pytest.approx(7.5)
 
 
 def test_sequential_same_day_sessions_are_distinct_and_reportable(

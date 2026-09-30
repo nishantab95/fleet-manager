@@ -23,6 +23,7 @@ from fleet_api.db.models.common import UpdatedTimestampModel, utc_now
 from fleet_api.domain.enums import (
     EmergencyCategory,
     EmergencyStatus,
+    HourMeterReadingType,
     KmReadingType,
     OperationalEventType,
     VerificationStatus,
@@ -107,6 +108,24 @@ class KmReading(Base):
     )
 
 
+class HourMeterReading(Base):
+    __tablename__ = "hour_meter_readings"
+
+    event_id: Mapped[UUID] = mapped_column(
+        ForeignKey("operational_events.id", ondelete="CASCADE"), primary_key=True
+    )
+    reading_type: Mapped[HourMeterReadingType] = mapped_column(
+        SAEnum(HourMeterReadingType, name="hour_meter_reading_type_enum"), nullable=False
+    )
+    reading_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    object_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "reading_value >= 0", name="ck_hour_meter_readings_non_negative"
+        ),
+        Index("ix_hour_meter_readings_type", "reading_type"),
+    )
 class DieselEvent(Base):
     __tablename__ = "diesel_events"
 

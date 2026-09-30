@@ -44,14 +44,17 @@ class LocalDutySession {
     required this.tipperId,
     required this.tipperRegistrationNumber,
     required this.tipperShortName,
+    this.assetType = 'TIPPER',
     required this.siteId,
     required this.siteName,
     required this.supervisorName,
     required this.startClientEventUuid,
     required this.startKm,
+    this.startHmr,
     required this.startedAt,
     required this.endClientEventUuid,
     required this.endKm,
+    this.endHmr,
     required this.endedAt,
     required this.state,
     required this.serverSessionId,
@@ -64,16 +67,19 @@ class LocalDutySession {
   final String localSessionId;
   final String assignmentId;
   final String tipperId;
-  final String tipperRegistrationNumber;
+  final String? tipperRegistrationNumber;
   final String? tipperShortName;
+  final String assetType;
   final String siteId;
   final String siteName;
   final String supervisorName;
   final String startClientEventUuid;
-  final double startKm;
+  final double? startKm;
+  final double? startHmr;
   final DateTime startedAt;
   final String? endClientEventUuid;
   final double? endKm;
+  final double? endHmr;
   final DateTime? endedAt;
   final String state;
   final String? serverSessionId;
@@ -84,10 +90,12 @@ class LocalDutySession {
   LocalDutySession copyWith({
     String? accountScope,
     double? startKm,
+    double? startHmr,
     String? state,
     String? serverSessionId,
     String? endClientEventUuid,
     double? endKm,
+    double? endHmr,
     DateTime? endedAt,
     String? lastEventUuid,
     DateTime? updatedAt,
@@ -99,14 +107,17 @@ class LocalDutySession {
       tipperId: tipperId,
       tipperRegistrationNumber: tipperRegistrationNumber,
       tipperShortName: tipperShortName,
+      assetType: assetType,
       siteId: siteId,
       siteName: siteName,
       supervisorName: supervisorName,
       startClientEventUuid: startClientEventUuid,
       startKm: startKm ?? this.startKm,
+      startHmr: startHmr ?? this.startHmr,
       startedAt: startedAt,
       endClientEventUuid: endClientEventUuid ?? this.endClientEventUuid,
       endKm: endKm ?? this.endKm,
+      endHmr: endHmr ?? this.endHmr,
       endedAt: endedAt ?? this.endedAt,
       state: state ?? this.state,
       serverSessionId: serverSessionId ?? this.serverSessionId,
@@ -123,14 +134,17 @@ class LocalDutySession {
     'tipperId': tipperId,
     'tipperRegistrationNumber': tipperRegistrationNumber,
     'tipperShortName': tipperShortName,
+    'assetType': assetType,
     'siteId': siteId,
     'siteName': siteName,
     'supervisorName': supervisorName,
     'startClientEventUuid': startClientEventUuid,
     'startKm': startKm,
+    'startHmr': startHmr,
     'startedAt': startedAt.toIso8601String(),
     'endClientEventUuid': endClientEventUuid,
     'endKm': endKm,
+    'endHmr': endHmr,
     'endedAt': endedAt?.toIso8601String(),
     'state': state,
     'serverSessionId': serverSessionId,
@@ -145,16 +159,19 @@ class LocalDutySession {
       localSessionId: json['localSessionId'] as String,
       assignmentId: json['assignmentId'] as String,
       tipperId: json['tipperId'] as String,
-      tipperRegistrationNumber: json['tipperRegistrationNumber'] as String,
+      tipperRegistrationNumber: json['tipperRegistrationNumber'] as String?,
       tipperShortName: json['tipperShortName'] as String?,
+      assetType: json['assetType'] as String? ?? 'TIPPER',
       siteId: json['siteId'] as String,
       siteName: json['siteName'] as String,
       supervisorName: json['supervisorName'] as String,
       startClientEventUuid: json['startClientEventUuid'] as String,
-      startKm: (json['startKm'] as num).toDouble(),
+      startKm: (json['startKm'] as num?)?.toDouble(),
+      startHmr: (json['startHmr'] as num?)?.toDouble(),
       startedAt: DateTime.parse(json['startedAt'] as String).toUtc(),
       endClientEventUuid: json['endClientEventUuid'] as String?,
       endKm: (json['endKm'] as num?)?.toDouble(),
+      endHmr: (json['endHmr'] as num?)?.toDouble(),
       endedAt: (json['endedAt'] as String?) == null
           ? null
           : DateTime.parse(json['endedAt'] as String).toUtc(),

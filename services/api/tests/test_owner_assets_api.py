@@ -154,6 +154,36 @@ def test_owner_creates_owned_tipper(
         client.close()
 
 
+@pytest.mark.parametrize(
+    "asset_type",
+    ["EXCAVATOR", "BACKHOE_LOADER", "ROLLER", "GRADER"],
+)
+def test_owner_creates_machinery_without_registration(
+    db_session: Session,
+    tenant_records: dict[str, object],
+    asset_type: str,
+) -> None:
+    client = owner_client(
+        db_session, value(tenant_records, "owner_a", CompanyMembership)
+    )
+    try:
+        response = client.post(
+            "/api/v1/owner/assets",
+            json=owned_payload(
+                asset_code=f"{asset_type}-01",
+                asset_type=asset_type,
+                registration_number=None,
+                short_name=f"{asset_type} machine",
+            ),
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["asset_type"] == asset_type
+        assert body["registration_number"] is None
+    finally:
+        client.close()
+
+
 def test_owner_creates_rented_tipper(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:

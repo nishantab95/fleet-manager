@@ -7,6 +7,16 @@ typedef OwnerUnauthorized = Future<void> Function();
 
 enum OwnerFleetFilter { all, owned, rented, inactive }
 
+const ownerAssetTypes = <String>[
+  'TIPPER',
+  'EXCAVATOR',
+  'BACKHOE_LOADER',
+  'ROLLER',
+  'GRADER',
+];
+
+String assetTypeLabel(String value) => value.replaceAll('_', ' ');
+
 class OwnerFleetScreen extends StatefulWidget {
   const OwnerFleetScreen({required this.api, this.onUnauthorized, super.key});
 
@@ -80,6 +90,7 @@ class _OwnerFleetScreenState extends State<OwnerFleetScreen> {
         asset.assetCode,
         asset.registrationNumber,
         asset.shortName,
+        asset.assetType,
         asset.rentalPartyName,
       ].whereType<String>().any((value) => value.toLowerCase().contains(query));
     }).toList();
@@ -165,7 +176,7 @@ class _OwnerFleetScreenState extends State<OwnerFleetScreen> {
                         key: const Key('add-tipper'),
                         onPressed: _add,
                         icon: const Icon(Icons.add),
-                        label: const Text('ADD TIPPER'),
+                        label: const Text('ADD ASSET'),
                       ),
                     ],
                   ),
@@ -336,7 +347,10 @@ class OwnerAssetCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 6,
               children: [
-                _FleetChip(label: asset.assetType, tone: _ChipTone.neutral),
+                _FleetChip(
+                  label: assetTypeLabel(asset.assetType),
+                  tone: _ChipTone.neutral,
+                ),
                 _FleetChip(
                   label: asset.ownershipType,
                   tone: asset.isRented
@@ -370,10 +384,7 @@ class OwnerAssetCard extends StatelessWidget {
                     child: const Text('ASSIGN TO SITE'),
                   ),
                 ],
-                if (asset.isActive &&
-                    asset.assetType == 'TIPPER' &&
-                    deployment != null &&
-                    onDriver != null)
+                if (asset.isActive && deployment != null && onDriver != null)
                   OutlinedButton(
                     key: Key('assign-driver-${asset.id}'),
                     onPressed: onDriver,
@@ -447,6 +458,7 @@ class _OwnerAssetFormScreenState extends State<OwnerAssetFormScreen> {
   late final TextEditingController _rentalParty;
   late final TextEditingController _manufacturer;
   late final TextEditingController _model;
+  late String _assetType;
   late String _ownership;
   DateTime? _rentalStart;
   DateTime? _rentalEnd;
@@ -466,6 +478,7 @@ class _OwnerAssetFormScreenState extends State<OwnerAssetFormScreen> {
     _rentalParty = TextEditingController(text: asset?.rentalPartyName);
     _manufacturer = TextEditingController(text: asset?.manufacturer);
     _model = TextEditingController(text: asset?.model);
+    _assetType = asset?.assetType ?? 'TIPPER';
     _ownership = asset?.ownershipType ?? 'OWNED';
     _rentalStart = asset?.rentalStartDate;
     _rentalEnd = asset?.rentalEndDate;
@@ -521,9 +534,10 @@ class _OwnerAssetFormScreenState extends State<OwnerAssetFormScreen> {
     });
     final input = OwnerAssetInput(
       assetCode: _assetCode.text.trim(),
-      registrationNumber: _registration.text.trim(),
+      registrationNumber: _nullable(_registration.text),
       shortName: _nullable(_shortName.text),
       ownershipType: _ownership,
+      assetType: _assetType,
       manufacturer: _nullable(_manufacturer.text),
       model: _nullable(_model.text),
       rentalPartyName: _rented ? _nullable(_rentalParty.text) : null,
@@ -540,7 +554,7 @@ class _OwnerAssetFormScreenState extends State<OwnerAssetFormScreen> {
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } on Object {
-      if (mounted) setState(() => _error = 'Tipper could not be saved.');
+      if (mounted) setState(() => _error = 'Asset could not be saved.');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -548,12 +562,29 @@ class _OwnerAssetFormScreenState extends State<OwnerAssetFormScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(_editing ? 'EDIT TIPPER' : 'ADD TIPPER')),
+    appBar: AppBar(title: Text(_editing ? 'EDIT ASSET' : 'ADD ASSET')),
     body: Form(
       key: _formKey,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          DropdownButtonFormField<String>(
+            key: const Key('asset-type-field'),
+            initialValue: _assetType,
+            decoration: const InputDecoration(labelText: 'Asset Type'),
+            items: ownerAssetTypes
+                .map(
+                  (type) => DropdownMenuItem(
+                    value: type,
+                    child: Text(assetTypeLabel(type)),
+                  ),
+                )
+                .toList(),
+            onChanged: _editing
+                ? null
+                : (value) => setState(() => _assetType = value ?? 'TIPPER'),
+          ),
+          const SizedBox(height: 12),
           TextFormField(
             key: const Key('asset-code-field'),
             controller: _assetCode,
@@ -565,12 +596,17 @@ class _OwnerAssetFormScreenState extends State<OwnerAssetFormScreen> {
             key: const Key('registration-field'),
             controller: _registration,
             decoration: const InputDecoration(labelText: 'Registration Number'),
-            validator: (value) => _required(value, 'Registration number'),
+            validator: (value) => _assetType == 'TIPPER'
+                ? _required(value, 'Registration number')
+                : null,
           ),
           const SizedBox(height: 12),
           TextFormField(
+            key: const Key('short-name-field'),
             controller: _shortName,
             decoration: const InputDecoration(labelText: 'Short Name'),
+            validator: (value) =>
+                _assetType == 'TIPPER' ? null : _required(value, 'Short name'),
           ),
           const SizedBox(height: 18),
           Text('Ownership', style: Theme.of(context).textTheme.titleMedium),
@@ -664,7 +700,7 @@ class _OwnerAssetFormScreenState extends State<OwnerAssetFormScreen> {
                 child: FilledButton(
                   key: const Key('save-tipper'),
                   onPressed: _saving ? null : _save,
-                  child: Text(_saving ? 'SAVING…' : 'SAVE TIPPER'),
+                  child: Text(_saving ? 'SAVING…' : 'SAVE ASSET'),
                 ),
               ),
             ],
@@ -836,14 +872,13 @@ class _OwnerAssetDetailScreenState extends State<OwnerAssetDetailScreen> {
             title: 'Asset identity',
             rows: {
               'Asset code': _asset.assetCode,
-              'Type': _asset.assetType,
+              'Type': assetTypeLabel(_asset.assetType),
               'Registration': _asset.registrationNumber ?? '—',
               'Manufacturer': _asset.manufacturer ?? '—',
               'Model': _asset.model ?? '—',
             },
           ),
           if (_asset.isActive &&
-              _asset.assetType == 'TIPPER' &&
               deployment != null &&
               widget.api is DriverAssignmentApi)
             FilledButton.tonal(

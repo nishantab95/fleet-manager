@@ -130,3 +130,17 @@ class DutyOdometerContinuityError(DomainError):
 
 class DutyOdometerOutOfRangeError(DomainError):
     pass
+
+
+class DutyHourMeterValidationError(DomainError):
+    pass
+
+
+class DutyHourMeterContinuityError(DomainError):
+    def __init__(self, message: str, *, previous_end_hmr: Decimal) -> None:
+        super().__init__(message)
+        self.previous_end_hmr = previous_end_hmr
+
+
+class DutyHourMeterOutOfRangeError(DomainError):
+    pass

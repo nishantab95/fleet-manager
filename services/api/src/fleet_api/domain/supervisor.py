@@ -18,6 +18,7 @@ from fleet_api.db.models import (
     EventVerification,
     EvidenceObject,
     FleetAsset,
+    HourMeterReading,
     KmReading,
     OperationalEvent,
     Site,
@@ -54,6 +55,7 @@ class SupervisorEvent:
     driver: User
     trip: TripEvent | None
     km: KmReading | None
+    hmr: HourMeterReading | None
     diesel: DieselEvent | None
     emergency: EmergencyEvent | None
     evidence: EvidenceObject | None
@@ -187,11 +189,14 @@ class SupervisorService:
         event, assignment, asset, site, _driver_membership, _driver = row
         trip = self.session.get(TripEvent, event.id)
         km = self.session.get(KmReading, event.id)
+        hmr = self.session.get(HourMeterReading, event.id)
         diesel = self.session.get(DieselEvent, event.id)
         emergency = self.session.get(EmergencyEvent, event.id)
         object_reference = None
         if km is not None:
             object_reference = km.object_reference
+        elif hmr is not None:
+            object_reference = hmr.object_reference
         elif diesel is not None:
             object_reference = diesel.object_reference
         evidence = None
@@ -212,6 +217,7 @@ class SupervisorService:
             driver=_driver,
             trip=trip,
             km=km,
+            hmr=hmr,
             diesel=diesel,
             emergency=emergency,
             evidence=evidence,

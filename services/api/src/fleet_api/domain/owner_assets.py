@@ -264,26 +264,28 @@ class OwnerAssetService:
         self,
         *,
         asset_code: str,
-        registration_number: str,
+        registration_number: str | None,
         exclude_asset_id: UUID | None = None,
     ) -> None:
         code_query = select(FleetAsset.id).where(
             FleetAsset.company_id == self.company_id,
             FleetAsset.asset_code == asset_code,
         )
-        registration_query = select(FleetAsset.id).where(
-            FleetAsset.company_id == self.company_id,
-            FleetAsset.registration_number == registration_number,
-        )
         if exclude_asset_id is not None:
             code_query = code_query.where(FleetAsset.id != exclude_asset_id)
-            registration_query = registration_query.where(
-                FleetAsset.id != exclude_asset_id
-            )
         if self.session.scalar(code_query) is not None:
             raise ConflictError("asset code is already used by this company")
-        if self.session.scalar(registration_query) is not None:
-            raise ConflictError("registration number is already used by this company")
+        if registration_number is not None:
+            registration_query = select(FleetAsset.id).where(
+                FleetAsset.company_id == self.company_id,
+                FleetAsset.registration_number == registration_number,
+            )
+            if exclude_asset_id is not None:
+                registration_query = registration_query.where(
+                    FleetAsset.id != exclude_asset_id
+                )
+            if self.session.scalar(registration_query) is not None:
+                raise ConflictError("registration number is already used by this company")
 
     @staticmethod
     def _validate_rental(
@@ -313,7 +315,7 @@ class OwnerAssetService:
         asset_type: FleetAssetType,
         ownership_type: AssetOwnershipType,
         asset_code: str,
-        registration_number: str,
+        registration_number: str | None,
         short_name: str | None,
         manufacturer: str | None,
         model: str | None,
@@ -321,10 +323,16 @@ class OwnerAssetService:
         rental_start_date: date | None,
         rental_end_date: date | None,
     ) -> OwnerAssetView:
-        if asset_type != FleetAssetType.TIPPER:
-            raise DomainError("Only tippers can be created in this phase.")
         normalized_code = normalize_asset_code(asset_code)
-        normalized_registration = normalize_registration_number(registration_number)
+        if asset_type == FleetAssetType.TIPPER and registration_number is None:
+            raise DomainError("Registration number is required for a tipper.")
+        normalized_registration = (
+            normalize_registration_number(registration_number)
+            if registration_number is not None
+            else None
+        )
+        if asset_type != FleetAssetType.TIPPER and _clean_optional(short_name) is None:
+            raise DomainError("Short name is required for machinery.")
         clean_rental_party = _clean_optional(rental_party_name)
         self._validate_rental(
             ownership_type=ownership_type,
@@ -390,10 +398,12 @@ class OwnerAssetService:
                 raise DomainError("Asset code is required.")
             asset.asset_code = normalize_asset_code(asset_code)
         if "registration_number" in fields_set:
-            if registration_number is None:
+            if registration_number is None and asset.asset_type == FleetAssetType.TIPPER:
                 raise DomainError("Registration number is required for a tipper.")
-            asset.registration_number = normalize_registration_number(
-                registration_number
+            asset.registration_number = (
+                normalize_registration_number(registration_number)
+                if registration_number is not None
+                else None
             )
         if "short_name" in fields_set:
             asset.short_name = _clean_optional(short_name)
@@ -434,7 +444,6 @@ class OwnerAssetService:
             rental_start_date=asset.rental_start_date,
             rental_end_date=asset.rental_end_date,
         )
-        assert asset.registration_number is not None
         self._ensure_unique(
             asset_code=asset.asset_code,
             registration_number=asset.registration_number,

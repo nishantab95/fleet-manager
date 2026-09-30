@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from io import BytesIO
 from typing import NoReturn
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from openpyxl import Workbook  # type: ignore[import-untyped]
-from openpyxl.cell.cell import MergedCell  # type: ignore[import-untyped]
-from openpyxl.styles import Font, PatternFill  # type: ignore[import-untyped]
+from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
+from openpyxl.worksheet.worksheet import Worksheet  # type: ignore[import-untyped]
 from sqlalchemy import String, func, select
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.orm import Session
@@ -37,7 +39,13 @@ from fleet_api.auth.service import AuthContext
 from fleet_api.core.config import Settings
 from fleet_api.db.models import Assignment, CompanyMembership, DutySession, FleetAsset, Site, User
 from fleet_api.db.session import get_db
-from fleet_api.domain.enums import DutySessionStatus, SiteClosureStatus, VerificationStatus
+from fleet_api.domain.enums import (
+    DutySessionStatus,
+    FleetAssetType,
+    OperationalEventType,
+    SiteClosureStatus,
+    VerificationStatus,
+)
 from fleet_api.domain.errors import (
     ClosureBlockedError,
     ConflictError,
@@ -103,6 +111,8 @@ def _event_response(event: ReportEvent) -> ReportEventResponse:
         duty_session_id=event.duty_session_id,
         tipper_id=event.asset_id,
         tipper_registration_number=event.asset_registration_number,
+        asset_code=event.asset_code,
+        asset_type=FleetAssetType(event.asset_type),
         site_id=event.site_id,
         site_name=event.site_name,
         driver_name=event.driver_name,
@@ -144,21 +154,37 @@ def _tipper_response(item: AssetDailyReport) -> TipperDailyReportResponse:
         tipper_id=item.asset.id,
         registration_number=item.asset.registration_number or item.asset.asset_code,
         short_name=item.asset.short_name,
+        asset_type=item.asset.asset_type,
         site_id=item.site.id,
         site_name=item.site.name,
         driver_name=item.driver_name,
         supervisor_name=item.supervisor_name,
         assignment_starts_at=item.assignment.starts_at,
         assignment_ends_at=item.assignment.ends_at,
-        approved_trip_count=item.approved_trip_count,
-        pending_trip_count=item.pending_trip_count,
-        disputed_trip_count=item.disputed_trip_count,
-        rejected_trip_count=item.rejected_trip_count,
+        approved_trip_count=(
+            item.approved_trip_count if item.asset.asset_type.value == "TIPPER" else None
+        ),
+        pending_trip_count=(
+            item.pending_trip_count if item.asset.asset_type.value == "TIPPER" else None
+        ),
+        disputed_trip_count=(
+            item.disputed_trip_count if item.asset.asset_type.value == "TIPPER" else None
+        ),
+        rejected_trip_count=(
+            item.rejected_trip_count if item.asset.asset_type.value == "TIPPER" else None
+        ),
+        trips_state=item.trips_state.value,
         start_km=item.start_km,
         end_km=item.end_km,
         distance_km=item.distance_km,
+        start_hmr=item.start_hmr,
+        end_hmr=item.end_hmr,
+        machine_hours=item.machine_hours,
+        distance_state=item.distance_state.value,
+        machine_hours_state=item.machine_hours_state.value,
         km_per_approved_trip=item.km_per_approved_trip,
         verified_diesel_issued=item.verified_diesel_issued,
+        pending_diesel_issued=item.pending_diesel_issued,
         diesel_issued_per_approved_trip=item.diesel_issued_per_approved_trip,
         first_trip_completed_at=item.first_trip_completed_at,
         last_trip_completed_at=item.last_trip_completed_at,
@@ -224,9 +250,14 @@ def _duty_reports(
     db: Session,
     context: AuthContext,
     requested_date: date | None = None,
+    report: DashboardReport | None = None,
 ) -> list[DriverDutyReportResponse]:
     service = _service(db, context)
     day = service.operational_day(requested_date)
+    report = report or service.dashboard(day.operational_date)
+    report_by_assignment = {
+        row.assignment.id: row for site_report in report.sites for row in site_report.rows
+    }
     rows = db.execute(
         select(
             DutySession,
@@ -249,6 +280,7 @@ def _duty_reports(
     now = datetime.now(UTC)
     reports: list[DriverDutyReportResponse] = []
     for duty, assignment, asset, site, driver_name in rows:
+        daily = report_by_assignment.get(assignment.id)
         actual_end = duty.ended_at
         actual_reference = actual_end or now
         span = max(0.0, (actual_reference - duty.started_at).total_seconds())
@@ -264,14 +296,29 @@ def _duty_reports(
                 session_id=duty.id,
                 assignment_id=assignment.id,
                 driver_name=driver_name,
+                asset_code=asset.asset_code,
                 tipper_registration_number=asset.registration_number or asset.asset_code,
+                asset_type=asset.asset_type,
                 site_name=site.name,
                 duty_start=duty.started_at,
                 start_km=duty.start_km,
+                start_hmr=duty.start_hmr,
                 regular_duty_minutes=duty.configured_regular_duty_minutes,
                 regular_duty_ends_at=duty.regular_duty_ends_at,
                 actual_duty_end=actual_end,
                 end_km=duty.end_km,
+                end_hmr=duty.end_hmr,
+                machine_hours=(
+                    duty.end_hmr - duty.start_hmr
+                    if duty.start_hmr is not None and duty.end_hmr is not None
+                    else None
+                ),
+                verified_diesel_issued=(
+                    daily.verified_diesel_issued if daily is not None else Decimal("0")
+                ),
+                pending_diesel_issued=(
+                    daily.pending_diesel_issued if daily is not None else Decimal("0")
+                ),
                 actual_duty_span_seconds=span,
                 overtime_minutes=overtime,
                 status=duty.status.value,
@@ -337,7 +384,12 @@ def dashboard(
         report = _service(db, context).dashboard(operational_date)
         return _dashboard_response(
             report,
-            _duty_reports(db, context, report.operational_day.operational_date),
+            _duty_reports(
+                db,
+                context,
+                report.operational_day.operational_date,
+                report=report,
+            ),
         )
     except DomainError as exc:
         _fail(exc)
@@ -463,22 +515,15 @@ def _safe_excel_text(value: object) -> object:
 def _event_actor_time(event: ReportEvent) -> tuple[str | None, datetime | None]:
     for item in reversed(event.verification_history):
         if item.status == VerificationStatus.APPROVED:
-            return item.actor_name, item.created_at.astimezone(UTC).replace(tzinfo=None)
+            return item.actor_name, item.created_at
     return None, None
 
 
-def _excel_datetime(value: datetime) -> datetime:
-    """Excel stores timestamps without timezone metadata; normalize to UTC first."""
-    return value.astimezone(UTC).replace(tzinfo=None)
-
-
-def _excel_local_datetime(value: datetime) -> datetime:
-    """Keep a report-timezone timestamp readable in Excel's timezone-naive cells."""
-    return value.replace(tzinfo=None)
-
-
-def _excel_metric(value: object) -> object:
-    return value if value is not None else "Unavailable"
+def _excel_report_datetime(value: datetime, reporting_zone: ZoneInfo) -> datetime:
+    """Convert an aware timestamp to the report timezone for Excel's naive cells."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(reporting_zone).replace(tzinfo=None)
 
 
 def _evidence_application_url(base_url: str, event_id: UUID) -> str:
@@ -495,6 +540,134 @@ def _evidence_formula(base_url: str, event_id: UUID) -> _ExcelFormula:
     return _ExcelFormula(f'=HYPERLINK("{url}","Open Evidence")')
 
 
+def _asset_type_label(asset_type: FleetAssetType) -> str:
+    return asset_type.value.replace("_", " ")
+
+
+def _assignment_status(assignment: Assignment) -> str:
+    return "CURRENT" if assignment.ends_at is None else "HISTORICAL"
+
+
+def _metric_value(value: object, state: object) -> object:
+    state_value = getattr(state, "value", state)
+    if state_value == "NOT_APPLICABLE":
+        return "—"
+    if state_value == "MISSING":
+        return "MISSING"
+    return value
+
+
+def _pending_status(row: AssetDailyReport) -> str:
+    pending_events = sum(
+        1
+        for event in row.events
+        if event.event_type != OperationalEventType.EMERGENCY
+        and event.verification_status == VerificationStatus.PENDING_VERIFICATION
+    )
+    details: list[str] = []
+    if row.pending_diesel_issued:
+        details.append(f"Diesel {row.pending_diesel_issued:g} L pending")
+    if pending_events:
+        details.append(f"{pending_events} pending")
+    details.append(row.completeness_status.replace("_", " "))
+    return " · ".join(details)
+
+
+def _append_excel_row(worksheet: Worksheet, row: list[object]) -> None:
+    worksheet.append(
+        [
+            value.value if isinstance(value, _ExcelFormula) else _safe_excel_text(value)
+            for value in row
+        ]
+    )
+
+
+def _format_report_sheet(
+    worksheet: Worksheet,
+    *,
+    title: str,
+    timezone_name: str,
+    header_row: int = 4,
+) -> None:
+    worksheet["A1"] = title
+    worksheet["A1"].font = Font(bold=True, size=15, color="173C35")
+    worksheet["A2"] = "Times shown in:"
+    worksheet["B2"] = timezone_name
+    worksheet["A2"].font = Font(bold=True, color="173C35")
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    for cell in worksheet[header_row]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    worksheet.freeze_panes = f"A{header_row + 1}"
+    worksheet.auto_filter.ref = (
+        f"A{header_row}:{get_column_letter(worksheet.max_column)}"
+        f"{max(header_row, worksheet.max_row)}"
+    )
+    for column in range(1, worksheet.max_column + 1):
+        width = min(
+            max(
+                len(str(worksheet.cell(row=row, column=column).value or ""))
+                for row in range(1, worksheet.max_row + 1)
+            )
+            + 2,
+            32,
+        )
+        worksheet.column_dimensions[get_column_letter(column)].width = width
+    for row in worksheet.iter_rows(min_row=header_row + 1):
+        for cell in row:
+            if isinstance(cell.value, timedelta):
+                cell.number_format = '[h]"h "mm"m"'
+            elif cell.is_date:
+                cell.number_format = "yyyy-mm-dd hh:mm"
+    for column in range(1, worksheet.max_column + 1):
+        header = worksheet.cell(row=header_row, column=column).value
+        if header == "Date":
+            for row in range(header_row + 1, worksheet.max_row + 1):
+                worksheet.cell(row=row, column=column).number_format = "yyyy-mm-dd"
+        if header in {"Pending", "Pending / Status"}:
+            worksheet.column_dimensions[get_column_letter(column)].width = 36
+            for row in range(header_row + 1, worksheet.max_row + 1):
+                worksheet.cell(row=row, column=column).alignment = Alignment(
+                    vertical="top", wrap_text=True
+                )
+        if header in {
+            "Start KM",
+            "End KM",
+            "Distance KM",
+            "Start HMR",
+            "End HMR",
+            "Machine Hours",
+            "Diesel L",
+            "Verified Diesel L",
+            "Value",
+            "Meter Start",
+            "Meter End",
+            "Usage",
+        }:
+            for row in range(header_row + 1, worksheet.max_row + 1):
+                worksheet.cell(row=row, column=column).number_format = "0.00"
+
+
+def _add_report_sheet(
+    workbook: Workbook,
+    *,
+    title: str,
+    timezone_name: str,
+    headers: list[str],
+    rows: list[list[object]],
+) -> Worksheet:
+    worksheet = workbook.create_sheet(title)
+    worksheet.append([])
+    worksheet.append([])
+    worksheet.append([])
+    worksheet.append(headers)
+    for row in rows:
+        _append_excel_row(worksheet, row)
+    _format_report_sheet(worksheet, title=title, timezone_name=timezone_name)
+    return worksheet
+
+
 def _build_workbook(
     report: DashboardReport,
     *,
@@ -503,81 +676,39 @@ def _build_workbook(
 ) -> bytes:
     workbook = Workbook()
     workbook.remove(workbook.active)
-    sheets: dict[str, tuple[list[str], list[list[object]]]] = {}
-    summary_headers = [
-        "Date",
-        "Site",
-        "Tipper",
-        "Registration",
-        "Driver",
-        "Approved Trips",
-        "Pending Trips",
-        "Start KM",
-        "End KM",
-        "Total KM",
-        "Diesel Issued",
-        "Emergency Status",
-        "Completeness",
-        "Closure Status",
-        "Rejected Trips",
-        "Disputed Trips",
-        "Supervisor",
-        "KM / Approved Trip",
-        "Diesel Issued / Approved Trip",
-        "First Trip",
-        "Last Trip",
-        "Recorded Activity Span",
-        "Avg Trip Completion Interval",
-        "Median Trip Completion Interval",
-        "Longest Trip Gap",
-        "Pending Diesel",
-        "Disputed Diesel",
-        "Missing START",
-        "Missing END",
-        "Exceptions",
-    ]
+    timezone_name = report.operational_day.reporting_timezone
+    reporting_zone = ZoneInfo(timezone_name)
     management_headers = [
+        "Asset",
+        "Type",
         "Site",
-        "Tipper",
-        "Driver",
-        "Supervisor",
-        "Approved Trips",
-        "Pending Trips",
-        "Rejected Trips",
-        "Disputed Trips",
-        "Start KM",
-        "End KM",
+        "Driver / Operator",
+        "Assignment Status",
+        "Duty Status",
+        "Trips",
         "Distance KM",
-        "KM / Approved Trip",
-        "Diesel Issued",
-        "Diesel Issued / Approved Trip",
-        "First Trip",
-        "Last Trip",
-        "Recorded Activity Span",
-        "Avg Trip Completion Interval",
-        "Median Trip Completion Interval",
-        "Longest Trip Gap",
-        "Pending Diesel",
-        "Disputed Diesel",
-        "Missing START",
-        "Missing END",
-        "Unresolved Emergencies",
-        "Completeness",
-        "Closure",
-        "Exceptions",
-        "Evidence / Details",
+        "Machine Hours",
+        "Verified Diesel L",
+        "Pending / Status",
     ]
-    summary_rows: list[list[object]] = []
     management_rows: list[list[object]] = []
+    tipper_rows: list[list[object]] = []
+    machinery_rows: list[list[object]] = []
     trip_rows: list[list[object]] = []
-    km_rows: list[list[object]] = []
+    meter_rows: list[list[object]] = []
     diesel_rows: list[list[object]] = []
     exception_rows: list[list[object]] = []
     duty_rows: list[list[object]] = []
+    duty_by_assignment = {
+        duty.assignment_id: duty for duty in (duty_reports or [])
+    }
     for site in report.sites:
         for row in site.rows:
-            emergency = "UNRESOLVED" if row.unresolved_emergency_count else "CLEAR"
-            exception_text = "; ".join(item.code for item in row.exceptions) or "None"
+            assignment_status = _assignment_status(row.assignment)
+            duty = duty_by_assignment.get(row.assignment.id)
+            duty_status = duty.status if duty is not None else "NO DUTY"
+            pending_status = _pending_status(row)
+            asset_type = _asset_type_label(row.asset.asset_type)
             approved_trip_events = sorted(
                 (
                     event
@@ -592,106 +723,72 @@ def _build_workbook(
             for event in approved_trip_events:
                 if previous is not None:
                     previous_approved_by_event[event.event_id] = (
-                        _excel_datetime(previous.device_created_at),
+                        _excel_report_datetime(previous.device_created_at, reporting_zone),
                         event.device_created_at - previous.device_created_at,
                     )
                 previous = event
-            first_evidence = next(
-                (event for event in row.events if event.evidence_available),
-                None,
-            )
-            evidence_or_details: object = (
-                _evidence_formula(web_public_base_url, first_evidence.event_id)
-                if first_evidence is not None
-                else "No evidence available"
-            )
-            summary_rows.append(
-                [
-                    report.operational_day.operational_date,
-                    site.site.name,
-                    row.asset.short_name
-                    or row.asset.registration_number
-                    or row.asset.asset_code,
-                    row.asset.registration_number or row.asset.asset_code,
-                    row.driver_name,
-                    row.approved_trip_count,
-                    row.pending_trip_count,
-                    row.start_km,
-                    row.end_km,
-                    row.distance_km,
-                    row.verified_diesel_issued,
-                    emergency,
-                    row.completeness_status,
-                    site.closure.status.value,
-                    row.rejected_trip_count,
-                    row.disputed_trip_count,
-                    row.supervisor_name,
-                    _excel_metric(row.km_per_approved_trip),
-                    _excel_metric(row.diesel_issued_per_approved_trip),
-                    _excel_metric(
-                        _excel_local_datetime(row.first_trip_completed_at)
-                        if row.first_trip_completed_at is not None
-                        else None
-                    ),
-                    _excel_metric(
-                        _excel_local_datetime(row.last_trip_completed_at)
-                        if row.last_trip_completed_at is not None
-                        else None
-                    ),
-                    _excel_metric(row.recorded_activity_span),
-                    _excel_metric(row.avg_trip_completion_interval),
-                    _excel_metric(row.median_trip_completion_interval),
-                    _excel_metric(row.longest_trip_gap),
-                    row.pending_diesel_count,
-                    row.disputed_diesel_count,
-                    row.missing_start_reading,
-                    row.missing_end_reading,
-                    exception_text,
-                ]
-            )
             management_rows.append(
                 [
+                    row.asset.asset_code,
+                    asset_type,
                     site.site.name,
-                    row.asset.short_name
-                    or row.asset.registration_number
-                    or row.asset.asset_code,
                     row.driver_name,
-                    row.supervisor_name,
-                    row.approved_trip_count,
-                    row.pending_trip_count,
-                    row.rejected_trip_count,
-                    row.disputed_trip_count,
-                    row.start_km,
-                    row.end_km,
-                    row.distance_km,
-                    _excel_metric(row.km_per_approved_trip),
+                    assignment_status,
+                    duty_status,
+                    _metric_value(row.approved_trip_count, row.trips_state),
+                    _metric_value(row.distance_km, row.distance_state),
+                    _metric_value(row.machine_hours, row.machine_hours_state),
                     row.verified_diesel_issued,
-                    _excel_metric(row.diesel_issued_per_approved_trip),
-                    _excel_metric(
-                        _excel_local_datetime(row.first_trip_completed_at)
-                        if row.first_trip_completed_at is not None
-                        else None
-                    ),
-                    _excel_metric(
-                        _excel_local_datetime(row.last_trip_completed_at)
-                        if row.last_trip_completed_at is not None
-                        else None
-                    ),
-                    _excel_metric(row.recorded_activity_span),
-                    _excel_metric(row.avg_trip_completion_interval),
-                    _excel_metric(row.median_trip_completion_interval),
-                    _excel_metric(row.longest_trip_gap),
-                    row.pending_diesel_count,
-                    row.disputed_diesel_count,
-                    row.missing_start_reading,
-                    row.missing_end_reading,
-                    row.unresolved_emergency_count,
-                    row.completeness_status,
-                    site.closure.status.value,
-                    exception_text,
-                    evidence_or_details,
+                    pending_status,
                 ]
             )
+            common_times = (
+                _excel_report_datetime(duty.duty_start, reporting_zone)
+                if duty is not None
+                else None,
+                _excel_report_datetime(duty.actual_duty_end, reporting_zone)
+                if duty is not None and duty.actual_duty_end is not None
+                else None,
+            )
+            if row.asset.asset_type == FleetAssetType.TIPPER:
+                tipper_rows.append(
+                    [
+                        report.operational_day.operational_date,
+                        site.site.name,
+                        row.asset.asset_code,
+                        row.asset.registration_number or "—",
+                        row.driver_name,
+                        assignment_status,
+                        row.start_km,
+                        row.end_km,
+                        _metric_value(row.distance_km, row.distance_state),
+                        row.approved_trip_count,
+                        row.verified_diesel_issued,
+                        common_times[0],
+                        common_times[1],
+                        pending_status,
+                        row.completeness_status.replace("_", " "),
+                    ]
+                )
+            else:
+                machinery_rows.append(
+                    [
+                        report.operational_day.operational_date,
+                        site.site.name,
+                        row.asset.asset_code,
+                        asset_type,
+                        row.driver_name,
+                        assignment_status,
+                        row.start_hmr,
+                        row.end_hmr,
+                        _metric_value(row.machine_hours, row.machine_hours_state),
+                        row.verified_diesel_issued,
+                        common_times[0],
+                        common_times[1],
+                        pending_status,
+                        row.completeness_status.replace("_", " "),
+                    ]
+                )
             for event in row.events:
                 actor, verified_at = _event_actor_time(event)
                 if event.event_type.value == "TRIP_COMPLETE":
@@ -700,26 +797,32 @@ def _build_workbook(
                         [
                             report.operational_day.operational_date,
                             site.site.name,
-                            row.asset.registration_number or row.asset.asset_code,
+                            row.asset.asset_code,
                             row.driver_name,
-                            _excel_datetime(event.device_created_at),
+                            assignment_status,
+                            _excel_report_datetime(event.device_created_at, reporting_zone),
                             event.verification_status.value,
                             actor,
-                            verified_at,
+                            _excel_report_datetime(verified_at, reporting_zone)
+                            if verified_at is not None
+                            else None,
                             previous_approved[0] if previous_approved else None,
                             previous_approved[1] if previous_approved else None,
                         ]
                     )
-                elif event.event_type.value == "KM_READING":
-                    km_rows.append(
+                elif event.event_type.value in {"KM_READING", "HMR_READING"}:
+                    meter_rows.append(
                         [
-                            report.operational_day.operational_date,
+                            _excel_report_datetime(event.device_created_at, reporting_zone),
                             site.site.name,
-                            row.asset.registration_number or row.asset.asset_code,
+                            row.asset.asset_code,
+                            asset_type,
                             row.driver_name,
-                            event.reading_type,
+                            assignment_status,
+                            "ODOMETER" if event.event_type.value == "KM_READING" else "HMR",
+                            "START" if event.reading_type == "START_READING" else "END",
                             event.reading_value,
-                            _excel_datetime(event.device_created_at),
+                            "km" if event.event_type.value == "KM_READING" else "h",
                             event.verification_status.value,
                             (
                                 _evidence_formula(web_public_base_url, event.event_id)
@@ -731,12 +834,13 @@ def _build_workbook(
                 elif event.event_type.value == "DIESEL":
                     diesel_rows.append(
                         [
-                            report.operational_day.operational_date,
+                            _excel_report_datetime(event.device_created_at, reporting_zone),
                             site.site.name,
-                            row.asset.registration_number or row.asset.asset_code,
+                            row.asset.asset_code,
+                            asset_type,
                             row.driver_name,
+                            assignment_status,
                             event.litres,
-                            _excel_datetime(event.device_created_at),
                             event.verification_status.value,
                             (
                                 _evidence_formula(web_public_base_url, event.event_id)
@@ -750,7 +854,9 @@ def _build_workbook(
                     [
                         report.operational_day.operational_date,
                         site.site.name,
-                        row.asset.registration_number or row.asset.asset_code,
+                        row.asset.asset_code,
+                        asset_type,
+                        assignment_status,
                         exception.code,
                         exception.description,
                         "OPEN",
@@ -762,227 +868,142 @@ def _build_workbook(
                     report.operational_day.operational_date,
                     site.site.name,
                     "",
+                    "",
+                    "",
                     "SITE_NOT_CLOSED",
                     f"Site is {site.closure.status.value}",
                     "OPEN",
                 ]
             )
-    sheets["Daily Summary"] = (summary_headers, summary_rows)
-    sheets["Trip Register"] = (
-        [
-            "Date",
-            "Site",
-            "Tipper",
-            "Driver",
-            "Trip Event Time",
-            "Verification Status",
-            "Verified By",
-            "Verified At",
-            "Previous Approved Trip Time",
-            "Interval Since Previous Approved Trip",
-        ],
-        trip_rows,
-    )
-    sheets["KM Register"] = (
-        [
-            "Date",
-            "Site",
-            "Tipper",
-            "Driver",
-            "Reading Type",
-            "KM",
-            "Event Time",
-            "Verification Status",
-            "Evidence",
-        ],
-        km_rows,
-    )
-    sheets["Diesel Register"] = (
-        [
-            "Date",
-            "Site",
-            "Tipper",
-            "Driver",
-            "Litres",
-            "Event Time",
-            "Verification Status",
-            "Evidence",
-        ],
-        diesel_rows,
-    )
-    sheets["Exceptions"] = (
-        ["Date", "Site", "Tipper", "Exception Type", "Description", "Status"],
-        exception_rows,
-    )
     for duty in duty_reports or []:
+        machinery = duty.asset_type != FleetAssetType.TIPPER
         duty_rows.append(
             [
                 duty.operational_date,
-                duty.driver_name,
-                duty.tipper_registration_number,
                 duty.site_name,
-                _excel_local_datetime(duty.duty_start),
-                duty.start_km,
-                duty.regular_duty_minutes / 60,
-                _excel_local_datetime(duty.regular_duty_ends_at),
-                _excel_local_datetime(duty.actual_duty_end) if duty.actual_duty_end else None,
-                duty.end_km,
+                duty.asset_code,
+                _asset_type_label(duty.asset_type),
+                duty.driver_name,
+                _assignment_status(
+                    next(
+                        row.assignment
+                        for site_report in report.sites
+                        for row in site_report.rows
+                        if row.assignment.id == duty.assignment_id
+                    )
+                ),
+                _excel_report_datetime(duty.duty_start, reporting_zone),
+                _excel_report_datetime(duty.actual_duty_end, reporting_zone)
+                if duty.actual_duty_end
+                else None,
                 timedelta(seconds=duty.actual_duty_span_seconds)
                 if duty.actual_duty_span_seconds is not None
                 else None,
-                duty.overtime_minutes,
+                duty.start_hmr if machinery else duty.start_km,
+                duty.end_hmr if machinery else duty.end_km,
+                "h" if machinery else "km",
+                duty.machine_hours
+                if machinery
+                else (
+                    duty.end_km - duty.start_km
+                    if duty.start_km is not None and duty.end_km is not None
+                    else None
+                ),
                 duty.status,
             ]
         )
-    sheets["Driver Duty"] = (
-        [
-            "Operational Date",
-            "Driver",
-            "Tipper",
-            "Site",
-            "Duty Start",
-            "START KM",
-            "Regular Duty Hours",
-            "Regular Duty End",
-            "Actual Duty End",
-            "END KM",
-            "Actual Duty Span",
-            "Overtime",
-            "Status",
-        ],
-        duty_rows,
-    )
     dashboard = workbook.create_sheet("Management Dashboard")
-    dashboard["A1"] = "Management Dashboard"
-    dashboard["A1"].font = Font(bold=True, size=16, color="173C35")
-    dashboard["A2"] = "Operational Date"
-    dashboard["B2"] = report.operational_day.operational_date
-    dashboard["D2"] = "Reporting Timezone"
-    dashboard["E2"] = report.operational_day.reporting_timezone
-    dashboard_summary_headers = [
-        "Operational Date",
-        "Reporting Timezone",
-        "Assigned Tippers",
-        "Approved Trips",
-        "Total KM",
-        "Diesel Issued",
-        "Pending Verification",
-        "Missing Readings",
-        "Unresolved Emergencies",
-        "Sites Not Closed",
-    ]
-    dashboard_summary_values = [
-        report.operational_day.operational_date,
-        report.operational_day.reporting_timezone,
-        report.assigned_assets_count,
-        report.approved_trip_count,
-        _excel_metric(report.total_km),
-        report.verified_diesel_issued,
-        report.pending_verification_count,
-        report.missing_reading_count,
-        report.unresolved_emergency_count,
-        report.sites_not_closed_count,
-    ]
-    for index, (label, value) in enumerate(
-        zip(dashboard_summary_headers, dashboard_summary_values, strict=True), start=1
-    ):
-        dashboard.cell(row=4, column=index, value=label)
-        dashboard.cell(row=5, column=index, value=_safe_excel_text(value))
-    dashboard["A7"] = "Tipper Performance"
-    dashboard["A7"].font = Font(bold=True, color="173C35")
-    group_definitions = [
-        (1, 4, "Context", "DDEBF7"),
-        (5, 8, "Trip Quality", "E2F0D9"),
-        (9, 14, "Distance & Diesel", "FCE4D6"),
-        (15, 20, "Trip Timing", "E4DFEC"),
-        (21, 29, "Attention & Closure", "FFF2CC"),
-    ]
-    for start_column, end_column, label, color in group_definitions:
-        dashboard.merge_cells(
-            start_row=7,
-            start_column=start_column,
-            end_row=7,
-            end_column=end_column,
-        )
-        cell = dashboard.cell(row=7, column=start_column, value=label)
-        cell.font = Font(bold=True, color="173C35")
-        cell.fill = PatternFill("solid", fgColor=color)
-        for column in range(start_column, end_column + 1):
-            dashboard.cell(row=8, column=column).fill = PatternFill("solid", fgColor=color)
-    for column, header in enumerate(management_headers, start=1):
-        dashboard.cell(row=8, column=column, value=header)
+    dashboard.append([])
+    dashboard.append([])
+    dashboard.append([])
+    dashboard.append(management_headers)
     for row_values in management_rows:
-        dashboard.append(
-            [
-                value.value if isinstance(value, _ExcelFormula) else _safe_excel_text(value)
-                for value in row_values
-            ]
-        )
-    dashboard.freeze_panes = "A9"
-    dashboard.auto_filter.ref = (
-        f"A8:{get_column_letter(len(management_headers))}{max(8, len(management_rows) + 8)}"
+        _append_excel_row(dashboard, row_values)
+    dashboard["C2"] = "Operational Date"
+    dashboard["D2"] = report.operational_day.operational_date
+    _format_report_sheet(
+        dashboard,
+        title="Management Dashboard",
+        timezone_name=timezone_name,
     )
-
-    header_fill = PatternFill("solid", fgColor="1F4E78")
-    for title, sheet_data in sheets.items():
-        headers, sheet_rows = sheet_data
-        worksheet = workbook.create_sheet(title)
-        worksheet.append(headers)
-        for cell in worksheet[1]:
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = header_fill
-        worksheet.freeze_panes = "A2"
-        worksheet.auto_filter.ref = (
-            f"A1:{get_column_letter(len(headers))}{max(1, len(sheet_rows) + 1)}"
-        )
-        for sheet_row in sheet_rows:
-            worksheet.append(
-                [
-                    value.value if isinstance(value, _ExcelFormula) else _safe_excel_text(value)
-                    for value in sheet_row
-                ]
-            )
-        for column in worksheet.columns:
-            width = min(max(len(str(cell.value or "")) for cell in column) + 2, 32)
-            worksheet.column_dimensions[column[0].column_letter].width = width
-        for row in worksheet.iter_rows():
-            for cell in row:
-                if isinstance(cell.value, timedelta):
-                    cell.number_format = '[h]"h "mm"m"'
-                elif cell.is_date:
-                    cell.number_format = "yyyy-mm-dd hh:mm"
-    for row in dashboard.iter_rows():
-        for cell in row:
-            if isinstance(cell, MergedCell):
-                continue
-            if isinstance(cell.value, timedelta):
-                cell.number_format = '[h]"h "mm"m"'
-            elif cell.is_date:
-                cell.number_format = "yyyy-mm-dd hh:mm"
-    for worksheet, header_row in [(dashboard, 8), (workbook["Daily Summary"], 1)]:
-        for column in range(1, worksheet.max_column + 1):
-            header = worksheet.cell(row=header_row, column=column).value
-            if header in {
-                "Start KM",
-                "End KM",
-                "Distance KM",
-                "Total KM",
-                "KM / Approved Trip",
-                "Diesel Issued",
-                "Diesel Issued / Approved Trip",
-            }:
-                for row_number in range(header_row + 1, worksheet.max_row + 1):
-                    worksheet.cell(row=row_number, column=column).number_format = "0.00"
-    for column in range(1, dashboard.max_column + 1):
-        width = min(
-            max(
-                len(str(dashboard.cell(row=row_number, column=column).value or ""))
-                for row_number in range(1, dashboard.max_row + 1)
-            )
-            + 2,
-            32,
-        )
-        dashboard.column_dimensions[get_column_letter(column)].width = width
+    _add_report_sheet(
+        workbook,
+        title="Tipper Daily",
+        timezone_name=timezone_name,
+        headers=[
+            "Date", "Site", "Asset", "Registration", "Driver", "Assignment Status",
+            "Start KM", "End KM", "Distance KM", "Approved Trips", "Verified Diesel L",
+            "Duty Start", "Duty End", "Pending", "Status",
+        ],
+        rows=tipper_rows,
+    )
+    _add_report_sheet(
+        workbook,
+        title="Machinery Daily",
+        timezone_name=timezone_name,
+        headers=[
+            "Date", "Site", "Asset", "Asset Type", "Operator", "Assignment Status",
+            "Start HMR", "End HMR", "Machine Hours", "Verified Diesel L", "Duty Start",
+            "Duty End", "Pending", "Status",
+        ],
+        rows=machinery_rows,
+    )
+    _add_report_sheet(
+        workbook,
+        title="Trip Register",
+        timezone_name=timezone_name,
+        headers=[
+            "Date", "Site", "Asset", "Driver", "Assignment Status", "Trip Event Time",
+            "Verification", "Verified By", "Verified At", "Previous Approved Trip Time",
+            "Interval Since Previous Approved Trip",
+        ],
+        rows=trip_rows,
+    )
+    _add_report_sheet(
+        workbook,
+        title="Meter Readings",
+        timezone_name=timezone_name,
+        headers=[
+            "Date/Time", "Site", "Asset", "Asset Type", "Driver / Operator",
+            "Assignment Status", "Meter Type", "Reading Type", "Value", "Unit",
+            "Verification", "Evidence",
+        ],
+        rows=meter_rows,
+    )
+    _add_report_sheet(
+        workbook,
+        title="Diesel Register",
+        timezone_name=timezone_name,
+        headers=[
+            "Date/Time", "Site", "Asset", "Type", "Driver / Operator", "Assignment Status",
+            "Diesel L", "Verification", "Evidence",
+        ],
+        rows=diesel_rows,
+    )
+    _add_report_sheet(
+        workbook,
+        title="Duty Register",
+        timezone_name=timezone_name,
+        headers=[
+            "Date", "Site", "Asset", "Type", "Driver / Operator", "Assignment Status",
+            "Duty Start", "Duty End", "Duration", "Meter Start", "Meter End", "Meter Unit",
+            "Usage", "Status",
+        ],
+        rows=duty_rows,
+    )
+    exceptions_sheet = _add_report_sheet(
+        workbook,
+        title="Exceptions",
+        timezone_name=timezone_name,
+        headers=[
+            "Date", "Site", "Asset", "Type", "Assignment Status", "Exception Type",
+            "Description", "Status",
+        ],
+        rows=exception_rows,
+    )
+    exceptions_sheet.column_dimensions["G"].width = 48
+    for cell in exceptions_sheet["G"]:
+        cell.alignment = Alignment(vertical="top", wrap_text=True)
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
@@ -997,7 +1018,12 @@ def daily_excel(
 ) -> Response:
     try:
         report = _service(db, context).dashboard(operational_date)
-        duties = _duty_reports(db, context, report.operational_day.operational_date)
+        duties = _duty_reports(
+            db,
+            context,
+            report.operational_day.operational_date,
+            report=report,
+        )
         content = _build_workbook(
             report,
             web_public_base_url=settings.web_public_base_url,

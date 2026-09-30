@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_MAX_ODOMETER_KM = Decimal("10000000")
 MAX_STORABLE_ODOMETER_KM = Decimal("9999999999.99")
+DEFAULT_MAX_HOUR_METER_HOURS = Decimal("1000000")
+MAX_STORABLE_HOUR_METER_HOURS = Decimal("9999999999.99")
 
 
 class Settings(BaseSettings):
@@ -36,6 +38,7 @@ class Settings(BaseSettings):
     # Realistic configurable ceiling for driver odometer readings. Keep this
     # at or below the existing Numeric(12, 2) storage capacity.
     max_odometer_km: Decimal = DEFAULT_MAX_ODOMETER_KM
+    max_hour_meter_hours: Decimal = DEFAULT_MAX_HOUR_METER_HOURS
     phone_default_region: str | None = None
     otp_provider: str = "unavailable"
     enable_development_otp: bool = False
@@ -77,6 +80,17 @@ class Settings(BaseSettings):
         exponent = self.max_odometer_km.as_tuple().exponent
         if isinstance(exponent, int) and exponent < -2:
             raise ValueError("max_odometer_km cannot have more than two decimal places")
+        if (
+            not self.max_hour_meter_hours.is_finite()
+            or self.max_hour_meter_hours <= 0
+            or self.max_hour_meter_hours > MAX_STORABLE_HOUR_METER_HOURS
+        ):
+            raise ValueError(
+                "max_hour_meter_hours must be finite, positive, and fit Numeric(12, 2)"
+            )
+        hour_exponent = self.max_hour_meter_hours.as_tuple().exponent
+        if isinstance(hour_exponent, int) and hour_exponent < -2:
+            raise ValueError("max_hour_meter_hours cannot have more than two decimal places")
 
         environment = self.environment.lower()
         otp_provider = self.otp_provider.lower()

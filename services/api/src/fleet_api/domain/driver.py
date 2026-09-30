@@ -27,6 +27,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.models.common import utc_now
+from fleet_api.domain.assets import capabilities_for
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     DevicePlatform,
@@ -35,7 +36,7 @@ from fleet_api.domain.enums import (
     EmergencyCategory,
     EmergencyStatus,
     FleetAssetStatus,
-    FleetAssetType,
+    HourMeterReadingType,
     KmReadingType,
     MembershipRole,
     MembershipStatus,
@@ -52,6 +53,9 @@ from fleet_api.domain.errors import (
     DutyAlreadyStartedError,
     DutyAssignmentMismatchError,
     DutyEventOutsideSessionError,
+    DutyHourMeterContinuityError,
+    DutyHourMeterOutOfRangeError,
+    DutyHourMeterValidationError,
     DutyKmValidationError,
     DutyNotStartedError,
     DutyOdometerContinuityError,
@@ -64,6 +68,7 @@ from fleet_api.domain.errors import (
 from fleet_api.domain.events import (
     create_diesel_event,
     create_emergency_event,
+    create_hour_meter_reading,
     create_km_reading,
     create_trip_event,
 )
@@ -109,7 +114,6 @@ def _assignment_query(
             Assignment.driver_membership_id == context.membership.id,
             Assignment.starts_at <= at,
             (Assignment.ends_at.is_(None) | (Assignment.ends_at > at)),
-            FleetAsset.asset_type == FleetAssetType.TIPPER,
             FleetAsset.status == FleetAssetStatus.ACTIVE,
             Site.status == SiteStatus.ACTIVE,
         )
@@ -238,6 +242,34 @@ def _previous_valid_end_km(
     )
 
 
+def _previous_valid_end_hmr(
+    session: Session,
+    *,
+    company_id: UUID,
+    asset_id: UUID,
+    before: datetime,
+) -> Decimal | None:
+    valid_statuses = {
+        VerificationStatus.PENDING_VERIFICATION,
+        VerificationStatus.APPROVED,
+        VerificationStatus.AMENDED,
+    }
+    return session.scalar(
+        select(DutySession.end_hmr)
+        .join(OperationalEvent, OperationalEvent.id == DutySession.end_event_id)
+        .where(
+            DutySession.company_id == company_id,
+            DutySession.asset_id == asset_id,
+            DutySession.status == DutySessionStatus.CLOSED,
+            DutySession.ended_at < before,
+            DutySession.end_hmr.is_not(None),
+            OperationalEvent.verification_status.in_(valid_statuses),
+        )
+        .order_by(DutySession.ended_at.desc(), DutySession.id.desc())
+        .limit(1)
+    )
+
+
 def _format_odometer_km(value: Decimal) -> str:
     text = format(value, "f")
     if "." in text:
@@ -265,6 +297,27 @@ def _validate_odometer_reading(settings: Settings, reading_value: Decimal | str)
     if isinstance(exponent, int) and exponent < -2:
         raise DutyOdometerOutOfRangeError(
             "KM reading looks invalid. Please check the odometer and enter the correct value."
+        )
+    return value
+
+
+def _validate_hour_meter_reading(
+    settings: Settings, reading_value: Decimal | str
+) -> Decimal:
+    try:
+        value = reading_value if isinstance(reading_value, Decimal) else Decimal(reading_value)
+    except (InvalidOperation, ValueError):
+        raise DutyHourMeterOutOfRangeError(
+            "HMR looks invalid. Please check the hour meter and enter the correct value."
+        ) from None
+    if not value.is_finite() or value < 0 or value > settings.max_hour_meter_hours:
+        raise DutyHourMeterOutOfRangeError(
+            "HMR looks invalid. Please check the hour meter and enter the correct value."
+        )
+    exponent = value.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -2:
+        raise DutyHourMeterOutOfRangeError(
+            "HMR looks invalid. Please check the hour meter and enter the correct value."
         )
     return value
 
@@ -456,7 +509,7 @@ def create_driver_event(
     event_type: OperationalEventType,
     device_created_at: datetime,
     device: Device,
-    reading_type: KmReadingType | None = None,
+    reading_type: KmReadingType | HourMeterReadingType | None = None,
     reading_value: Decimal | str | None = None,
     litres: Decimal | None = None,
     category: EmergencyCategory | None = None,
@@ -469,6 +522,19 @@ def create_driver_event(
         device_created_at=device_created_at,
         settings=settings,
     )
+    asset = session.get(FleetAsset, assignment.asset_id)
+    if asset is None or asset.company_id != context.company.id:
+        raise TenantConsistencyError("assignment asset does not belong to this company")
+    capabilities = capabilities_for(asset.asset_type)
+    supported = {
+        OperationalEventType.TRIP_COMPLETE: capabilities.supports_trip_complete,
+        OperationalEventType.KM_READING: capabilities.supports_odometer,
+        OperationalEventType.HMR_READING: capabilities.supports_hour_meter,
+        OperationalEventType.DIESEL: capabilities.supports_diesel,
+        OperationalEventType.EMERGENCY: capabilities.supports_emergency,
+    }
+    if not supported[event_type]:
+        raise DomainError(f"{event_type.value} is not supported for {asset.asset_type.value}")
     if device.company_id != context.company.id or device.membership_id != context.membership.id:
         raise TenantConsistencyError("device is not owned by the authenticated driver")
     existing = session.scalar(
@@ -488,10 +554,15 @@ def create_driver_event(
             raise TenantConsistencyError("client event UUID is not owned by this driver")
         return DriverEventResult(event=existing, duplicate=True)
     km_reading_value: Decimal | None = None
+    hmr_reading_value: Decimal | None = None
     if event_type == OperationalEventType.KM_READING:
         if reading_type is None or reading_value is None:
             raise DomainError("reading_type and reading_value are required")
         km_reading_value = _validate_odometer_reading(settings, reading_value)
+    elif event_type == OperationalEventType.HMR_READING:
+        if reading_type is None or reading_value is None:
+            raise DomainError("reading_type and reading_value are required")
+        hmr_reading_value = _validate_hour_meter_reading(settings, reading_value)
     if event_type == OperationalEventType.EMERGENCY:
         # Emergency is a one-tap signal. A second client UUID inside the short
         # retry window is treated as the same signal so rapid repeat taps do
@@ -525,7 +596,8 @@ def create_driver_event(
         context=context,
         client_event_uuid=client_event_uuid,
         object_reference=object_reference,
-        required=event_type == OperationalEventType.KM_READING,
+        required=event_type
+        in {OperationalEventType.KM_READING, OperationalEventType.HMR_READING},
     )
     if event_type in {OperationalEventType.TRIP_COMPLETE, OperationalEventType.DIESEL}:
         active_duty = _require_active_duty(
@@ -560,9 +632,40 @@ def create_driver_event(
                 device_created_at=device_created_at,
             )
             assert km_reading_value is not None
-            if km_reading_value < active_duty.start_km:
+            if active_duty.start_km is None or km_reading_value < active_duty.start_km:
                 raise DutyKmValidationError(
                     "END_READING must be greater than or equal to START_READING"
+                )
+    elif event_type == OperationalEventType.HMR_READING:
+        assert reading_type is not None
+        if reading_type.value == HourMeterReadingType.START_READING.value:
+            active_duty = _active_duty_session(session, context=context, lock=True)
+            if active_duty is not None:
+                raise DutyAlreadyStartedError("an active duty session already exists")
+            previous_end_hmr = _previous_valid_end_hmr(
+                session,
+                company_id=context.company.id,
+                asset_id=assignment.asset_id,
+                before=device_created_at,
+            )
+            assert hmr_reading_value is not None
+            if previous_end_hmr is not None and hmr_reading_value < previous_end_hmr:
+                raise DutyHourMeterContinuityError(
+                    "START HMR cannot be lower than the previous END HMR "
+                    f"({_format_odometer_km(previous_end_hmr)}). Please check the hour meter.",
+                    previous_end_hmr=previous_end_hmr,
+                )
+        else:
+            active_duty = _require_active_duty(
+                session,
+                context=context,
+                assignment=assignment,
+                device_created_at=device_created_at,
+            )
+            assert hmr_reading_value is not None
+            if active_duty.start_hmr is None or hmr_reading_value < active_duty.start_hmr:
+                raise DutyHourMeterValidationError(
+                    "END HMR must be greater than or equal to START HMR"
                 )
     elif event_type == OperationalEventType.EMERGENCY:
         active_duty = _active_duty_session(session, context=context)
@@ -584,7 +687,7 @@ def create_driver_event(
             assignment_id=assignment.id,
             client_event_uuid=client_event_uuid,
             device_created_at=device_created_at,
-            reading_type=reading_type,
+            reading_type=KmReadingType(reading_type.value),
             reading_value=km_reading_value,
             object_reference=object_reference,
             device_id=device.id,
@@ -618,6 +721,57 @@ def create_driver_event(
         elif active_duty is not None and reading_type == KmReadingType.END_READING:
             active_duty.end_event_id = km_reading.event_id
             active_duty.end_km = km_reading_value
+            active_duty.ended_at = device_created_at
+            active_duty.status = DutySessionStatus.CLOSED
+            active_duty.final_overtime_minutes = max(
+                0,
+                int((device_created_at - active_duty.regular_duty_ends_at).total_seconds() // 60),
+            )
+            session.flush()
+    elif event_type == OperationalEventType.HMR_READING:
+        assert reading_type is not None and hmr_reading_value is not None
+        hmr_type = HourMeterReadingType(reading_type.value)
+        hmr_reading = create_hour_meter_reading(
+            session,
+            company_id=context.company.id,
+            assignment_id=assignment.id,
+            client_event_uuid=client_event_uuid,
+            device_created_at=device_created_at,
+            reading_type=hmr_type,
+            reading_value=hmr_reading_value,
+            object_reference=object_reference,
+            device_id=device.id,
+        )
+        if hmr_type == HourMeterReadingType.START_READING:
+            regular_minutes = assignment.regular_duty_minutes
+            new_duty = DutySession(
+                company_id=context.company.id,
+                assignment_id=assignment.id,
+                driver_membership_id=context.membership.id,
+                asset_id=assignment.asset_id,
+                site_id=assignment.site_id,
+                operational_date=_operational_date(context, device_created_at),
+                start_event_id=hmr_reading.event_id,
+                start_km=None,
+                start_hmr=hmr_reading_value,
+                started_at=device_created_at,
+                configured_regular_duty_minutes=regular_minutes,
+                regular_duty_ends_at=device_created_at + timedelta(minutes=regular_minutes),
+                status=DutySessionStatus.ACTIVE,
+            )
+            session.add(new_duty)
+            try:
+                with session.begin_nested():
+                    session.flush()
+            except IntegrityError as exc:
+                raise DutyAlreadyStartedError("an active duty session already exists") from exc
+            hmr_event = session.get(OperationalEvent, hmr_reading.event_id)
+            if hmr_event is not None:
+                hmr_event.duty_session_id = new_duty.id
+            session.flush()
+        elif active_duty is not None:
+            active_duty.end_event_id = hmr_reading.event_id
+            active_duty.end_hmr = hmr_reading_value
             active_duty.ended_at = device_created_at
             active_duty.status = DutySessionStatus.CLOSED
             active_duty.final_overtime_minutes = max(

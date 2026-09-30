@@ -47,10 +47,22 @@ _CAPABILITIES = {
         supports_emergency=True,
         supports_duty_session=True,
     ),
-    FleetAssetType.EXCAVATOR: _NO_OPERATIONAL_CAPABILITIES,
-    FleetAssetType.BACKHOE_LOADER: _NO_OPERATIONAL_CAPABILITIES,
-    FleetAssetType.ROLLER: _NO_OPERATIONAL_CAPABILITIES,
-    FleetAssetType.GRADER: _NO_OPERATIONAL_CAPABILITIES,
+    **{
+        asset_type: AssetCapabilities(
+            supports_trip_complete=False,
+            supports_odometer=False,
+            supports_hour_meter=True,
+            supports_diesel=True,
+            supports_emergency=True,
+            supports_duty_session=True,
+        )
+        for asset_type in (
+            FleetAssetType.EXCAVATOR,
+            FleetAssetType.BACKHOE_LOADER,
+            FleetAssetType.ROLLER,
+            FleetAssetType.GRADER,
+        )
+    },
 }
 
 

@@ -138,6 +138,69 @@ void main() {
   });
 
   testWidgets(
+    'machinery header omits missing registration and exposes three actions',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final database = LocalDatabase(NativeDatabase.memory());
+      final dependencies = DriverAppDependencies(
+        api: ApiClient(),
+        sessionStore: SecureSessionStore(),
+        sync: SyncEngine(
+          database: database,
+          remote: _FakeRemote(),
+          installationIdentifier: 'test-device',
+        ),
+        installationIdentifier: 'test-device',
+      );
+      const assignment = DriverAssignment(
+        assignmentId: 'machinery-assignment',
+        tipperId: 'excavator',
+        tipperRegistrationNumber: null,
+        tipperShortName: 'CAT 320',
+        tipperAssetCode: 'EXC-01',
+        assetType: 'EXCAVATOR',
+        siteId: 'site',
+        siteName: 'Test Site B',
+        supervisorName: 'Supervisor A',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DriverHomeScreen(
+            dependencies: dependencies,
+            assignment: assignment,
+            duty: const DriverDutyState(status: DriverDutyStatus.none),
+            onSignOut: () async {},
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('CAT 320'), findsOneWidget);
+      expect(find.text('EXC-01'), findsOneWidget);
+      expect(find.text('HMR READING'), findsOneWidget);
+      expect(find.text('DIESEL'), findsOneWidget);
+      expect(find.text('EMERGENCY'), findsOneWidget);
+      expect(find.text('TRIP COMPLETE'), findsNothing);
+      expect(find.text('KM READING'), findsNothing);
+      expect(find.byType(FilledButton), findsNWidgets(3));
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'DIESEL'))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.text('HMR READING'));
+      await tester.pumpAndSettle();
+      expect(find.text('START HMR'), findsOneWidget);
+      expect(find.text('Hours'), findsOneWidget);
+      await database.close();
+    },
+  );
+
+  testWidgets(
     'driver home keeps four actions while gating NONE and restarting CLOSED duty',
     (tester) async {
       final database = LocalDatabase(NativeDatabase.memory());

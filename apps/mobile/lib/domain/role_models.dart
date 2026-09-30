@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show appFlavor;
 
+import 'driver_models.dart';
+
 const bool _explicitPilotDefine = bool.fromEnvironment(
   'FLEET_PILOT',
   defaultValue: false,
@@ -68,6 +70,8 @@ class SupervisorEvent {
     required this.deviceCreatedAt,
     required this.verificationStatus,
     required this.evidenceAvailable,
+    this.assetCode,
+    this.assetType = 'TIPPER',
     this.dutySessionId,
     this.driverPhone,
     this.readingType,
@@ -85,6 +89,8 @@ class SupervisorEvent {
   final String? dutySessionId;
   final String driverName;
   final String? driverPhone;
+  final String? assetCode;
+  final String assetType;
   final String tipperRegistration;
   final String siteId;
   final String siteName;
@@ -102,6 +108,7 @@ class SupervisorEvent {
   bool get isEmergency => eventType == 'EMERGENCY';
   bool get isTrip => eventType == 'TRIP_COMPLETE';
   bool get isKm => eventType == 'KM_READING';
+  bool get isHmr => eventType == 'HMR_READING';
   bool get isDiesel => eventType == 'DIESEL';
   bool get isOpenEmergency => isEmergency && emergencyStatus == 'OPEN';
   bool get isPending => verificationStatus == 'PENDING_VERIFICATION';
@@ -117,6 +124,8 @@ class SupervisorEvent {
       dutySessionId: json['duty_session_id']?.toString(),
       driverName: '${json['driver_name'] ?? 'Driver'}',
       driverPhone: json['driver_phone'] as String?,
+      assetCode: json['asset_code'] as String?,
+      assetType: '${json['asset_type'] ?? 'TIPPER'}',
       tipperRegistration: '${json['tipper_registration_number'] ?? ''}',
       siteId: '${json['site_id']}',
       siteName: '${json['site_name'] ?? 'Site'}',
@@ -139,6 +148,15 @@ class SupervisorEvent {
 
 int supervisorReviewPendingCount(Iterable<SupervisorEvent> events) =>
     events.where((event) => event.needsSupervisorReview).length;
+
+double supervisorDieselLitres(Iterable<SupervisorEvent> events) => events
+    .where(
+      (event) =>
+          event.isDiesel &&
+          event.litres != null &&
+          event.verificationStatus != 'REJECTED',
+    )
+    .fold(0, (total, event) => total + event.litres!);
 
 class CompletenessItem {
   const CompletenessItem({
@@ -307,43 +325,71 @@ class OwnerTipperReport {
 class OwnerDutyReport {
   const OwnerDutyReport({
     required this.driverName,
+    required this.assetCode,
+    required this.assetType,
     required this.tipperRegistration,
     required this.siteName,
     required this.dutyStart,
     required this.startKm,
+    required this.startHmr,
     required this.regularMinutes,
     required this.regularEnds,
     required this.actualEnd,
     required this.endKm,
+    required this.endHmr,
+    required this.machineHours,
+    required this.verifiedDieselLitres,
+    required this.pendingDieselLitres,
     required this.spanSeconds,
     required this.overtimeMinutes,
     required this.status,
   });
 
   final String driverName;
+  final String assetCode;
+  final String assetType;
   final String tipperRegistration;
   final String siteName;
   final DateTime? dutyStart;
   final double? startKm;
+  final double? startHmr;
   final int regularMinutes;
   final DateTime? regularEnds;
   final DateTime? actualEnd;
   final double? endKm;
+  final double? endHmr;
+  final double? machineHours;
+  final double verifiedDieselLitres;
+  final double pendingDieselLitres;
   final double? spanSeconds;
   final int overtimeMinutes;
   final String status;
 
+  DriverAssetCapabilities get capabilities =>
+      DriverAssetCapabilities.forType(assetType);
+
+  double? get distanceKm =>
+      startKm != null && endKm != null ? endKm! - startKm! : null;
+
   factory OwnerDutyReport.fromJson(Map<String, dynamic> json) =>
       OwnerDutyReport(
         driverName: '${json['driver_name'] ?? 'Driver'}',
+        assetCode:
+            '${json['asset_code'] ?? json['tipper_registration_number'] ?? ''}',
+        assetType: '${json['asset_type'] ?? 'TIPPER'}',
         tipperRegistration: '${json['tipper_registration_number'] ?? ''}',
         siteName: '${json['site_name'] ?? 'Site'}',
         dutyStart: _date(json['duty_start']),
         startKm: _number(json['start_km']),
+        startHmr: _number(json['start_hmr']),
         regularMinutes: _int(json['regular_duty_minutes']),
         regularEnds: _date(json['regular_duty_ends_at']),
         actualEnd: _date(json['actual_duty_end']),
         endKm: _number(json['end_km']),
+        endHmr: _number(json['end_hmr']),
+        machineHours: _number(json['machine_hours']),
+        verifiedDieselLitres: _number(json['verified_diesel_issued']) ?? 0,
+        pendingDieselLitres: _number(json['pending_diesel_issued']) ?? 0,
         spanSeconds: _number(json['actual_duty_span_seconds']),
         overtimeMinutes: _int(json['overtime_minutes']),
         status: '${json['status'] ?? ''}',
@@ -587,6 +633,7 @@ class OwnerAssetInput {
     required this.registrationNumber,
     required this.shortName,
     required this.ownershipType,
+    this.assetType = 'TIPPER',
     this.manufacturer,
     this.model,
     this.rentalPartyName,
@@ -595,9 +642,10 @@ class OwnerAssetInput {
   });
 
   final String assetCode;
-  final String registrationNumber;
+  final String? registrationNumber;
   final String? shortName;
   final String ownershipType;
+  final String assetType;
   final String? manufacturer;
   final String? model;
   final String? rentalPartyName;
@@ -606,7 +654,7 @@ class OwnerAssetInput {
 
   Map<String, dynamic> toJson({bool includeAssetType = false}) =>
       <String, dynamic>{
-        if (includeAssetType) 'asset_type': 'TIPPER',
+        if (includeAssetType) 'asset_type': assetType,
         'asset_code': assetCode,
         'registration_number': registrationNumber,
         'short_name': shortName,

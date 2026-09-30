@@ -78,15 +78,13 @@ void main() {
     expect(find.byKey(const Key('asset-driver-action')), findsOneWidget);
   });
 
-  testWidgets('machinery does not expose Driver assignment controls', (
-    tester,
-  ) async {
+  testWidgets('machinery exposes Operator assignment controls', (tester) async {
     final api = _AssignmentOwnerApi([
       _asset(4, deployed: true, assetType: 'EXCAVATOR'),
     ]);
     await _pumpFleet(tester, api);
 
-    expect(find.byKey(const Key('assign-driver-4')), findsNothing);
+    expect(find.byKey(const Key('assign-driver-4')), findsOneWidget);
   });
 
   testWidgets(
@@ -124,7 +122,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('add-tipper')));
     await tester.pumpAndSettle();
-    expect(find.text('ADD TIPPER'), findsWidgets);
+    expect(find.text('ADD ASSET'), findsWidgets);
     expect(find.byKey(const Key('rental-fields')), findsNothing);
 
     await tester.tap(find.text('RENTED'));
@@ -152,6 +150,34 @@ void main() {
     expect(api.created.single.ownershipType, 'RENTED');
     expect(api.created.single.rentalPartyName, 'ABC Transport');
     expect(find.byKey(const Key('owner-asset-created')), findsOneWidget);
+  });
+
+  testWidgets('add form creates machinery without registration', (
+    tester,
+  ) async {
+    final api = _FakeOwnerAssetApi([]);
+    await _pumpFleet(tester, api);
+
+    await tester.tap(find.byKey(const Key('add-tipper')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('asset-type-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('EXCAVATOR').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('asset-code-field')), 'EXC-01');
+    await tester.enterText(
+      find.byKey(const Key('short-name-field')),
+      'CAT 320',
+    );
+    await tester.drag(find.byType(ListView).last, const Offset(0, -700));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('save-tipper')));
+    await tester.pumpAndSettle();
+
+    expect(api.created, hasLength(1));
+    expect(api.created.single.assetType, 'EXCAVATOR');
+    expect(api.created.single.registrationNumber, isNull);
+    expect(api.created.single.shortName, 'CAT 320');
   });
 
   testWidgets('edit form saves the existing asset UUID', (tester) async {

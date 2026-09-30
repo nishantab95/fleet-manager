@@ -151,9 +151,9 @@ class TipperResponse(BaseModel):
 
 class OwnerAssetCreateRequest(BaseModel):
     asset_code: str = Field(min_length=1, max_length=64)
-    asset_type: Literal[FleetAssetType.TIPPER] = FleetAssetType.TIPPER
+    asset_type: FleetAssetType = FleetAssetType.TIPPER
     ownership_type: AssetOwnershipType
-    registration_number: str = Field(min_length=1, max_length=32)
+    registration_number: str | None = Field(default=None, min_length=1, max_length=32)
     short_name: str | None = Field(default=None, max_length=100)
     manufacturer: str | None = Field(default=None, max_length=100)
     model: str | None = Field(default=None, max_length=100)
@@ -391,7 +391,8 @@ class DriverAssignmentResponse(BaseModel):
     assignment_id: UUID
     tipper_id: UUID
     asset_code: str
-    tipper_registration_number: str
+    asset_type: FleetAssetType
+    tipper_registration_number: str | None
     tipper_short_name: str | None
     site_id: UUID
     site_name: str
@@ -410,6 +411,9 @@ class DriverDutyStateResponse(BaseModel):
     start_km: Decimal | None = None
     ended_at: datetime | None = None
     end_km: Decimal | None = None
+    start_hmr: Decimal | None = None
+    end_hmr: Decimal | None = None
+    machine_hours: Decimal | None = None
     regular_duty_minutes: int | None = None
 
 
@@ -479,13 +483,15 @@ class SupervisorEventResponse(BaseModel):
     duty_session_id: UUID | None
     driver_name: str
     driver_phone: str | None
+    asset_code: str
+    asset_type: FleetAssetType
     tipper_registration_number: str
     site_id: UUID
     site_name: str
     device_created_at: datetime
     server_received_at: datetime
     verification_status: VerificationStatus
-    reading_type: KmReadingType | None
+    reading_type: str | None
     reading_value: Decimal | None
     litres: Decimal | None
     emergency_category: EmergencyCategory | None
@@ -540,6 +546,8 @@ class ReportEventResponse(BaseModel):
     duty_session_id: UUID | None
     tipper_id: UUID
     tipper_registration_number: str
+    asset_code: str
+    asset_type: FleetAssetType
     site_id: UUID
     site_name: str
     driver_name: str
@@ -573,21 +581,29 @@ class TipperDailyReportResponse(BaseModel):
     tipper_id: UUID
     registration_number: str
     short_name: str | None
+    asset_type: FleetAssetType
     site_id: UUID
     site_name: str
     driver_name: str
     supervisor_name: str
     assignment_starts_at: datetime
     assignment_ends_at: datetime | None
-    approved_trip_count: int
-    pending_trip_count: int
-    disputed_trip_count: int
-    rejected_trip_count: int
+    approved_trip_count: int | None
+    pending_trip_count: int | None
+    disputed_trip_count: int | None
+    rejected_trip_count: int | None
+    trips_state: Literal["NOT_APPLICABLE", "MISSING", "ZERO", "VALUE"]
     start_km: Decimal | None
     end_km: Decimal | None
+    start_hmr: Decimal | None = None
+    end_hmr: Decimal | None = None
+    machine_hours: Decimal | None = None
+    distance_state: Literal["NOT_APPLICABLE", "MISSING", "ZERO", "VALUE"]
+    machine_hours_state: Literal["NOT_APPLICABLE", "MISSING", "ZERO", "VALUE"]
     distance_km: Decimal | None
     km_per_approved_trip: Decimal | None
     verified_diesel_issued: Decimal
+    pending_diesel_issued: Decimal
     diesel_issued_per_approved_trip: Decimal | None
     first_trip_completed_at: datetime | None
     last_trip_completed_at: datetime | None
@@ -667,14 +683,21 @@ class DriverDutyReportResponse(BaseModel):
     session_id: UUID
     assignment_id: UUID
     driver_name: str
+    asset_code: str
     tipper_registration_number: str
     site_name: str
     duty_start: datetime
-    start_km: Decimal
+    asset_type: FleetAssetType
+    start_km: Decimal | None
+    start_hmr: Decimal | None = None
     regular_duty_minutes: int
     regular_duty_ends_at: datetime
     actual_duty_end: datetime | None
     end_km: Decimal | None
+    end_hmr: Decimal | None = None
+    machine_hours: Decimal | None = None
+    verified_diesel_issued: Decimal = Decimal("0")
+    pending_diesel_issued: Decimal = Decimal("0")
     actual_duty_span_seconds: float | None
     overtime_minutes: int
     status: Literal["ACTIVE", "CLOSED"]

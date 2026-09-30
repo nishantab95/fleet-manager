@@ -37,12 +37,14 @@ class DutySession(UpdatedTimestampModel):
     site_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     operational_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     start_event_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
-    start_km: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    start_km: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    start_hmr: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     configured_regular_duty_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     regular_duty_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_event_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     end_km: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    end_hmr: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[DutySessionStatus] = mapped_column(
         SAEnum(DutySessionStatus, name="duty_session_status_enum"),
@@ -88,9 +90,33 @@ class DutySession(UpdatedTimestampModel):
             name="fk_duty_sessions_company_end_event",
             ondelete="RESTRICT",
         ),
-        CheckConstraint("start_km >= 0", name="ck_duty_sessions_start_km_non_negative"),
+        CheckConstraint(
+            "start_km IS NULL OR start_km >= 0",
+            name="ck_duty_sessions_start_km_non_negative",
+        ),
+        CheckConstraint(
+            "start_hmr IS NULL OR start_hmr >= 0",
+            name="ck_duty_sessions_start_hmr_non_negative",
+        ),
         CheckConstraint(
             "end_km IS NULL OR end_km >= 0", name="ck_duty_sessions_end_km_non_negative"
+        ),
+        CheckConstraint(
+            "end_hmr IS NULL OR end_hmr >= 0", name="ck_duty_sessions_end_hmr_non_negative"
+        ),
+        CheckConstraint(
+            "(start_km IS NOT NULL AND start_hmr IS NULL) OR "
+            "(start_km IS NULL AND start_hmr IS NOT NULL)",
+            name="ck_duty_sessions_one_start_meter",
+        ),
+        CheckConstraint(
+            "NOT (end_km IS NOT NULL AND end_hmr IS NOT NULL)",
+            name="ck_duty_sessions_one_end_meter",
+        ),
+        CheckConstraint(
+            "(start_km IS NULL OR end_hmr IS NULL) AND "
+            "(start_hmr IS NULL OR end_km IS NULL)",
+            name="ck_duty_sessions_meter_type_consistent",
         ),
         CheckConstraint(
             "configured_regular_duty_minutes > 0",

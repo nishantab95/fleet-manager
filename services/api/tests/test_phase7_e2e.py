@@ -296,16 +296,17 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
         workbook = load_workbook(BytesIO(workbook_response.content), read_only=True, data_only=True)
         assert workbook.sheetnames == [
             "Management Dashboard",
-            "Daily Summary",
+            "Tipper Daily",
+            "Machinery Daily",
             "Trip Register",
-            "KM Register",
+            "Meter Readings",
             "Diesel Register",
+            "Duty Register",
             "Exceptions",
-            "Driver Duty",
         ]
-        assert workbook["Trip Register"].max_row - 1 == 8
-        assert workbook["KM Register"].max_row - 1 == 2
-        assert workbook["Diesel Register"].max_row - 1 == 1
+        assert workbook["Trip Register"].max_row - 4 == 8
+        assert workbook["Meter Readings"].max_row - 4 == 2
+        assert workbook["Diesel Register"].max_row - 4 == 1
         workbook.close()
 
         closed = client.post(

@@ -1,11 +1,12 @@
 import 'dart:convert';
 
-enum DriverEventType { tripComplete, kmReading, diesel, emergency }
+enum DriverEventType { tripComplete, kmReading, hmrReading, diesel, emergency }
 
 extension DriverEventTypeWire on DriverEventType {
   String get wireName => switch (this) {
     DriverEventType.tripComplete => 'TRIP_COMPLETE',
     DriverEventType.kmReading => 'KM_READING',
+    DriverEventType.hmrReading => 'HMR_READING',
     DriverEventType.diesel => 'DIESEL',
     DriverEventType.emergency => 'EMERGENCY',
   };
@@ -118,6 +119,7 @@ class DriverAssignment {
     required this.tipperId,
     required this.tipperRegistrationNumber,
     required this.tipperShortName,
+    this.assetType = 'TIPPER',
     this.tipperAssetCode,
     required this.siteId,
     required this.siteName,
@@ -127,9 +129,10 @@ class DriverAssignment {
 
   final String assignmentId;
   final String tipperId;
-  final String tipperRegistrationNumber;
+  final String? tipperRegistrationNumber;
   final String? tipperShortName;
   final String? tipperAssetCode;
+  final String assetType;
   final String siteId;
   final String siteName;
   final String supervisorName;
@@ -144,8 +147,9 @@ class DriverAssignment {
     return DriverAssignment(
       assignmentId: json['assignment_id'] as String,
       tipperId: json['tipper_id'] as String,
-      tipperRegistrationNumber: json['tipper_registration_number'] as String,
+      tipperRegistrationNumber: json['tipper_registration_number'] as String?,
       tipperShortName: json['tipper_short_name'] as String?,
+      assetType: '${json['asset_type'] ?? 'TIPPER'}',
       tipperAssetCode:
           (json['asset_code'] ?? json['tipper_asset_code']) as String?,
       siteId: json['site_id'] as String,
@@ -162,12 +166,56 @@ class DriverAssignment {
     'tipper_id': tipperId,
     'tipper_registration_number': tipperRegistrationNumber,
     'tipper_short_name': tipperShortName,
+    'asset_type': assetType,
     if (tipperAssetCode != null) 'asset_code': tipperAssetCode,
     'site_id': siteId,
     'site_name': siteName,
     'supervisor_name': supervisorName,
     'supervisor_names': supervisorNames,
   };
+}
+
+class DriverAssetCapabilities {
+  const DriverAssetCapabilities({
+    required this.supportsTripComplete,
+    required this.supportsOdometer,
+    required this.supportsHourMeter,
+    required this.supportsDiesel,
+    required this.supportsEmergency,
+    required this.supportsDutySession,
+  });
+
+  final bool supportsTripComplete;
+  final bool supportsOdometer;
+  final bool supportsHourMeter;
+  final bool supportsDiesel;
+  final bool supportsEmergency;
+  final bool supportsDutySession;
+
+  static const tipper = DriverAssetCapabilities(
+    supportsTripComplete: true,
+    supportsOdometer: true,
+    supportsHourMeter: false,
+    supportsDiesel: true,
+    supportsEmergency: true,
+    supportsDutySession: true,
+  );
+  static const machinery = DriverAssetCapabilities(
+    supportsTripComplete: false,
+    supportsOdometer: false,
+    supportsHourMeter: true,
+    supportsDiesel: true,
+    supportsEmergency: true,
+    supportsDutySession: true,
+  );
+
+  static DriverAssetCapabilities forType(String assetType) =>
+      assetType == 'TIPPER' ? tipper : machinery;
+}
+
+extension DriverAssignmentCapabilities on DriverAssignment {
+  DriverAssetCapabilities get capabilities =>
+      DriverAssetCapabilities.forType(assetType);
 }
 
 enum DriverAssignmentAuthority {
@@ -213,6 +261,8 @@ class DriverDutyState {
     this.startKm,
     this.endedAt,
     this.endKm,
+    this.startHmr,
+    this.endHmr,
     this.regularDutyMinutes,
   });
 
@@ -228,6 +278,8 @@ class DriverDutyState {
   final double? startKm;
   final DateTime? endedAt;
   final double? endKm;
+  final double? startHmr;
+  final double? endHmr;
   final int? regularDutyMinutes;
 
   bool get isActive => status == DriverDutyStatus.active;
@@ -273,6 +325,8 @@ class DriverDutyState {
       startKm: _parseDouble(json['start_km']),
       endedAt: _parseDateTime(json['ended_at']),
       endKm: _parseDouble(json['end_km']),
+      startHmr: _parseDouble(json['start_hmr']),
+      endHmr: _parseDouble(json['end_hmr']),
       regularDutyMinutes: json['regular_duty_minutes'] as int?,
     );
   }

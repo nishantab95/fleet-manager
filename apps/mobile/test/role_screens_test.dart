@@ -91,7 +91,7 @@ void main() {
     expect(api.assignmentSiteId, 'site-1');
   });
 
-  testWidgets('supervisor assigns an unassigned Tipper but not machinery', (
+  testWidgets('supervisor assigns an operator to unassigned machinery', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1080, 1800));
@@ -106,17 +106,17 @@ void main() {
 
     expect(
       find.byKey(const Key('supervisor-assign-driver-excavator-7')),
-      findsNothing,
+      findsOneWidget,
     );
     await tester.tap(
-      find.byKey(const Key('supervisor-assign-driver-rent-t03')),
+      find.byKey(const Key('supervisor-assign-driver-excavator-7')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('ASSIGN DRIVER / OPERATOR · RENT-T03'), findsOneWidget);
+    expect(find.text('ASSIGN DRIVER / OPERATOR · EXC-07'), findsOneWidget);
     await tester.tap(find.byKey(const Key('confirm-driver-assignment')));
     await tester.pumpAndSettle();
 
-    expect(api.assignedAssetId, 'rent-t03');
+    expect(api.assignedAssetId, 'excavator-7');
     expect(api.assignedDriverId, 'driver-2');
   });
 
@@ -162,6 +162,49 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'supervisor machinery card shows HMR hours without trip metrics',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SupervisorHomeScreen(
+            api: _MachineryRoleApi(),
+            onSignOut: () async {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final card = find.byKey(const Key('supervisor-site-asset-exc-01'));
+      expect(card, findsOneWidget);
+      expect(
+        find.descendant(of: card, matching: find.text('START HMR 3240.50')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: card, matching: find.text('END HMR 3248')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: card, matching: find.text('MACHINE HOURS 7.50')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: card, matching: find.text('Diesel 25 L')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: card, matching: find.textContaining('Trips')),
+        findsNothing,
+      );
+      expect(find.text('2 pending'), findsWidgets);
+      expect(find.text('Review'), findsOneWidget);
+      expect(find.text('Timeline'), findsOneWidget);
+    },
+  );
 
   for (final assetCount in [1, 10, 50]) {
     testWidgets('supervisor fleet list handles $assetCount assets', (
@@ -240,6 +283,34 @@ void main() {
     },
   );
 
+  test('supervisor diesel summary adds litres rather than event count', () {
+    SupervisorEvent diesel(String id, double litres) =>
+        SupervisorEvent.fromJson({
+          'event_id': id,
+          'event_type': 'DIESEL',
+          'assignment_id': 'assignment-1',
+          'driver_name': 'Operator',
+          'asset_code': 'EXC-01',
+          'asset_type': 'EXCAVATOR',
+          'tipper_registration_number': 'EXC-01',
+          'site_id': 'site-1',
+          'site_name': 'Pilot Site',
+          'device_created_at': '2026-09-30T08:00:00Z',
+          'verification_status': 'PENDING_VERIFICATION',
+          'litres': litres,
+          'evidence_available': false,
+        });
+
+    expect(supervisorDieselLitres([diesel('diesel-10', 10)]), 10);
+    expect(
+      supervisorDieselLitres([
+        diesel('diesel-10', 10),
+        diesel('diesel-15', 15),
+      ]),
+      25,
+    );
+  });
+
   testWidgets('owner home exposes management dashboard and duty monitoring', (
     tester,
   ) async {
@@ -260,6 +331,13 @@ void main() {
     await tester.pump();
     expect(find.text('DRIVER DUTY / OVERTIME'), findsOneWidget);
     expect(find.text('25 min'), findsOneWidget);
+    expect(find.text('START KM'), findsOneWidget);
+    expect(find.text('END KM'), findsOneWidget);
+    expect(find.text('DISTANCE'), findsOneWidget);
+    expect(find.text('START HMR'), findsOneWidget);
+    expect(find.text('END HMR'), findsOneWidget);
+    expect(find.text('MACHINE HOURS'), findsOneWidget);
+    expect(find.text('1.50 h'), findsOneWidget);
   });
 }
 
@@ -506,6 +584,8 @@ class _FakeRoleApi extends ApiClient {
   Future<List<OwnerDutyReport>> ownerDuty({DateTime? date}) async => [
     OwnerDutyReport.fromJson({
       'driver_name': 'Pilot Driver',
+      'asset_code': 'TIPPER-12',
+      'asset_type': 'TIPPER',
       'tipper_registration_number': 'PILOT-12',
       'site_name': 'Pilot Site',
       'duty_start': '2026-09-25T05:00:00Z',
@@ -514,8 +594,29 @@ class _FakeRoleApi extends ApiClient {
       'regular_duty_ends_at': '2026-09-25T15:00:00Z',
       'actual_duty_end': '2026-09-25T15:25:00Z',
       'end_km': 10120,
+      'verified_diesel_issued': 30,
+      'pending_diesel_issued': 0,
       'actual_duty_span_seconds': 37500,
       'overtime_minutes': 25,
+      'status': 'CLOSED',
+    }),
+    OwnerDutyReport.fromJson({
+      'driver_name': 'Test Operator',
+      'asset_code': 'EXC-01',
+      'asset_type': 'EXCAVATOR',
+      'tipper_registration_number': 'EXC-01',
+      'site_name': 'Test Site B',
+      'duty_start': '2026-09-25T05:00:00Z',
+      'start_hmr': 1000,
+      'regular_duty_minutes': 600,
+      'regular_duty_ends_at': '2026-09-25T15:00:00Z',
+      'actual_duty_end': '2026-09-25T06:30:00Z',
+      'end_hmr': 1001.5,
+      'machine_hours': 1.5,
+      'verified_diesel_issued': 0,
+      'pending_diesel_issued': 10,
+      'actual_duty_span_seconds': 5400,
+      'overtime_minutes': 0,
       'status': 'CLOSED',
     }),
   ];
@@ -597,6 +698,66 @@ class _MultiSiteRoleApi extends _FakeRoleApi {
   }
 }
 
+class _MachineryRoleApi extends _FakeRoleApi {
+  @override
+  Future<List<SiteDeployedAsset>> supervisorSiteAssets(String siteId) async => [
+    _siteAsset(
+      id: 'exc-01',
+      siteId: siteId,
+      siteName: 'Pilot Site',
+      shortName: 'CAT 320',
+      assetCode: 'EXC-01',
+      registration: null,
+      driverName: 'Test Driver Two',
+      assetType: 'EXCAVATOR',
+    ),
+  ];
+
+  @override
+  Future<List<SupervisorEvent>> supervisorEvents(
+    String siteId, {
+    String? verificationStatus,
+    DateTime? reviewDate,
+  }) async => [
+    for (final reading in const [
+      ('start-hmr', 'START_READING', 3240.5, '2026-09-30T08:01:00Z'),
+      ('end-hmr', 'END_READING', 3248.0, '2026-09-30T17:30:00Z'),
+    ])
+      SupervisorEvent.fromJson({
+        'event_id': reading.$1,
+        'event_type': 'HMR_READING',
+        'assignment_id': 'exc-assignment',
+        'driver_name': 'Test Driver Two',
+        'asset_code': 'EXC-01',
+        'asset_type': 'EXCAVATOR',
+        'tipper_registration_number': 'EXC-01',
+        'site_id': siteId,
+        'site_name': 'Pilot Site',
+        'device_created_at': reading.$4,
+        'verification_status': 'PENDING_VERIFICATION',
+        'reading_type': reading.$2,
+        'reading_value': reading.$3,
+        'evidence_available': true,
+      }),
+    for (final diesel in const [('diesel-10', 10.0), ('diesel-15', 15.0)])
+      SupervisorEvent.fromJson({
+        'event_id': diesel.$1,
+        'event_type': 'DIESEL',
+        'assignment_id': 'exc-assignment',
+        'driver_name': 'Test Driver Two',
+        'asset_code': 'EXC-01',
+        'asset_type': 'EXCAVATOR',
+        'tipper_registration_number': 'EXC-01',
+        'site_id': siteId,
+        'site_name': 'Pilot Site',
+        'device_created_at': '2026-09-30T12:00:00Z',
+        'verification_status': 'APPROVED',
+        'litres': diesel.$2,
+        'evidence_available': false,
+      }),
+  ];
+}
+
 SiteDeployedAsset _siteAsset({
   required String id,
   required String siteId,
@@ -605,10 +766,11 @@ SiteDeployedAsset _siteAsset({
   required String assetCode,
   required String? registration,
   required String? driverName,
+  String assetType = 'TIPPER',
 }) => SiteDeployedAsset.fromJson({
   'asset_id': id,
   'asset_code': assetCode,
-  'asset_type': 'TIPPER',
+  'asset_type': assetType,
   'ownership_type': 'OWNED',
   'registration_number': registration,
   'short_name': shortName,

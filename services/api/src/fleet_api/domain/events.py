@@ -15,6 +15,7 @@ from fleet_api.db.models import (
     DieselEvent,
     EmergencyEvent,
     EventVerification,
+    HourMeterReading,
     KmReading,
     OperationalEvent,
     TripEvent,
@@ -22,6 +23,7 @@ from fleet_api.db.models import (
 from fleet_api.domain.enums import (
     EmergencyCategory,
     EmergencyStatus,
+    HourMeterReadingType,
     KmReadingType,
     MembershipRole,
     OperationalEventType,
@@ -175,6 +177,45 @@ def create_km_reading(
             raise DomainError("idempotent event envelope has no km payload")
         return reading
     reading = KmReading(
+        event_id=event.id,
+        reading_type=reading_type,
+        reading_value=reading_value,
+        object_reference=object_reference,
+    )
+    session.add(reading)
+    session.flush()
+    return reading
+
+
+def create_hour_meter_reading(
+    session: Session,
+    *,
+    company_id: UUID,
+    assignment_id: UUID,
+    client_event_uuid: UUID,
+    device_created_at: datetime,
+    reading_type: HourMeterReadingType,
+    reading_value: Decimal,
+    object_reference: str | None = None,
+    device_id: UUID | None = None,
+) -> HourMeterReading:
+    if not reading_value.is_finite() or reading_value < 0:
+        raise DomainError("reading_value must be finite and non-negative")
+    event, existing = _existing_or_new_event(
+        session,
+        company_id=company_id,
+        assignment_id=assignment_id,
+        client_event_uuid=client_event_uuid,
+        device_id=device_id,
+        device_created_at=device_created_at,
+        event_type=OperationalEventType.HMR_READING,
+    )
+    reading = session.get(HourMeterReading, event.id)
+    if existing:
+        if reading is None:
+            raise DomainError("idempotent event envelope has no hour-meter payload")
+        return reading
+    reading = HourMeterReading(
         event_id=event.id,
         reading_type=reading_type,
         reading_value=reading_value,

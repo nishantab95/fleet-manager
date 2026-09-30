@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -20,6 +21,7 @@ from fleet_api.db.models import (
     EventVerification,
     EvidenceObject,
     FleetAsset,
+    HourMeterReading,
     KmReading,
     OperationalEvent,
     Site,
@@ -28,6 +30,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.models.common import utc_now
+from fleet_api.domain.assets import capabilities_for
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     EmergencyStatus,
@@ -53,6 +56,15 @@ class OperationalDay:
     end_utc: datetime
     reporting_timezone: str
     workday_start_minutes: int
+
+
+class ReportMetricState(StrEnum):
+    """Explain whether a report metric is absent, zero, missing, or populated."""
+
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    MISSING = "MISSING"
+    ZERO = "ZERO"
+    VALUE = "VALUE"
 
 
 @dataclass(frozen=True)
@@ -122,11 +134,18 @@ class AssetDailyReport:
     pending_trip_count: int
     disputed_trip_count: int
     rejected_trip_count: int
+    trips_state: ReportMetricState
     start_km: Decimal | None
     end_km: Decimal | None
     distance_km: Decimal | None
+    distance_state: ReportMetricState
+    start_hmr: Decimal | None
+    end_hmr: Decimal | None
+    machine_hours: Decimal | None
+    machine_hours_state: ReportMetricState
     km_per_approved_trip: Decimal | None
     verified_diesel_issued: Decimal
+    pending_diesel_issued: Decimal
     diesel_issued_per_approved_trip: Decimal | None
     first_trip_completed_at: datetime | None
     last_trip_completed_at: datetime | None
@@ -203,6 +222,7 @@ class _EventParts:
     driver_phone: str
     supervisor_name: str
     km: KmReading | None
+    hmr: HourMeterReading | None
     diesel: DieselEvent | None
     emergency: EmergencyEvent | None
     evidence_available: bool
@@ -429,6 +449,12 @@ class ReportingService:
                 select(KmReading).where(KmReading.event_id.in_(event_ids))
             ).all()
         }
+        hmr_by_event = {
+            reading.event_id: reading
+            for reading in self.session.scalars(
+                select(HourMeterReading).where(HourMeterReading.event_id.in_(event_ids))
+            ).all()
+        }
         diesel_by_event = {
             diesel.event_id: diesel
             for diesel in self.session.scalars(
@@ -488,6 +514,7 @@ class ReportingService:
                     driver_phone=driver_phone,
                     supervisor_name=supervisor_name,
                     km=km_by_event.get(event.id),
+                    hmr=hmr_by_event.get(event.id),
                     diesel=diesel_by_event.get(event.id),
                     emergency=emergency_by_event.get(event.id),
                     evidence_available=event.client_event_uuid in evidence_by_client,
@@ -518,8 +545,16 @@ class ReportingService:
             device_created_at=parts.event.device_created_at,
             server_received_at=parts.event.server_received_at,
             verification_status=parts.event.verification_status,
-            reading_type=parts.km.reading_type.value if parts.km else None,
-            reading_value=parts.km.reading_value if parts.km else None,
+            reading_type=(
+                parts.km.reading_type.value
+                if parts.km
+                else parts.hmr.reading_type.value if parts.hmr else None
+            ),
+            reading_value=(
+                parts.km.reading_value
+                if parts.km
+                else parts.hmr.reading_value if parts.hmr else None
+            ),
             litres=parts.diesel.litres if parts.diesel else None,
             emergency_category=(
                 parts.emergency.category.value
@@ -564,6 +599,34 @@ class ReportingService:
         ordered_readings = sorted(approved_readings, key=lambda item: item[0])
         selected = ordered_readings[0 if reading_type == "START_READING" else -1]
         return selected[1], False
+
+    @staticmethod
+    def _hour_meter_value(
+        events: list[_EventParts], reading_type: str
+    ) -> tuple[Decimal | None, bool]:
+        valid_readings = [
+            (parts.event.device_created_at, parts.hmr.reading_value, parts.event.duty_session_id)
+            for parts in events
+            if parts.hmr is not None
+            and parts.hmr.reading_type.value == reading_type
+            and parts.event.verification_status
+            in {
+                VerificationStatus.PENDING_VERIFICATION,
+                VerificationStatus.APPROVED,
+                VerificationStatus.AMENDED,
+            }
+        ]
+        values_by_session: dict[UUID | None, set[Decimal]] = defaultdict(set)
+        for _, value, session_id in valid_readings:
+            values_by_session[session_id].add(value)
+        if any(len(values) > 1 for values in values_by_session.values()):
+            return None, True
+        if not valid_readings:
+            return None, False
+        if None in values_by_session and len({value for _, value, _ in valid_readings}) > 1:
+            return None, True
+        ordered = sorted(valid_readings, key=lambda item: item[0])
+        return ordered[0 if reading_type == "START_READING" else -1][1], False
 
     @staticmethod
     def _has_status(
@@ -620,8 +683,19 @@ class ReportingService:
             first_trip_completed_at = first_trip_completed_at.astimezone(reporting_zone)
         if last_trip_completed_at is not None:
             last_trip_completed_at = last_trip_completed_at.astimezone(reporting_zone)
-        start_km, conflicting_start = self._reading_value(events, "START_READING")
-        end_km, conflicting_end = self._reading_value(events, "END_READING")
+        capabilities = capabilities_for(asset.asset_type)
+        start_km: Decimal | None = None
+        end_km: Decimal | None = None
+        start_hmr: Decimal | None = None
+        end_hmr: Decimal | None = None
+        conflicting_start = False
+        conflicting_end = False
+        if capabilities.supports_odometer:
+            start_km, conflicting_start = self._reading_value(events, "START_READING")
+            end_km, conflicting_end = self._reading_value(events, "END_READING")
+        elif capabilities.supports_hour_meter:
+            start_hmr, conflicting_start = self._hour_meter_value(events, "START_READING")
+            end_hmr, conflicting_end = self._hour_meter_value(events, "END_READING")
         exceptions: list[ReportException] = []
 
         def add_exception(code: str, description: str, event_id: UUID | None = None) -> None:
@@ -641,29 +715,39 @@ class ReportingService:
 
         if conflicting_start:
             add_exception(
-                "CONFLICTING_START_READING", "More than one approved START reading exists"
+                "CONFLICTING_START_READING", "More than one valid START reading exists"
             )
-        elif start_km is None:
+        elif capabilities.supports_odometer and start_km is None:
             if self._has_status(
                 events, OperationalEventType.KM_READING, VerificationStatus.PENDING_VERIFICATION
             ):
                 add_exception("KM_PENDING", "A KM reading is pending verification")
             add_exception("MISSING_START_READING", "No approved START reading exists")
+        elif capabilities.supports_hour_meter and start_hmr is None:
+            add_exception("MISSING_START_HMR", "No valid START HMR exists")
         if conflicting_end:
-            add_exception("CONFLICTING_END_READING", "More than one approved END reading exists")
-        elif end_km is None:
+            add_exception("CONFLICTING_END_READING", "More than one valid END reading exists")
+        elif capabilities.supports_odometer and end_km is None:
             if self._has_status(
                 events, OperationalEventType.KM_READING, VerificationStatus.PENDING_VERIFICATION
             ):
                 if not any(item.code == "KM_PENDING" for item in exceptions):
                     add_exception("KM_PENDING", "A KM reading is pending verification")
             add_exception("MISSING_END_READING", "No approved END reading exists")
+        elif capabilities.supports_hour_meter and end_hmr is None:
+            add_exception("MISSING_END_HMR", "No valid END HMR exists")
         distance_km: Decimal | None = None
+        machine_hours: Decimal | None = None
         if start_km is not None and end_km is not None:
             if end_km < start_km:
                 add_exception("END_BELOW_START", "Approved END reading is lower than START reading")
             else:
                 distance_km = end_km - start_km
+        if start_hmr is not None and end_hmr is not None:
+            if end_hmr < start_hmr:
+                add_exception("END_BELOW_START", "END HMR is lower than START HMR")
+            else:
+                machine_hours = end_hmr - start_hmr
 
         km_per_approved_trip = (
             distance_km / Decimal(len(approved_trips))
@@ -705,6 +789,10 @@ class ReportingService:
             add_exception(
                 "DIESEL_PENDING", f"{len(pending_diesel)} diesel record(s) pending verification"
             )
+        pending_diesel_issued = sum(
+            (parts.diesel.litres for parts in pending_diesel if parts.diesel is not None),
+            Decimal("0"),
+        )
 
         unresolved_emergencies = [
             parts
@@ -734,6 +822,39 @@ class ReportingService:
                 else "INCOMPLETE"
             )
         )
+        missing_start = (
+            (capabilities.supports_odometer and start_km is None)
+            or (capabilities.supports_hour_meter and start_hmr is None)
+        ) and not conflicting_start
+        missing_end = (
+            (capabilities.supports_odometer and end_km is None)
+            or (capabilities.supports_hour_meter and end_hmr is None)
+        ) and not conflicting_end
+        trips_state = (
+            ReportMetricState.NOT_APPLICABLE
+            if not capabilities.supports_trip_complete
+            else ReportMetricState.ZERO
+            if not approved_trips
+            else ReportMetricState.VALUE
+        )
+        distance_state = (
+            ReportMetricState.NOT_APPLICABLE
+            if not capabilities.supports_odometer
+            else ReportMetricState.MISSING
+            if distance_km is None
+            else ReportMetricState.ZERO
+            if distance_km == 0
+            else ReportMetricState.VALUE
+        )
+        machine_hours_state = (
+            ReportMetricState.NOT_APPLICABLE
+            if not capabilities.supports_hour_meter
+            else ReportMetricState.MISSING
+            if machine_hours is None
+            else ReportMetricState.ZERO
+            if machine_hours == 0
+            else ReportMetricState.VALUE
+        )
         return AssetDailyReport(
             assignment=assignment,
             asset=asset,
@@ -744,11 +865,18 @@ class ReportingService:
             pending_trip_count=len(pending_trips),
             disputed_trip_count=len(disputed_trips),
             rejected_trip_count=len(rejected_trips),
+            trips_state=trips_state,
             start_km=start_km,
             end_km=end_km,
             distance_km=distance_km,
+            distance_state=distance_state,
+            start_hmr=start_hmr,
+            end_hmr=end_hmr,
+            machine_hours=machine_hours,
+            machine_hours_state=machine_hours_state,
             km_per_approved_trip=km_per_approved_trip,
             verified_diesel_issued=approved_diesel,
+            pending_diesel_issued=pending_diesel_issued,
             diesel_issued_per_approved_trip=diesel_issued_per_approved_trip,
             first_trip_completed_at=first_trip_completed_at,
             last_trip_completed_at=last_trip_completed_at,
@@ -759,8 +887,8 @@ class ReportingService:
             pending_diesel_count=len(pending_diesel),
             disputed_diesel_count=len(disputed_diesel),
             unresolved_emergency_count=len(unresolved_emergencies),
-            missing_start_reading=start_km is None and not conflicting_start,
-            missing_end_reading=end_km is None and not conflicting_end,
+            missing_start_reading=missing_start,
+            missing_end_reading=missing_end,
             completeness_status=status,
             closure_status=SiteClosureStatus.OPEN,
             exceptions=exceptions,

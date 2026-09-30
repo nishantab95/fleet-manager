@@ -250,6 +250,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
         .length;
     final todayTrips = selectedEvents.where((event) => event.isTrip).length;
     final todayKm = selectedEvents.where((event) => event.isKm).length;
+    final todayHmr = selectedEvents.where((event) => event.isHmr).length;
     final todayDiesel = selectedEvents.where((event) => event.isDiesel).length;
     return _RoleScaffold(
       title: 'Supervisor',
@@ -382,6 +383,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
             _TodaySummary(
               trips: todayTrips,
               kmReadings: todayKm,
+              hmrReadings: todayHmr,
               dieselEntries: todayDiesel,
               pending: pendingEvents.length,
             ),
@@ -417,9 +419,13 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
     SiteDeployedAsset asset,
     List<SupervisorEvent> events,
   ) {
-    final identity = asset.registrationNumber ?? asset.assetCode;
     return events
-        .where((event) => event.tipperRegistration == identity)
+        .where(
+          (event) =>
+              event.assetCode == asset.assetCode ||
+              event.tipperRegistration ==
+                  (asset.registrationNumber ?? asset.assetCode),
+        )
         .toList();
   }
 
@@ -452,7 +458,18 @@ class _SupervisorAssetCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final trips = events.where((event) => event.isTrip).length;
     final kmReadings = events.where((event) => event.isKm).length;
-    final dieselEntries = events.where((event) => event.isDiesel).length;
+    final startHmr = events
+        .where((event) => event.isHmr && event.readingType == 'START_READING')
+        .lastOrNull
+        ?.readingValue;
+    final endHmr = events
+        .where((event) => event.isHmr && event.readingType == 'END_READING')
+        .lastOrNull
+        ?.readingValue;
+    final machineHours = startHmr != null && endHmr != null
+        ? endHmr - startHmr
+        : null;
+    final dieselLitres = supervisorDieselLitres(events);
     final pending = supervisorReviewPendingCount(events);
     final title = asset.shortName?.trim().isNotEmpty == true
         ? asset.shortName!
@@ -537,13 +554,31 @@ class _SupervisorAssetCard extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 6,
                 children: [
-                  _CompactMetric(label: 'Trips', value: '$trips'),
-                  _CompactMetric(label: 'KM', value: '$kmReadings'),
-                  _CompactMetric(label: 'Diesel', value: '$dieselEntries'),
+                  if (asset.assetType == 'TIPPER') ...[
+                    _CompactMetric(label: 'Trips', value: '$trips'),
+                    _CompactMetric(label: 'KM', value: '$kmReadings'),
+                  ] else ...[
+                    _CompactMetric(
+                      label: 'START HMR',
+                      value: _numberText(startHmr),
+                    ),
+                    _CompactMetric(
+                      label: 'END HMR',
+                      value: _numberText(endHmr),
+                    ),
+                    _CompactMetric(
+                      label: 'MACHINE HOURS',
+                      value: _numberText(machineHours),
+                    ),
+                  ],
+                  _CompactMetric(
+                    label: 'Diesel',
+                    value: '${_numberText(dieselLitres)} L',
+                  ),
                 ],
               ),
             ],
-            if (asset.assetType == 'TIPPER') ...[
+            ...[
               const SizedBox(height: 6),
               Align(
                 alignment: Alignment.centerRight,
@@ -585,11 +620,13 @@ class _TodaySummary extends StatelessWidget {
   const _TodaySummary({
     required this.trips,
     required this.kmReadings,
+    required this.hmrReadings,
     required this.dieselEntries,
     required this.pending,
   });
   final int trips;
   final int kmReadings;
+  final int hmrReadings;
   final int dieselEntries;
   final int pending;
 
@@ -603,7 +640,9 @@ class _TodaySummary extends StatelessWidget {
         children: [
           _CompactMetric(label: 'Trips', value: '$trips'),
           _CompactMetric(label: 'KM readings', value: '$kmReadings'),
-          _CompactMetric(label: 'Diesel', value: '$dieselEntries'),
+          if (hmrReadings > 0)
+            _CompactMetric(label: 'HMR readings', value: '$hmrReadings'),
+          _CompactMetric(label: 'Diesel entries', value: '$dieselEntries'),
           _CompactMetric(label: 'Pending', value: '$pending'),
         ],
       ),
@@ -678,8 +717,8 @@ class _ReviewEventCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final detail = event.isKm
-        ? '${event.readingType == 'START_READING' ? 'START KM' : 'END KM'} · ${_numberText(event.readingValue)}'
+    final detail = event.isKm || event.isHmr
+        ? '${event.readingType == 'START_READING' ? 'START' : 'END'} ${event.isHmr ? 'HMR' : 'KM'} · ${_numberText(event.readingValue)}${event.isHmr ? ' hours' : ''}'
         : event.isDiesel
         ? '${_numberText(event.litres)} LITRES'
         : event.isTrip
@@ -1240,11 +1279,29 @@ class _DutyCard extends StatelessWidget {
               _StatusChip(duty.status),
             ],
           ),
-          Text('${duty.tipperRegistration} · ${duty.siteName}'),
+          Text('${duty.assetCode} · ${duty.siteName}'),
           const SizedBox(height: 8),
           _KeyValueRow('Duty start', _formatDate(duty.dutyStart)),
-          _KeyValueRow('START KM', _numberText(duty.startKm)),
-          _KeyValueRow('END KM', _numberText(duty.endKm)),
+          if (duty.capabilities.supportsOdometer) ...[
+            _KeyValueRow('START KM', _numberText(duty.startKm)),
+            _KeyValueRow('END KM', _numberText(duty.endKm)),
+            _KeyValueRow('DISTANCE', '${_numberText(duty.distanceKm)} KM'),
+          ],
+          if (duty.capabilities.supportsHourMeter) ...[
+            _KeyValueRow('START HMR', _numberText(duty.startHmr)),
+            _KeyValueRow('END HMR', _numberText(duty.endHmr)),
+            _KeyValueRow(
+              'MACHINE HOURS',
+              '${_numberText(duty.machineHours)} h',
+            ),
+          ],
+          if (duty.capabilities.supportsDiesel)
+            _KeyValueRow(
+              'DIESEL',
+              duty.pendingDieselLitres > 0
+                  ? '${_numberText(duty.verifiedDieselLitres)} L verified · ${_numberText(duty.pendingDieselLitres)} L pending'
+                  : '${_numberText(duty.verifiedDieselLitres)} L',
+            ),
           _KeyValueRow('Regular duty end', _formatDate(duty.regularEnds)),
           _KeyValueRow('Actual duty end', _formatDate(duty.actualEnd)),
           _KeyValueRow(

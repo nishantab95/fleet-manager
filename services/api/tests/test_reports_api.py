@@ -19,8 +19,10 @@ from fleet_api.db.models import (
     SiteDailyClosureHistory,
     SupervisorSiteAccess,
 )
+from fleet_api.domain.assets import create_fleet_asset
 from fleet_api.domain.assignments import create_assignment
-from fleet_api.domain.enums import SiteStatus
+from fleet_api.domain.enums import AssetOwnershipType, FleetAssetType, SiteStatus
+from test_driver_api import session_for_user
 from test_supervisor_api import (
     SupervisorStorage,
     access_token,
@@ -102,7 +104,7 @@ def create_event(
 ) -> str:
     client_event_uuid = str(uuid4())
     payload_extra = dict(extra)
-    if event_type in {"KM_READING", "DIESEL"}:
+    if event_type in {"KM_READING", "HMR_READING", "DIESEL"}:
         uploaded = client.post(
             "/api/v1/driver/evidence",
             params={"client_event_uuid": client_event_uuid},
@@ -284,44 +286,50 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         workbook = load_workbook(BytesIO(workbook_response.content), data_only=False)
         assert workbook.sheetnames == [
             "Management Dashboard",
-            "Daily Summary",
+            "Tipper Daily",
+            "Machinery Daily",
             "Trip Register",
-            "KM Register",
+            "Meter Readings",
             "Diesel Register",
+            "Duty Register",
             "Exceptions",
-            "Driver Duty",
         ]
-        assert workbook["Driver Duty"]["A1"].value == "Operational Date"
-        assert workbook["Daily Summary"]["B2"].value == "'=Unsafe Site"
-        assert workbook["Daily Summary"]["J2"].value == 120
-        assert workbook["Management Dashboard"]["A8"].value == "Site"
-        assert workbook["Management Dashboard"]["L9"].value == 15
-        assert workbook["Management Dashboard"]["N9"].value == 3.75
-        assert workbook["Management Dashboard"].freeze_panes == "A9"
-        trip_rows = list(workbook["Trip Register"].iter_rows(min_row=2, values_only=True))
+        assert workbook["Duty Register"]["A4"].value == "Date"
+        assert workbook["Tipper Daily"]["B5"].value == "'=Unsafe Site"
+        assert workbook["Tipper Daily"]["I5"].value == 120
+        assert workbook["Management Dashboard"]["A4"].value == "Asset"
+        assert workbook["Management Dashboard"]["H5"].value == 120
+        assert workbook["Management Dashboard"]["J5"].value == 30
+        assert workbook["Management Dashboard"].freeze_panes == "A5"
+        assert workbook["Management Dashboard"].max_column == 11
+        trip_rows = list(workbook["Trip Register"].iter_rows(min_row=5, values_only=True))
         assert len(trip_rows) == 11
         assert (
-            sum(1 for row in trip_rows if row[5] == "APPROVED")
+            sum(1 for row in trip_rows if row[6] == "APPROVED")
             == dashboard_data["approved_trip_count"]
         )
-        assert workbook["Daily Summary"].freeze_panes == "A2"
-        assert workbook["Daily Summary"].auto_filter.ref
-        km_rows = list(workbook["KM Register"].iter_rows(min_row=2, values_only=True))
-        diesel_rows = list(workbook["Diesel Register"].iter_rows(min_row=2, values_only=True))
+        assert workbook["Tipper Daily"].freeze_panes == "A5"
+        assert workbook["Tipper Daily"].auto_filter.ref
+        meter_rows = list(
+            workbook["Meter Readings"].iter_rows(min_row=5, values_only=True)
+        )
+        diesel_rows = list(
+            workbook["Diesel Register"].iter_rows(min_row=5, values_only=True)
+        )
+        assert any(
+            isinstance(row[11], str)
+            and row[11].startswith('=HYPERLINK("http://localhost:3000/evidence/')
+            and str(start) in row[11]
+            and "Open Evidence" in row[11]
+            and "Authorization" not in row[11]
+            for row in meter_rows
+        )
         assert any(
             isinstance(row[8], str)
             and row[8].startswith('=HYPERLINK("http://localhost:3000/evidence/')
-            and str(start) in row[8]
+            and str(diesel) in row[8]
             and "Open Evidence" in row[8]
-            and "Authorization" not in row[8]
-            for row in km_rows
-        )
-        assert any(
-            isinstance(row[7], str)
-            and row[7].startswith('=HYPERLINK("http://localhost:3000/evidence/')
-            and str(diesel) in row[7]
-            and "Open Evidence" in row[7]
-            and "object" not in row[7].lower()
+            and "object" not in row[8].lower()
             for row in diesel_rows
         )
     finally:
@@ -361,6 +369,209 @@ def test_owner_dashboard_reconciles_site_tipper_excel_and_roles(
         assert supervisor_again.get("/api/v1/reports/dashboard").status_code == 403
     finally:
         supervisor_again.close()
+
+
+def test_mixed_tipper_and_machinery_report_is_capability_aware(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    company.reporting_timezone = "Asia/Kolkata"
+    site = value(tenant_records, "site_a", Site)
+    tipper_assignment = add_reporting_assignment(db_session, tenant_records)
+    excavator = create_fleet_asset(
+        db_session,
+        company_id=company.id,
+        asset_type=FleetAssetType.EXCAVATOR,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="EXC-01",
+        registration_number=None,
+        short_name="CAT 320",
+    )
+    machinery_assignment = create_assignment(
+        db_session,
+        company_id=company.id,
+        driver_membership_id=value(
+            tenant_records, "driver_a2", CompanyMembership
+        ).id,
+        supervisor_membership_id=value(
+            tenant_records, "supervisor_a", CompanyMembership
+        ).id,
+        asset_id=excavator.id,
+        site_id=site.id,
+        starts_at=DAY_START - timedelta(hours=1),
+    )
+    storage = SupervisorStorage()
+    tipper_driver = create_driver_client(db_session, tenant_records, storage)
+    machinery_driver = client_for(
+        db_session,
+        session_for_user(
+            db_session,
+            user_by_name(db_session, "Driver A2"),
+            value(tenant_records, "driver_a2", CompanyMembership),
+        ),
+        storage=storage,
+    )
+    events: list[str] = []
+    try:
+        events.append(
+            create_event(
+                tipper_driver,
+                storage,
+                "KM_READING",
+                DAY_START + timedelta(hours=1),
+                reading_type="START_READING",
+                reading_value="20000",
+            )
+        )
+        for hour in range(2, 8):
+            events.append(
+                create_event(
+                    tipper_driver,
+                    storage,
+                    "TRIP_COMPLETE",
+                    DAY_START + timedelta(hours=hour),
+                )
+            )
+        events.append(
+            create_event(
+                tipper_driver,
+                storage,
+                "DIESEL",
+                DAY_START + timedelta(hours=8),
+                litres="20",
+            )
+        )
+        events.append(
+            create_event(
+                tipper_driver,
+                storage,
+                "KM_READING",
+                DAY_START + timedelta(hours=9),
+                reading_type="END_READING",
+                reading_value="20100",
+            )
+        )
+        events.append(
+            create_event(
+                machinery_driver,
+                storage,
+                "HMR_READING",
+                DAY_START + timedelta(hours=1, minutes=30),
+                reading_type="START_READING",
+                reading_value="1000",
+                installation_identifier="machinery-report-device",
+            )
+        )
+        events.append(
+            create_event(
+                machinery_driver,
+                storage,
+                "DIESEL",
+                DAY_START + timedelta(hours=3),
+                litres="10",
+                installation_identifier="machinery-report-device",
+            )
+        )
+        events.append(
+            create_event(
+                machinery_driver,
+                storage,
+                "HMR_READING",
+                DAY_START + timedelta(hours=3),
+                reading_type="END_READING",
+                reading_value="1001.5",
+                installation_identifier="machinery-report-device",
+            )
+        )
+    finally:
+        tipper_driver.close()
+        machinery_driver.close()
+
+    supervisor = supervisor_client(db_session, tenant_records)
+    try:
+        for event_id in events:
+            verify(supervisor, event_id)
+    finally:
+        supervisor.close()
+
+    owner = owner_client(db_session, tenant_records, storage=storage)
+    try:
+        params = {"operational_date": REPORT_DATE.isoformat()}
+        dashboard = owner.get("/api/v1/reports/dashboard", params=params)
+        assert dashboard.status_code == 200, dashboard.text
+        report_rows = {
+            item["assignment_id"]: item
+            for site_report in dashboard.json()["sites"]
+            for item in site_report["tippers"]
+        }
+        tipper = report_rows[str(tipper_assignment.id)]
+        machinery = report_rows[str(machinery_assignment.id)]
+        assert tipper["approved_trip_count"] == 6
+        assert tipper["distance_km"] == "100.00"
+        assert tipper["machine_hours"] is None
+        assert tipper["machine_hours_state"] == "NOT_APPLICABLE"
+        assert tipper["verified_diesel_issued"] == "20.000"
+        assert machinery["approved_trip_count"] is None
+        assert machinery["trips_state"] == "NOT_APPLICABLE"
+        assert machinery["distance_km"] is None
+        assert machinery["distance_state"] == "NOT_APPLICABLE"
+        assert machinery["start_hmr"] == "1000.00"
+        assert machinery["end_hmr"] == "1001.50"
+        assert machinery["machine_hours"] == "1.50"
+        assert machinery["machine_hours_state"] == "VALUE"
+        assert machinery["verified_diesel_issued"] == "10.000"
+        assert machinery["missing_start_reading"] is False
+        assert machinery["missing_end_reading"] is False
+        assert not {
+            "MISSING_START_READING",
+            "MISSING_END_READING",
+            "MISSING_START_HMR",
+            "MISSING_END_HMR",
+        } & {item["code"] for item in machinery["exceptions"]}
+
+        workbook_response = owner.get("/api/v1/reports/daily.xlsx", params=params)
+        assert workbook_response.status_code == 200, workbook_response.text
+        workbook = load_workbook(BytesIO(workbook_response.content), data_only=False)
+        dashboard_rows = {
+            row[0]: row
+            for row in workbook["Management Dashboard"].iter_rows(
+                min_row=5, values_only=True
+            )
+        }
+        assert dashboard_rows["ALPHA-ONE"][6:10] == (6, 100, "—", 20)
+        assert dashboard_rows["EXC-01"][6:10] == ("—", "—", 1.5, 10)
+        machinery_row = next(
+            row
+            for row in workbook["Machinery Daily"].iter_rows(
+                min_row=5, values_only=True
+            )
+            if row[2] == "EXC-01"
+        )
+        assert machinery_row[3] == "EXCAVATOR"
+        assert machinery_row[6:10] == (1000, 1001.5, 1.5, 10)
+        meter_rows = list(
+            workbook["Meter Readings"].iter_rows(min_row=5, values_only=True)
+        )
+        assert {row[6] for row in meter_rows} == {"ODOMETER", "HMR"}
+        assert {row[9] for row in meter_rows} == {"km", "h"}
+        exceptions = list(
+            workbook["Exceptions"].iter_rows(min_row=5, values_only=True)
+        )
+        assert not any(
+            row[2] == "EXC-01" and "KM" in f"{row[5]} {row[6]}"
+            for row in exceptions
+        )
+        trip_time = next(
+            row[5]
+            for row in workbook["Trip Register"].iter_rows(
+                min_row=5, values_only=True
+            )
+        )
+        assert trip_time.hour == 1  # 20:00 UTC + 05:30 on the next local day.
+        assert workbook["Management Dashboard"]["B2"].value == "Asia/Kolkata"
+    finally:
+        owner.close()
 
 
 def test_missing_and_invalid_km_readings_block_closure_with_structured_exceptions(
@@ -458,8 +669,10 @@ def test_missing_and_invalid_km_readings_block_closure_with_structured_exception
             ),
             data_only=False,
         )
-        km_rows = list(workbook["KM Register"].iter_rows(min_row=2, values_only=True))
-        assert all("5676543455" not in str(row) for row in km_rows)
+        meter_rows = list(
+            workbook["Meter Readings"].iter_rows(min_row=5, values_only=True)
+        )
+        assert all("5676543455" not in str(row) for row in meter_rows)
     finally:
         owner.close()
 
@@ -525,8 +738,8 @@ def test_phase6_smoke_fixture_approves_pending_work_then_closes_day(
             BytesIO(owner.get("/api/v1/reports/daily.xlsx", params=params).content),
             data_only=False,
         )
-        assert workbook["Daily Summary"]["F2"].value == 8
-        assert workbook["Daily Summary"]["J2"].value == 120
+        assert workbook["Tipper Daily"]["J5"].value == 8
+        assert workbook["Tipper Daily"]["I5"].value == 120
         blocked = owner.post(
             f"/api/v1/reports/sites/{site.id}/closure/close",
             params=params,

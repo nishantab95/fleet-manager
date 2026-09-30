@@ -70,6 +70,78 @@ void main() {
       await directory.delete(recursive: true);
     },
   );
+
+  test(
+    'machinery HMR duty survives cold restart through END and sync',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'fleet-manager-hmr-restart-',
+      );
+      final databaseFile = File(
+        '${directory.path}${Platform.pathSeparator}driver.sqlite',
+      );
+      final remote = _IdempotentRemote();
+      const assignment = DriverAssignment(
+        assignmentId: 'excavator-assignment',
+        tipperId: 'excavator-01',
+        tipperRegistrationNumber: null,
+        tipperShortName: 'CAT 320',
+        tipperAssetCode: 'EXC-01',
+        assetType: 'EXCAVATOR',
+        siteId: 'site-b',
+        siteName: 'Test Site B',
+        supervisorName: 'Supervisor B',
+      );
+
+      var database = LocalDatabase(NativeDatabase(databaseFile));
+      var engine = SyncEngine(
+        database: database,
+        remote: remote,
+        installationIdentifier: 'machinery-device',
+      );
+      await engine.enqueue(
+        assignment: assignment,
+        eventType: DriverEventType.hmrReading,
+        payload: {'reading_type': 'START_READING', 'reading_value': '3240.5'},
+        evidencePath: 'start-hmr.jpg',
+      );
+      await database.close();
+
+      database = LocalDatabase(NativeDatabase(databaseFile));
+      engine = SyncEngine(
+        database: database,
+        remote: remote,
+        installationIdentifier: 'machinery-device',
+      );
+      final active = await engine.localDutyState(assignment.assignmentId);
+      expect(active.isOperationallyActive, isTrue);
+      expect(active.startHmr, 3240.5);
+      expect(active.startKm, isNull);
+
+      await engine.enqueue(
+        assignment: assignment,
+        eventType: DriverEventType.hmrReading,
+        payload: {'reading_type': 'END_READING', 'reading_value': '3248.0'},
+        evidencePath: 'end-hmr.jpg',
+      );
+      expect(await engine.syncPending(), 2);
+      await database.close();
+
+      database = LocalDatabase(NativeDatabase(databaseFile));
+      engine = SyncEngine(
+        database: database,
+        remote: remote,
+        installationIdentifier: 'machinery-device',
+      );
+      final closed = await engine.localDutyState(assignment.assignmentId);
+      expect(closed.isOperationallyActive, isFalse);
+      expect(closed.endHmr, 3248.0);
+      expect(await engine.pendingCount(), 0);
+
+      await database.close();
+      await directory.delete(recursive: true);
+    },
+  );
 }
 
 class _IdempotentRemote implements DriverRemoteApi {

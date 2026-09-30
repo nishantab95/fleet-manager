@@ -39,6 +39,9 @@ from fleet_api.domain.errors import (
     DutyAlreadyStartedError,
     DutyAssignmentMismatchError,
     DutyEventOutsideSessionError,
+    DutyHourMeterContinuityError,
+    DutyHourMeterOutOfRangeError,
+    DutyHourMeterValidationError,
     DutyKmValidationError,
     DutyNotStartedError,
     DutyOdometerContinuityError,
@@ -99,12 +102,23 @@ def _fail(exc: DomainError) -> NoReturn:
     elif isinstance(exc, DutyOdometerOutOfRangeError):
         http_status = 422
         code = "ODOMETER_OUT_OF_RANGE"
+    elif isinstance(exc, DutyHourMeterValidationError):
+        http_status = 422
+        code = "INVALID_END_HMR"
+    elif isinstance(exc, DutyHourMeterContinuityError):
+        http_status = 422
+        code = "HOUR_METER_CONTINUITY"
+    elif isinstance(exc, DutyHourMeterOutOfRangeError):
+        http_status = 422
+        code = "HOUR_METER_OUT_OF_RANGE"
     else:
         http_status = 422
         code = "VALIDATION_ERROR"
     detail: dict[str, object] = {"code": code, "message": str(exc)}
     if isinstance(exc, DutyOdometerContinuityError):
         detail["previous_end_km"] = str(exc.previous_end_km)
+    if isinstance(exc, DutyHourMeterContinuityError):
+        detail["previous_end_hmr"] = str(exc.previous_end_hmr)
     raise HTTPException(
         status_code=http_status,
         detail=detail,
@@ -126,7 +140,8 @@ def current_assignment(
         assignment_id=current.assignment.id,
         tipper_id=current.asset.id,
         asset_code=current.asset.asset_code,
-        tipper_registration_number=current.asset.registration_number or current.asset.asset_code,
+        asset_type=current.asset.asset_type,
+        tipper_registration_number=current.asset.registration_number,
         tipper_short_name=current.asset.short_name,
         site_id=current.site.id,
         site_name=current.site.name,
@@ -161,6 +176,13 @@ def current_duty(
         start_km=state.start_km,
         ended_at=state.ended_at,
         end_km=state.end_km,
+        start_hmr=state.start_hmr,
+        end_hmr=state.end_hmr,
+        machine_hours=(
+            state.end_hmr - state.start_hmr
+            if state.start_hmr is not None and state.end_hmr is not None
+            else None
+        ),
         regular_duty_minutes=state.configured_regular_duty_minutes,
     )
 

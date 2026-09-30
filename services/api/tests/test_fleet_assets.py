@@ -40,13 +40,13 @@ def test_asset_capabilities_are_centralized_and_ownership_independent() -> None:
         FleetAssetType.ROLLER,
         FleetAssetType.GRADER,
     ):
-        planned = capabilities_for(asset_type)
-        assert planned.supports_trip_complete is False
-        assert planned.supports_odometer is False
-        assert planned.supports_hour_meter is False
-        assert planned.supports_diesel is False
-        assert planned.supports_emergency is False
-        assert planned.supports_duty_session is False
+        machinery = capabilities_for(asset_type)
+        assert machinery.supports_trip_complete is False
+        assert machinery.supports_odometer is False
+        assert machinery.supports_hour_meter is True
+        assert machinery.supports_diesel is True
+        assert machinery.supports_emergency is True
+        assert machinery.supports_duty_session is True
 
 
 def test_generic_assets_allow_nullable_registration_and_tenant_scoped_codes(
@@ -164,7 +164,7 @@ def test_asset_uniqueness_and_rental_date_constraints(
     invalid_code.rollback()
 
 
-def test_future_asset_types_cannot_enter_tipper_duty_workflow(
+def test_machinery_asset_can_enter_shared_duty_assignment_workflow(
     db_session: Session,
     tenant_records: dict[str, object],
 ) -> None:
@@ -178,17 +178,17 @@ def test_future_asset_types_cannot_enter_tipper_duty_workflow(
         registration_number=None,
         short_name="Excavator",
     )
-    with pytest.raises(DomainError, match="does not support"):
-        create_assignment(
-            db_session,
-            company_id=company.id,
-            driver_membership_id=value(
-                tenant_records, "driver_a", CompanyMembership
-            ).id,
-            supervisor_membership_id=value(
-                tenant_records, "supervisor_a", CompanyMembership
-            ).id,
-            asset_id=excavator.id,
-            site_id=value(tenant_records, "site_a", Site).id,
-            starts_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
+    assignment = create_assignment(
+        db_session,
+        company_id=company.id,
+        driver_membership_id=value(
+            tenant_records, "driver_a", CompanyMembership
+        ).id,
+        supervisor_membership_id=value(
+            tenant_records, "supervisor_a", CompanyMembership
+        ).id,
+        asset_id=excavator.id,
+        site_id=value(tenant_records, "site_a", Site).id,
+        starts_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert assignment.asset_id == excavator.id

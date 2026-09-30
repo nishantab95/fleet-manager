@@ -127,14 +127,21 @@ class SyncEngine {
             tipperId: assignment.tipperId,
             tipperRegistrationNumber: assignment.tipperRegistrationNumber,
             tipperShortName: assignment.tipperShortName,
+            assetType: assignment.assetType,
             siteId: assignment.siteId,
             siteName: assignment.siteName,
             supervisorName: assignment.supervisorName,
             startClientEventUuid: clientEventUuid,
-            startKm: _readingValue(payload),
+            startKm: eventType == DriverEventType.kmReading
+                ? _readingValue(payload)
+                : null,
+            startHmr: eventType == DriverEventType.hmrReading
+                ? _readingValue(payload)
+                : null,
             startedAt: now,
             endClientEventUuid: null,
             endKm: null,
+            endHmr: null,
             endedAt: null,
             state: 'startPendingSync',
             serverSessionId: null,
@@ -148,7 +155,12 @@ class SyncEngine {
         await database.updateLocalDutySession(
           existing.copyWith(
             endClientEventUuid: isEnd ? clientEventUuid : null,
-            endKm: isEnd ? _readingValue(payload) : null,
+            endKm: isEnd && eventType == DriverEventType.kmReading
+                ? _readingValue(payload)
+                : null,
+            endHmr: isEnd && eventType == DriverEventType.hmrReading
+                ? _readingValue(payload)
+                : null,
             endedAt: isEnd ? now : null,
             state: isEnd
                 ? (existing.state == LocalDutyState.needsAttention.name
@@ -168,6 +180,7 @@ class SyncEngine {
     required String assignmentId,
     required String readingValue,
     required String evidencePath,
+    bool hourMeter = false,
   }) async {
     final session = await database.latestLocalDutySession(
       assignmentId: assignmentId,
@@ -195,7 +208,8 @@ class SyncEngine {
       await database.unblockDutyDependentEvents(session.localSessionId);
       await database.updateLocalDutySession(
         session.copyWith(
-          startKm: parsed,
+          startKm: hourMeter ? null : parsed,
+          startHmr: hourMeter ? parsed : null,
           state: LocalDutyState.startPendingSync.name,
           updatedAt: now,
         ),
@@ -231,6 +245,7 @@ class SyncEngine {
       tipperId: row.tipperId,
       tipperRegistrationNumber: row.tipperRegistrationNumber,
       tipperShortName: row.tipperShortName,
+      assetType: row.assetType,
       siteId: row.siteId,
       siteName: row.siteName,
       supervisorName: row.supervisorName,
@@ -532,14 +547,18 @@ class SyncEngine {
     Map<String, dynamic> payload,
   ) =>
       eventType == DriverEventType.kmReading &&
-      payload['reading_type'] == 'START_READING';
+          payload['reading_type'] == 'START_READING' ||
+      eventType == DriverEventType.hmrReading &&
+          payload['reading_type'] == 'START_READING';
 
   static bool _isEndEvent(
     DriverEventType eventType,
     Map<String, dynamic> payload,
   ) =>
       eventType == DriverEventType.kmReading &&
-      payload['reading_type'] == 'END_READING';
+          payload['reading_type'] == 'END_READING' ||
+      eventType == DriverEventType.hmrReading &&
+          payload['reading_type'] == 'END_READING';
 
   static double _readingValue(Map<String, dynamic> payload) =>
       double.tryParse('${payload['reading_value']}') ?? 0;
@@ -600,8 +619,10 @@ class SyncEngine {
           ? serverDuty!.startedAt ?? row.startedAt
           : row.startedAt,
       startKm: useServer ? serverDuty!.startKm ?? row.startKm : row.startKm,
+      startHmr: useServer ? serverDuty!.startHmr ?? row.startHmr : row.startHmr,
       endedAt: useServer ? serverDuty!.endedAt ?? row.endedAt : row.endedAt,
       endKm: useServer ? serverDuty!.endKm ?? row.endKm : row.endKm,
+      endHmr: useServer ? serverDuty!.endHmr ?? row.endHmr : row.endHmr,
       regularDutyMinutes: serverDuty?.regularDutyMinutes,
     );
   }
@@ -614,6 +635,8 @@ class SyncEngine {
     const codes = {
       'ODOMETER_CONTINUITY',
       'ODOMETER_OUT_OF_RANGE',
+      'HOUR_METER_CONTINUITY',
+      'HOUR_METER_OUT_OF_RANGE',
       'ASSIGNMENT_INVALID',
       'ASSIGNMENT_NOT_FOUND',
     };
@@ -678,6 +701,12 @@ class SyncEngine {
   static String _errorCategory(ApiException error) {
     if (error.code == 'ODOMETER_CONTINUITY') return 'ODOMETER_CONTINUITY';
     if (error.code == 'ODOMETER_OUT_OF_RANGE') return 'ODOMETER_OUT_OF_RANGE';
+    if (error.code == 'HOUR_METER_CONTINUITY') {
+      return 'HOUR_METER_CONTINUITY';
+    }
+    if (error.code == 'HOUR_METER_OUT_OF_RANGE') {
+      return 'HOUR_METER_OUT_OF_RANGE';
+    }
     if (error.code == 'EVIDENCE_FORMAT_UNSUPPORTED' ||
         error.code == 'EVIDENCE_FORMAT_MISMATCH' ||
         error.code == 'EVIDENCE_FILE_UNREADABLE') {

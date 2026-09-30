@@ -263,7 +263,7 @@ def test_assignment_rejects_ineligible_cross_company_and_conflicting_records(
     foreign_driver = value(tenant_records, "driver_b", CompanyMembership)
     undeployed = add_asset(db_session, company, code="UNDEPLOYED-A")
     inactive_asset = add_asset(db_session, company, code="INACTIVE-A")
-    unsupported = add_asset(
+    machinery = add_asset(
         db_session,
         company,
         code="EXCAVATOR-A",
@@ -289,11 +289,13 @@ def test_assignment_rejects_ineligible_cross_company_and_conflicting_records(
             json={"driver_membership_id": str(driver.id)},
         ).status_code == 409
 
-        deploy(client, unsupported, site)
-        assert client.post(
-            f"/api/v1/owner/assets/{unsupported.id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 409
+        deploy(client, machinery, site)
+        machinery_assignment = client.post(
+            f"/api/v1/owner/assets/{machinery.id}/assignment",
+            json={"driver_membership_id": str(other_driver.id)},
+        )
+        assert machinery_assignment.status_code == 201
+        assert machinery_assignment.json()["asset_code"] == "EXCAVATOR-A"
 
         deploy(client, inactive_site_asset, inactive_site)
         inactive_site.status = SiteStatus.INACTIVE

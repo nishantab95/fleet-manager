@@ -74,14 +74,24 @@ def _event_response(view: SupervisorEvent) -> SupervisorEventResponse:
         duty_session_id=view.event.duty_session_id,
         driver_name=view.driver.display_name,
         driver_phone=(view.driver.phone_number if view.emergency is not None else None),
+        asset_code=view.asset.asset_code,
+        asset_type=view.asset.asset_type,
         tipper_registration_number=view.asset.registration_number or view.asset.asset_code,
         site_id=view.site.id,
         site_name=view.site.name,
         device_created_at=view.event.device_created_at,
         server_received_at=view.event.server_received_at,
         verification_status=view.event.verification_status,
-        reading_type=view.km.reading_type if view.km is not None else None,
-        reading_value=view.km.reading_value if view.km is not None else None,
+        reading_type=(
+            view.km.reading_type.value
+            if view.km is not None
+            else view.hmr.reading_type.value if view.hmr is not None else None
+        ),
+        reading_value=(
+            view.km.reading_value
+            if view.km is not None
+            else view.hmr.reading_value if view.hmr is not None else None
+        ),
         litres=view.diesel.litres if view.diesel is not None else None,
         emergency_category=view.emergency.category if view.emergency is not None else None,
         emergency_status=view.emergency.status.value if view.emergency is not None else None,
