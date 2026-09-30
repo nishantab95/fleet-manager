@@ -930,8 +930,51 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
+  Future<void> _confirmTripComplete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Mark this trip as completed?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('NO'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('YES'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _queue(DriverEventType.tripComplete);
+    }
+  }
+
   Future<void> _sendEmergency() async {
-    await _queue(DriverEventType.emergency);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Send emergency alert?'),
+        content: const Text(
+          'The alert will be saved on this phone first and delivered when a connection is available.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('NO'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('SEND'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _queue(DriverEventType.emergency);
+    }
   }
 
   Future<XFile?> _pickEvidence({required bool mustChoose}) async {
@@ -1035,6 +1078,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           ),
           const SizedBox(height: 8),
           Text(dutyLabel, textAlign: TextAlign.center),
+          if (assignment != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              assignment.siteName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           const SizedBox(height: 16),
           GridView.count(
             crossAxisCount: 2,
@@ -1047,9 +1100,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               _ActionButton(
                 label: 'TRIP COMPLETE',
                 icon: Icons.check_circle_outline,
-                onPressed: canOperate
-                    ? () => _queue(DriverEventType.tripComplete)
-                    : null,
+                onPressed: canOperate ? _confirmTripComplete : null,
               ),
               _ActionButton(
                 label: 'KM READING',
@@ -1277,6 +1328,14 @@ class _AssignmentCard extends StatelessWidget {
         ),
       );
     }
+    final shortName = assignment!.tipperShortName?.trim();
+    final assetCode = assignment!.tipperAssetCode?.trim();
+    final registration = assignment!.tipperRegistrationNumber.trim();
+    final title = shortName?.isNotEmpty == true
+        ? shortName!
+        : assetCode?.isNotEmpty == true
+        ? assetCode!
+        : registration;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1284,14 +1343,26 @@ class _AssignmentCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              assignment!.tipperShortName ??
-                  assignment!.tipperRegistrationNumber,
-              style: Theme.of(context).textTheme.titleLarge,
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
-            const SizedBox(height: 4),
-            Text(assignment!.tipperRegistrationNumber),
-            Text('Site: ${assignment!.siteName}'),
-            Text('Supervisor: ${assignment!.supervisorName}'),
+            if (assetCode?.isNotEmpty == true && assetCode != title) ...[
+              const SizedBox(height: 3),
+              Text(
+                assetCode!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ],
+            if (registration.isNotEmpty &&
+                registration != title &&
+                registration != assetCode)
+              Text(registration, maxLines: 1, overflow: TextOverflow.ellipsis),
           ],
         ),
       ),

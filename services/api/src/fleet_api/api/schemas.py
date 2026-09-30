@@ -390,6 +390,7 @@ class AssignmentResponse(BaseModel):
 class DriverAssignmentResponse(BaseModel):
     assignment_id: UUID
     tipper_id: UUID
+    asset_code: str
     tipper_registration_number: str
     tipper_short_name: str | None
     site_id: UUID

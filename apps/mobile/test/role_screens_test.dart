@@ -7,28 +7,7 @@ import 'package:fleet_manager_mobile/role_screens.dart';
 
 void main() {
   testWidgets(
-    'supervisor home puts emergencies first and groups site tippers',
-    (tester) async {
-      final api = _FakeRoleApi();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.text('EMERGENCIES'), findsOneWidget);
-      expect(find.text('SITES / ASSETS'), findsOneWidget);
-      expect(find.text('PILOT-12'), findsWidgets);
-      expect(find.text('EXC-07'), findsOneWidget);
-      expect(find.text('Unassigned'), findsNWidgets(2));
-      expect(find.text('OPEN EMERGENCIES'), findsOneWidget);
-      expect(find.text('ACKNOWLEDGE'), findsOneWidget);
-    },
-  );
-
-  testWidgets(
-    'approved START disappears from review count while emergency stays separate',
+    'supervisor home puts emergencies first and shows asset-centric cards',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1080, 2400));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -40,15 +19,47 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('1 pending'), findsNWidgets(2));
-      await tester.tap(find.text('PILOT-12').last);
+      expect(find.text('Emergencies'), findsOneWidget);
+      expect(find.text('Assets'), findsWidgets);
+      expect(find.text('PILOT-12'), findsWidgets);
+      expect(find.text('EXC-07'), findsOneWidget);
+      expect(find.text('Unassigned'), findsNWidgets(2));
+      expect(find.text('NEED REVIEW'), findsNWidgets(2));
+      expect(find.text('Today summary'), findsOneWidget);
+      expect(find.text('Review'), findsOneWidget);
+      expect(find.text('Timeline'), findsOneWidget);
+      expect(find.byKey(const Key('supervisor-site-selector')), findsNothing);
+      expect(find.text('Pilot Site'), findsNothing);
+      expect(find.text('ACKNOWLEDGE'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'approved START disappears from review count while emergency stays separate',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1080, 4000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _FakeRoleApi();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+        ),
+      );
       await tester.pumpAndSettle();
+
       expect(find.text('1 pending'), findsNWidgets(2));
+      if (find.text('APPROVE').evaluate().isEmpty) {
+        await tester.tap(find.text('Review'));
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('APPROVE'), findsOneWidget);
       await tester.tap(find.text('APPROVE'));
       await tester.pumpAndSettle();
 
       expect(api.approvedEventId, _FakeRoleApi.startEventId);
+      expect(find.text('1 pending'), findsNothing);
       expect(find.text('0 pending'), findsOneWidget);
+      expect(find.text('APPROVE'), findsNothing);
       expect(find.text('Record approved.'), findsOneWidget);
       expect(find.text('ACKNOWLEDGE'), findsOneWidget);
     },
@@ -108,6 +119,102 @@ void main() {
     expect(api.assignedAssetId, 'rent-t03');
     expect(api.assignedDriverId, 'driver-2');
   });
+
+  testWidgets('supervisor search and bounded filters reduce the asset list', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _FakeRoleApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('supervisor-asset-search')),
+      'EXC-07',
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const Key('supervisor-site-asset-excavator-7')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('supervisor-site-asset-pilot-asset')),
+      findsNothing,
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('supervisor-asset-search')),
+      '',
+    );
+    await tester.tap(find.text('UNASSIGNED'));
+    await tester.pump();
+    expect(
+      find.byKey(const Key('supervisor-site-asset-pilot-asset')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('supervisor-site-asset-rent-t03')),
+      findsOneWidget,
+    );
+  });
+
+  for (final assetCount in [1, 10, 50]) {
+    testWidgets('supervisor fleet list handles $assetCount assets', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _ScaleRoleApi(assetCount: assetCount);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('$assetCount'), findsAtLeastNWidgets(1));
+      expect(
+        find.byKey(const Key('supervisor-site-asset-scale-0')),
+        findsOneWidget,
+      );
+      await tester.scrollUntilVisible(
+        find.byKey(Key('supervisor-site-asset-scale-${assetCount - 1}')),
+        800,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets(
+    'multi-site supervisor uses one selector and keeps emergencies global',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _MultiSiteRoleApi();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('supervisor-site-selector')), findsOneWidget);
+      expect(find.text('North Site'), findsWidgets);
+      expect(find.textContaining('South Site'), findsWidgets);
+      expect(find.text('South emergency'), findsOneWidget);
+      expect(
+        find.text('A deliberately very long asset name that must not overflow'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   test(
     'physical event statuses yield zero normal review items after approval',
@@ -413,3 +520,109 @@ class _FakeRoleApi extends ApiClient {
     }),
   ];
 }
+
+class _ScaleRoleApi extends _FakeRoleApi {
+  _ScaleRoleApi({required this.assetCount});
+
+  final int assetCount;
+
+  @override
+  Future<List<SiteDeployedAsset>> supervisorSiteAssets(String siteId) async =>
+      List.generate(
+        assetCount,
+        (index) => _siteAsset(
+          id: 'scale-$index',
+          siteId: siteId,
+          siteName: 'Scale Site',
+          shortName: 'Asset ${index + 1}',
+          assetCode: 'ASSET-${index + 1}',
+          registration: 'REG-${index + 1}',
+          driverName: index.isEven ? 'Driver ${index + 1}' : null,
+        ),
+      );
+
+  @override
+  Future<List<SupervisorEvent>> supervisorEvents(
+    String siteId, {
+    String? verificationStatus,
+    DateTime? reviewDate,
+  }) async => const [];
+}
+
+class _MultiSiteRoleApi extends _FakeRoleApi {
+  static const _north = SupervisorSite(id: 'north', name: 'North Site');
+  static const _south = SupervisorSite(id: 'south', name: 'South Site');
+
+  @override
+  Future<List<SupervisorSite>> supervisorSites() async => [_north, _south];
+
+  @override
+  Future<List<SiteDeployedAsset>> supervisorSiteAssets(String siteId) async => [
+    _siteAsset(
+      id: '$siteId-asset',
+      siteId: siteId,
+      siteName: siteId == 'north' ? _north.name : _south.name,
+      shortName: siteId == 'north'
+          ? 'A deliberately very long asset name that must not overflow'
+          : 'South Tipper',
+      assetCode: siteId == 'north' ? 'NORTH-01' : 'SOUTH-01',
+      registration: siteId == 'north' ? null : 'SOUTH-REG-01',
+      driverName: 'A driver with a deliberately long display name',
+    ),
+  ];
+
+  @override
+  Future<List<SupervisorEvent>> supervisorEvents(
+    String siteId, {
+    String? verificationStatus,
+    DateTime? reviewDate,
+  }) async {
+    if (siteId != 'south') return const [];
+    return [
+      SupervisorEvent.fromJson({
+        'event_id': 'south-emergency',
+        'event_type': 'EMERGENCY',
+        'assignment_id': 'south-assignment',
+        'driver_name': 'South Driver',
+        'tipper_registration_number': 'SOUTH-REG-01',
+        'site_id': 'south',
+        'site_name': 'South Site',
+        'device_created_at': '2026-09-30T09:00:00Z',
+        'verification_status': 'PENDING_VERIFICATION',
+        'emergency_status': 'OPEN',
+        'emergency_description': 'South emergency',
+        'evidence_available': false,
+      }),
+    ];
+  }
+}
+
+SiteDeployedAsset _siteAsset({
+  required String id,
+  required String siteId,
+  required String siteName,
+  required String shortName,
+  required String assetCode,
+  required String? registration,
+  required String? driverName,
+}) => SiteDeployedAsset.fromJson({
+  'asset_id': id,
+  'asset_code': assetCode,
+  'asset_type': 'TIPPER',
+  'ownership_type': 'OWNED',
+  'registration_number': registration,
+  'short_name': shortName,
+  'status': 'ACTIVE',
+  'current_deployment': {
+    'id': 'deployment-$id',
+    'asset_id': id,
+    'site_id': siteId,
+    'site_name': siteName,
+    'starts_at': '2026-09-25T05:00:00Z',
+    'ends_at': null,
+  },
+  'driver_membership_id': driverName == null ? null : 'driver-$id',
+  'driver_name': driverName,
+  'duty_status': driverName == null ? null : 'ACTIVE',
+  'pending_review_count': 0,
+});

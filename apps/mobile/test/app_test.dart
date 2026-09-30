@@ -55,7 +55,15 @@ void main() {
     expect(find.textContaining('Phase 0'), findsNothing);
 
     await tester.tap(find.text('TRIP COMPLETE'));
+    await tester.pumpAndSettle();
+    expect(find.text('Mark this trip as completed?'), findsOneWidget);
+    await tester.tap(find.text('NO'));
+    await tester.pumpAndSettle();
+    expect(await database.pendingForSync(), isEmpty);
+
     await tester.tap(find.text('TRIP COMPLETE'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('YES'));
     await tester.pump();
     final queued = await database.pendingForSync();
     expect(queued, hasLength(1));
@@ -64,6 +72,68 @@ void main() {
     await sync.syncPending();
     final synced = await database.eventById(queued.single.clientEventUuid);
     expect(synced?.syncState, 'synced');
+    await database.close();
+  });
+
+  testWidgets('emergency requires confirmation and reports local delivery', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final database = LocalDatabase(NativeDatabase.memory());
+    final dependencies = DriverAppDependencies(
+      api: ApiClient(),
+      sessionStore: SecureSessionStore(),
+      sync: SyncEngine(
+        database: database,
+        remote: _FakeRemote(),
+        installationIdentifier: 'test-device',
+      ),
+      installationIdentifier: 'test-device',
+    );
+    const assignment = DriverAssignment(
+      assignmentId: 'assignment',
+      tipperId: 'tipper',
+      tipperRegistrationNumber: 'KA01AB1234',
+      tipperShortName: 'Alpha One',
+      tipperAssetCode: 'TIPPER-01',
+      siteId: 'site',
+      siteName: 'Alpha Site',
+      supervisorName: 'Supervisor A',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DriverHomeScreen(
+          dependencies: dependencies,
+          assignment: assignment,
+          duty: const DriverDutyState(status: DriverDutyStatus.active),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Alpha One'), findsOneWidget);
+    expect(find.text('TIPPER-01'), findsOneWidget);
+    expect(find.text('KA01AB1234'), findsOneWidget);
+    expect(find.text('Alpha Site'), findsOneWidget);
+    await tester.tap(find.text('EMERGENCY'));
+    await tester.pumpAndSettle();
+    expect(find.text('Send emergency alert?'), findsOneWidget);
+    await tester.tap(find.text('NO'));
+    await tester.pumpAndSettle();
+    expect(await database.pendingForSync(), isEmpty);
+
+    await tester.tap(find.text('EMERGENCY'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SEND'));
+    await tester.pump();
+    expect(
+      find.text('Emergency saved on phone — not yet delivered'),
+      findsOneWidget,
+    );
+    expect(await database.pendingForSync(), hasLength(1));
     await database.close();
   });
 
@@ -326,7 +396,7 @@ void main() {
       await tester.tap(find.byTooltip('Sync'));
       await tester.pumpAndSettle();
       expect(find.text('TESTRENT03'), findsOneWidget);
-      expect(find.text('Site: Test Site B'), findsOneWidget);
+      expect(find.text('Test Site B'), findsOneWidget);
       expect(find.text('TESTOWN02'), findsNothing);
 
       next = owned;

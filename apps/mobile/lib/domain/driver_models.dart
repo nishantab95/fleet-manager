@@ -118,6 +118,7 @@ class DriverAssignment {
     required this.tipperId,
     required this.tipperRegistrationNumber,
     required this.tipperShortName,
+    this.tipperAssetCode,
     required this.siteId,
     required this.siteName,
     required this.supervisorName,
@@ -128,6 +129,7 @@ class DriverAssignment {
   final String tipperId;
   final String tipperRegistrationNumber;
   final String? tipperShortName;
+  final String? tipperAssetCode;
   final String siteId;
   final String siteName;
   final String supervisorName;
@@ -144,6 +146,8 @@ class DriverAssignment {
       tipperId: json['tipper_id'] as String,
       tipperRegistrationNumber: json['tipper_registration_number'] as String,
       tipperShortName: json['tipper_short_name'] as String?,
+      tipperAssetCode:
+          (json['asset_code'] ?? json['tipper_asset_code']) as String?,
       siteId: json['site_id'] as String,
       siteName: json['site_name'] as String,
       supervisorName: supervisorNames.isNotEmpty
@@ -158,6 +162,7 @@ class DriverAssignment {
     'tipper_id': tipperId,
     'tipper_registration_number': tipperRegistrationNumber,
     'tipper_short_name': tipperShortName,
+    if (tipperAssetCode != null) 'asset_code': tipperAssetCode,
     'site_id': siteId,
     'site_name': siteName,
     'supervisor_name': supervisorName,

@@ -125,6 +125,7 @@ def current_assignment(
     return DriverAssignmentResponse(
         assignment_id=current.assignment.id,
         tipper_id=current.asset.id,
+        asset_code=current.asset.asset_code,
         tipper_registration_number=current.asset.registration_number or current.asset.asset_code,
         tipper_short_name=current.asset.short_name,
         site_id=current.site.id,

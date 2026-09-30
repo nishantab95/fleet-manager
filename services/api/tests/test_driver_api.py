@@ -776,6 +776,7 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
         current = client.get("/api/v1/driver/assignment/current")
         assert current.status_code == 200
         assert current.json()["assignment_id"] == str(assignment.id)
+        assert current.json()["asset_code"] == "ALPHA-ONE"
         assert current.json()["site_name"] == "Alpha Site"
         assert current.json()["supervisor_name"] == "Assigned Supervisor"
         assert current.json()["supervisor_names"] == ["Assigned Supervisor"]
