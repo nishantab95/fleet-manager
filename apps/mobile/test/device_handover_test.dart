@@ -187,6 +187,66 @@ void main() {
     },
   );
 
+  test('restart migration preserves the scoped current duty marker', () async {
+    final database = local.LocalDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final legacy = _closedLegacyDuty();
+    await database.saveLocalDutySession(legacy, makeCurrent: true);
+    final scopeA = SyncEngine.accountScope(
+      serverIdentity: _server,
+      companyId: _company,
+      membershipId: _driverA,
+    );
+    await database.claimLegacyData(scopeA);
+    await database.activateAccount(scopeA);
+
+    final active = local.LocalDutySession(
+      accountScope: scopeA,
+      localSessionId: 'current-active-duty',
+      assignmentId: legacy.assignmentId,
+      tipperId: legacy.tipperId,
+      tipperRegistrationNumber: legacy.tipperRegistrationNumber,
+      tipperShortName: legacy.tipperShortName,
+      siteId: legacy.siteId,
+      siteName: legacy.siteName,
+      supervisorName: legacy.supervisorName,
+      startClientEventUuid: 'current-start',
+      startKm: 20000,
+      startedAt: legacy.startedAt.add(const Duration(days: 1)),
+      endClientEventUuid: null,
+      endKm: null,
+      endedAt: null,
+      state: LocalDutyState.activeConfirmed.name,
+      serverSessionId: 'current-server-duty',
+      lastEventUuid: 'current-start',
+      createdAt: legacy.createdAt.add(const Duration(days: 1)),
+      updatedAt: legacy.updatedAt.add(const Duration(days: 1)),
+    );
+    await database.saveLocalDutySession(active, makeCurrent: true);
+    expect(
+      (await database.latestLocalDutySession())?.localSessionId,
+      active.localSessionId,
+    );
+
+    database.deactivateAccount();
+    await database.claimLegacyData(scopeA);
+    await database.activateAccount(scopeA);
+
+    expect(
+      (await database.latestLocalDutySession())?.localSessionId,
+      active.localSessionId,
+    );
+
+    await database.setMetadata(
+      'current_local_duty_session_id:$scopeA',
+      legacy.localSessionId,
+    );
+    expect(
+      (await database.latestLocalDutySession())?.localSessionId,
+      active.localSessionId,
+    );
+  });
+
   test('schema v2 migration preserves code8 queue and duty snapshot', () async {
     final directory = await Directory.systemTemp.createTemp('fleet-schema-v2-');
     final file = File(

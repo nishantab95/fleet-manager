@@ -244,11 +244,13 @@ class LocalDatabase extends _$LocalDatabase {
         }
       }
       final legacyCurrent = await metadata(_currentDutySessionKey);
-      if (legacyCurrent != null) {
-        await setMetadata(
-          _accountMetadataKey(_currentDutySessionKey, accountScope),
-          legacyCurrent,
-        );
+      final scopedCurrentKey = _accountMetadataKey(
+        _currentDutySessionKey,
+        accountScope,
+      );
+      final scopedCurrent = await metadata(scopedCurrentKey);
+      if (legacyCurrent != null && scopedCurrent == null) {
+        await setMetadata(scopedCurrentKey, legacyCurrent);
       }
     });
   }
@@ -331,11 +333,15 @@ class LocalDatabase extends _$LocalDatabase {
       }
     }
 
-    if (current == null) {
+    final chronologicalLatest = sessions.first;
+    if (current == null ||
+        chronologicalLatest.startedAt.isAfter(current.startedAt)) {
       // Reconcile databases written by releases before the explicit current
-      // marker existed. Operational chronology is immutable: error retries may
-      // change updatedAt, but must never make an old duty current again.
-      current = sessions.first;
+      // marker existed, and repair scoped markers overwritten by the legacy
+      // migration in earlier releases. Operational chronology is immutable:
+      // error retries may change updatedAt, but must never make an old duty
+      // current again.
+      current = chronologicalLatest;
       await setMetadata(
         _accountMetadataKey(_currentDutySessionKey),
         current.localSessionId,
