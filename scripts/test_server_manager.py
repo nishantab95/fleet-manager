@@ -110,7 +110,12 @@ def test_remote_access_requires_private_serve_and_healthy_api(
         "TCP": {"443": {"HTTPS": True}},
         "Web": {
             f"{dns_name}:443": {
-                "Handlers": {"/": {"Proxy": server_manager.TAILSCALE_PROXY_TARGET}}
+                "Handlers": {
+                    "/": {"Proxy": server_manager.TAILSCALE_PROXY_TARGET},
+                    f"{server_manager.TAILSCALE_PILOT_PATH}/": {
+                        "Path": str(server_manager.PILOT_RELEASE_DIR)
+                    },
+                }
             }
         },
     }
@@ -129,6 +134,7 @@ def test_remote_access_requires_private_serve_and_healthy_api(
         return SimpleNamespace(status=200, body='{"status":"ready"}')
 
     monkeypatch.setattr(server_manager, "tailscale_executable", lambda: "tailscale")
+    monkeypatch.setattr(server_manager, "tailscale_service_status", lambda: "RUNNING")
     monkeypatch.setattr(server_manager, "run_capture", capture)
     monkeypatch.setattr(server_manager, "default_http_probe", probe)
 
@@ -136,7 +142,13 @@ def test_remote_access_requires_private_serve_and_healthy_api(
         "remote": "ONLINE",
         "remote_url": f"https://{dns_name}",
         "tailscale": "ONLINE",
-        "funnel": "DISABLED",
+        "tailscale_service": "RUNNING",
+        "funnel": "OFF",
+        "serve_root": "OK",
+        "serve_pilot": "OK",
+        "remote_health": "OK",
+        "remote_ready": "OK",
+        "reason": "",
     }
 
 
@@ -163,12 +175,157 @@ def test_funnel_configuration_never_reports_remote_online(
         return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
 
     monkeypatch.setattr(server_manager, "tailscale_executable", lambda: "tailscale")
+    monkeypatch.setattr(server_manager, "tailscale_service_status", lambda: "RUNNING")
     monkeypatch.setattr(server_manager, "run_capture", capture)
 
     status = server_manager.remote_access_status()
 
-    assert status["funnel"] == "ENABLED"
+    assert status["funnel"] == "ON"
     assert status["remote"] == "OFFLINE"
+
+
+def test_start_check_self_heals_only_missing_pilot_serve(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dns_name = "fleet-host.example.ts.net"
+    release = tmp_path / "pilot"
+    release.mkdir()
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+    status_payload = {
+        "BackendState": "Running",
+        "Self": {"Online": True, "DNSName": f"{dns_name}."},
+    }
+    root_only = {
+        "Web": {
+            f"{dns_name}:443": {
+                "Handlers": {"/": {"Proxy": server_manager.TAILSCALE_PROXY_TARGET}}
+            }
+        }
+    }
+    complete = {
+        "Web": {
+            f"{dns_name}:443": {
+                "Handlers": {
+                    "/": {"Proxy": server_manager.TAILSCALE_PROXY_TARGET},
+                    f"{server_manager.TAILSCALE_PILOT_PATH}/": {"Path": str(release)},
+                }
+            }
+        }
+    }
+    serve_status_calls = 0
+    commands: list[list[str]] = []
+
+    def capture(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal serve_status_calls
+        if args[1:] == ["status", "--json"]:
+            payload = status_payload
+        elif args[1:] == ["funnel", "status", "--json"]:
+            payload = root_only
+        elif args[1:] == ["serve", "status", "--json"]:
+            serve_status_calls += 1
+            payload = root_only if serve_status_calls == 1 else complete
+        else:
+            commands.append(args)
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(server_manager, "tailscale_executable", lambda: "tailscale")
+    monkeypatch.setattr(server_manager, "tailscale_service_status", lambda: "RUNNING")
+    monkeypatch.setattr(server_manager, "run_capture", capture)
+    monkeypatch.setattr(
+        server_manager,
+        "default_http_probe",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status=200, body='{"status":"ok","service":"fleet-manager-api"}'
+        ),
+    )
+
+    status = server_manager.remote_access_status(ensure_serve=True)
+
+    assert status["remote"] == "ONLINE"
+    assert status["serve_root"] == "OK"
+    assert status["serve_pilot"] == "OK"
+    assert status["reason"] == ""
+    assert commands == [
+        [
+            "tailscale",
+            "serve",
+            "--bg",
+            "--set-path",
+            "/pilot",
+            str(release),
+        ]
+    ]
+
+
+def test_pilot_serve_admin_requirement_does_not_break_remote_api(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dns_name = "fleet-host.example.ts.net"
+    release = tmp_path / "pilot"
+    release.mkdir()
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+    status_payload = {
+        "BackendState": "Running",
+        "Self": {"Online": True, "DNSName": f"{dns_name}."},
+    }
+    serve_payload = {
+        "Web": {
+            f"{dns_name}:443": {
+                "Handlers": {"/": {"Proxy": server_manager.TAILSCALE_PROXY_TARGET}}
+            }
+        }
+    }
+
+    def capture(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if args[1:] == ["status", "--json"]:
+            payload = status_payload
+        elif args[1:] in (
+            ["serve", "status", "--json"],
+            ["funnel", "status", "--json"],
+        ):
+            payload = serve_payload
+        else:
+            return subprocess.CompletedProcess(args, 1, "", "must be a local admin")
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(server_manager, "tailscale_executable", lambda: "tailscale")
+    monkeypatch.setattr(server_manager, "tailscale_service_status", lambda: "RUNNING")
+    monkeypatch.setattr(server_manager, "run_capture", capture)
+    monkeypatch.setattr(
+        server_manager,
+        "default_http_probe",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status=200, body='{"status":"ok","service":"fleet-manager-api"}'
+        ),
+    )
+
+    status = server_manager.remote_access_status(ensure_serve=True)
+
+    assert status["remote"] == "ONLINE"
+    assert status["serve_pilot"] == "MISSING"
+    assert status["reason"] == "PILOT SERVE ADMIN APPROVAL REQUIRED"
+
+
+def test_tailscale_needs_login_reports_security_boundary_without_serve_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def capture(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        payload = {"BackendState": "NeedsLogin"}
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(server_manager, "tailscale_executable", lambda: "tailscale")
+    monkeypatch.setattr(server_manager, "tailscale_service_status", lambda: "RUNNING")
+    monkeypatch.setattr(server_manager, "run_capture", capture)
+
+    status = server_manager.remote_access_status(ensure_serve=True)
+
+    assert status["remote"] == "OFFLINE"
+    assert status["reason"] == "TAILSCALE LOGIN REQUIRED"
+    assert calls == [["tailscale", "status", "--json"]]
 
 
 def test_remote_outage_does_not_fail_local_server_status(
@@ -193,6 +350,107 @@ def test_remote_outage_does_not_fail_local_server_status(
     )
 
     assert server_manager.check_server() == 0
+
+
+def test_pilot_apk_absence_is_not_a_server_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    release = tmp_path / "pilot"
+    release.mkdir()
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+
+    status = server_manager.pilot_release_status("https://fleet.example.ts.net")
+
+    assert status["pilot_directory"] == "OK"
+    assert status["pilot_apk"] == "NOT PUBLISHED"
+    assert status["apk_url"] == ""
+
+
+def test_pilot_apk_status_creates_and_verifies_sha256(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    release = tmp_path / "pilot"
+    release.mkdir()
+    apk = release / server_manager.PILOT_APK_NAME
+    apk.write_bytes(b"verified pilot apk")
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+
+    status = server_manager.pilot_release_status("https://fleet.example.ts.net")
+
+    digest = server_manager.sha256(apk)
+    assert status["pilot_apk"] == "PUBLISHED"
+    assert status["apk_url"].endswith(f"/pilot/{server_manager.PILOT_APK_NAME}")
+    assert (release / server_manager.PILOT_SHA256_NAME).read_text(
+        encoding="utf-8"
+    ) == f"{digest}  {server_manager.PILOT_APK_NAME}\n"
+
+
+def test_pilot_apk_status_warns_on_inconsistent_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    release = tmp_path / "pilot"
+    release.mkdir()
+    (release / server_manager.PILOT_APK_NAME).write_bytes(b"verified pilot apk")
+    (release / server_manager.PILOT_SHA256_NAME).write_text(
+        f"{'0' * 64}  {server_manager.PILOT_APK_NAME}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+
+    status = server_manager.pilot_release_status()
+
+    assert status["pilot_apk"] == "WARNING"
+    assert "inconsistent" in status["pilot_warning"]
+
+
+def test_publish_pilot_apk_uses_verified_atomic_destination(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "built.apk"
+    source.write_bytes(b"signed elsewhere")
+    (source_dir / server_manager.PILOT_VERSION_NAME).write_text(
+        "1.2.3+45\n", encoding="utf-8"
+    )
+    release = tmp_path / "release" / "pilot"
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+    monkeypatch.setattr(
+        server_manager,
+        "remote_access_status",
+        lambda **_kwargs: {
+            "remote": "ONLINE",
+            "remote_url": "https://fleet.example.ts.net",
+            "serve_pilot": "OK",
+        },
+    )
+    monkeypatch.setattr(
+        server_manager,
+        "default_http_probe",
+        lambda *_args, **_kwargs: SimpleNamespace(status=200, body=""),
+    )
+
+    assert server_manager.publish_pilot_apk(source) == 0
+
+    published = release / server_manager.PILOT_APK_NAME
+    assert published.read_bytes() == source.read_bytes()
+    assert (release / server_manager.PILOT_VERSION_NAME).read_text(
+        encoding="utf-8"
+    ) == "1.2.3+45\n"
+    assert not list(release.glob("*.tmp"))
+
+
+def test_publish_rejects_missing_version_metadata_before_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "built.apk"
+    source.write_bytes(b"signed elsewhere")
+    release = tmp_path / "release" / "pilot"
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+
+    with pytest.raises(server_manager.ServerError, match="version metadata"):
+        server_manager.publish_pilot_apk(source, tmp_path / "missing-version.txt")
+
+    assert not (release / server_manager.PILOT_APK_NAME).exists()
 
 
 def test_update_already_current_exits_before_backup(
@@ -386,6 +644,13 @@ def test_parser_accepts_update_command() -> None:
     assert server_manager.build_parser().parse_args(["update"]).command == "update"
 
 
+def test_parser_accepts_pilot_publish_source() -> None:
+    args = server_manager.build_parser().parse_args(["publish-apk", "built.apk"])
+
+    assert args.command == "publish-apk"
+    assert args.apk == Path("built.apk")
+
+
 def test_update_batch_wrapper_uses_repository_relative_paths() -> None:
     wrapper = (server_manager.ROOT / "Update Fleet Manager Server.bat").read_text(
         encoding="utf-8"
@@ -395,3 +660,14 @@ def test_update_batch_wrapper_uses_repository_relative_paths() -> None:
     assert '"%PYTHON_EXE%" "%REPO_ROOT%\\scripts\\server_manager.py" update' in wrapper
     assert "git reset" not in wrapper.lower()
     assert "git clean" not in wrapper.lower()
+
+
+def test_publish_batch_wrapper_only_delegates_verified_apk_publish() -> None:
+    wrapper = (server_manager.ROOT / "Publish Pilot APK.bat").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'set "REPO_ROOT=%~dp0"' in wrapper
+    assert '"%PYTHON_EXE%" "%REPO_ROOT%\\scripts\\server_manager.py" publish-apk' in wrapper
+    assert "flutter" not in wrapper.casefold()
+    assert "sign" not in wrapper.casefold()

@@ -59,6 +59,11 @@ EVIDENCE_BACKUP_ROOT = Path(r"C:\FleetManagerEvidenceBackup")
 EVIDENCE_MANIFEST_NAME = "evidence-backup-manifest.json"
 TAILSCALE_EXE = Path(r"C:\Program Files\Tailscale\tailscale.exe")
 TAILSCALE_PROXY_TARGET = "http://127.0.0.1:8000"
+TAILSCALE_PILOT_PATH = "/pilot"
+PILOT_RELEASE_DIR = Path(r"F:\FleetManagerData\releases\pilot")
+PILOT_APK_NAME = "FleetManager-Pilot-latest.apk"
+PILOT_SHA256_NAME = "sha256.txt"
+PILOT_VERSION_NAME = "version.txt"
 LOCAL_STATUS_KEYS = ("docker", "postgres", "evidence", "api", "health", "ready")
 
 
@@ -375,12 +380,12 @@ def is_owned_listener(state: Mapping[str, Any], parent: ProcessInfo | None) -> b
 
 
 def api_health_ok() -> bool:
-    return is_expected_api_health(default_http_probe(API_HEALTH_URL, 3.0))
+    return bool(is_expected_api_health(default_http_probe(API_HEALTH_URL, 3.0)))
 
 
 def api_ready_ok() -> bool:
     probe = default_http_probe(API_READY_URL, 3.0)
-    return probe is not None and probe.status == 200
+    return bool(probe is not None and probe.status == 200)
 
 
 def tailscale_executable() -> str | None:
@@ -390,7 +395,18 @@ def tailscale_executable() -> str | None:
     return str(TAILSCALE_EXE) if TAILSCALE_EXE.is_file() else None
 
 
-def _private_serve_target(config: Mapping[str, Any], dns_name: str) -> str | None:
+def tailscale_service_status() -> str:
+    if os.name != "nt":
+        return "UNKNOWN"
+    result = run_capture(["sc.exe", "query", "Tailscale"], timeout=10)
+    if result.returncode != 0:
+        return "OFFLINE"
+    return "RUNNING" if "RUNNING" in (result.stdout or "").upper() else "OFFLINE"
+
+
+def _private_serve_handler(
+    config: Mapping[str, Any], dns_name: str, route: str
+) -> Mapping[str, Any] | None:
     web = config.get("Web")
     if not isinstance(web, dict):
         return None
@@ -400,11 +416,34 @@ def _private_serve_target(config: Mapping[str, Any], dns_name: str) -> str | Non
     handlers = host_config.get("Handlers")
     if not isinstance(handlers, dict):
         return None
-    root_handler = handlers.get("/")
-    if not isinstance(root_handler, dict):
+    handler = handlers.get(route)
+    if not isinstance(handler, dict) and route != "/":
+        handler = handlers.get(f"{route.rstrip('/')}/")
+    if not isinstance(handler, dict):
+        return None
+    return handler
+
+
+def _private_serve_target(config: Mapping[str, Any], dns_name: str) -> str | None:
+    root_handler = _private_serve_handler(config, dns_name, "/")
+    if root_handler is None:
         return None
     proxy = root_handler.get("Proxy")
     return proxy if isinstance(proxy, str) else None
+
+
+def _private_serve_path(config: Mapping[str, Any], dns_name: str) -> str | None:
+    pilot_handler = _private_serve_handler(config, dns_name, TAILSCALE_PILOT_PATH)
+    if pilot_handler is None:
+        return None
+    path = pilot_handler.get("Path")
+    return path if isinstance(path, str) else None
+
+
+def _same_local_path(left: str | Path, right: str | Path) -> bool:
+    return os.path.normcase(os.path.normpath(str(left))) == os.path.normcase(
+        os.path.normpath(str(right))
+    )
 
 
 def _funnel_enabled(config: Mapping[str, Any]) -> bool:
@@ -424,12 +463,38 @@ def _funnel_enabled(config: Mapping[str, Any]) -> bool:
     )
 
 
-def remote_access_status() -> dict[str, str]:
+def _configure_pilot_serve(executable: str) -> tuple[bool, str]:
+    result = run_capture(
+        [
+            executable,
+            "serve",
+            "--bg",
+            "--set-path",
+            TAILSCALE_PILOT_PATH,
+            str(PILOT_RELEASE_DIR),
+        ],
+        timeout=30,
+    )
+    if result.returncode == 0:
+        return True, ""
+    detail = f"{result.stdout or ''}\n{result.stderr or ''}".casefold()
+    if "local admin" in detail or "administrator" in detail:
+        return False, "PILOT SERVE ADMIN APPROVAL REQUIRED"
+    return False, "PILOT SERVE CONFIGURATION REQUIRED"
+
+
+def remote_access_status(*, ensure_serve: bool = False) -> dict[str, str]:
     result = {
         "remote": "OFFLINE",
         "remote_url": "",
         "tailscale": "OFFLINE",
+        "tailscale_service": tailscale_service_status(),
         "funnel": "UNKNOWN",
+        "serve_root": "MISSING",
+        "serve_pilot": "MISSING",
+        "remote_health": "OFFLINE",
+        "remote_ready": "OFFLINE",
+        "reason": "TAILSCALE NOT AVAILABLE",
     }
     executable = tailscale_executable()
     if not executable:
@@ -442,20 +507,26 @@ def remote_access_status() -> dict[str, str]:
     except json.JSONDecodeError:
         return result
     self_status = status_payload.get("Self")
-    if status_payload.get("BackendState") != "Running" or not isinstance(
-        self_status, dict
-    ):
+    backend_state = str(status_payload.get("BackendState") or "")
+    if backend_state != "Running" or not isinstance(self_status, dict):
+        if backend_state == "NeedsLogin":
+            result["reason"] = "TAILSCALE LOGIN REQUIRED"
+        else:
+            result["reason"] = "TAILSCALE NOT CONNECTED"
         return result
     if self_status.get("Online") is not True:
+        result["reason"] = "TAILSCALE DISCONNECTED"
         return result
     result["tailscale"] = "ONLINE"
     dns_name = str(self_status.get("DNSName") or "").strip().rstrip(".").lower()
     if not dns_name:
+        result["reason"] = "TAILSCALE DNS NAME UNAVAILABLE"
         return result
     result["remote_url"] = f"https://{dns_name}"
     serve = run_capture([executable, "serve", "status", "--json"], timeout=10)
     funnel = run_capture([executable, "funnel", "status", "--json"], timeout=10)
     if serve.returncode != 0 or funnel.returncode != 0:
+        result["reason"] = "TAILSCALE SERVE STATUS UNAVAILABLE"
         return result
     try:
         serve_payload = json.loads(serve.stdout or "{}")
@@ -465,15 +536,59 @@ def remote_access_status() -> dict[str, str]:
     if not isinstance(serve_payload, dict) or not isinstance(funnel_payload, dict):
         return result
     funnel_enabled = _funnel_enabled(funnel_payload)
-    result["funnel"] = "ENABLED" if funnel_enabled else "DISABLED"
+    result["funnel"] = "ON" if funnel_enabled else "OFF"
     if funnel_enabled:
+        result["reason"] = "TAILSCALE FUNNEL MUST BE OFF"
         return result
-    if _private_serve_target(serve_payload, dns_name) != TAILSCALE_PROXY_TARGET:
+
+    root_ok = _private_serve_target(serve_payload, dns_name) == TAILSCALE_PROXY_TARGET
+    result["serve_root"] = "OK" if root_ok else "MISSING"
+    pilot_path = _private_serve_path(serve_payload, dns_name)
+    pilot_ok = bool(
+        pilot_path and _same_local_path(pilot_path, PILOT_RELEASE_DIR)
+    )
+    if ensure_serve and root_ok and not pilot_ok and PILOT_RELEASE_DIR.is_dir():
+        configured, reason = _configure_pilot_serve(executable)
+        if configured:
+            refreshed = run_capture(
+                [executable, "serve", "status", "--json"], timeout=10
+            )
+            try:
+                refreshed_payload = json.loads(refreshed.stdout or "{}")
+            except json.JSONDecodeError:
+                refreshed_payload = {}
+            if refreshed.returncode == 0 and isinstance(refreshed_payload, dict):
+                serve_payload = refreshed_payload
+                root_ok = (
+                    _private_serve_target(serve_payload, dns_name)
+                    == TAILSCALE_PROXY_TARGET
+                )
+                pilot_path = _private_serve_path(serve_payload, dns_name)
+                pilot_ok = bool(
+                    pilot_path and _same_local_path(pilot_path, PILOT_RELEASE_DIR)
+                )
+                result["serve_root"] = "OK" if root_ok else "MISSING"
+        elif reason:
+            result["reason"] = reason
+    result["serve_pilot"] = "OK" if pilot_ok else "MISSING"
+
+    if not root_ok:
+        result["reason"] = "TAILSCALE ROOT SERVE CONFIGURATION REQUIRED"
         return result
     health = default_http_probe(f"{result['remote_url']}/health", timeout=5)
     ready = default_http_probe(f"{result['remote_url']}/ready", timeout=5)
-    if is_expected_api_health(health) and ready is not None and ready.status == 200:
+    health_ok = is_expected_api_health(health)
+    ready_ok = ready is not None and ready.status == 200
+    result["remote_health"] = "OK" if health_ok else "OFFLINE"
+    result["remote_ready"] = "OK" if ready_ok else "OFFLINE"
+    if health_ok and ready_ok:
         result["remote"] = "ONLINE"
+        if pilot_ok:
+            result["reason"] = ""
+        elif not result["reason"].startswith("PILOT SERVE"):
+            result["reason"] = "PILOT SERVE CONFIGURATION REQUIRED"
+    else:
+        result["reason"] = "REMOTE API HEALTH CHECK FAILED"
     return result
 
 
@@ -542,7 +657,12 @@ def start_api(env: Mapping[str, str]) -> str:
     raise ServerError(f"API did not become ready within 60 seconds. Review {API_LOG}")
 
 
-def component_status(docker: str | None, env: Mapping[str, str] | None) -> dict[str, str]:
+def component_status(
+    docker: str | None,
+    env: Mapping[str, str] | None,
+    *,
+    ensure_remote: bool = False,
+) -> dict[str, str]:
     docker_ok = bool(docker and docker_ready(docker))
     compose = compose_health(docker, env) if docker_ok and docker and env else {}
     state, info = recorded_api()
@@ -561,20 +681,37 @@ def component_status(docker: str | None, env: Mapping[str, str] | None) -> dict[
         "health": "OK" if health else "OFFLINE",
         "ready": "OK" if ready else "OFFLINE",
     }
-    status.update(remote_access_status())
+    status.update(remote_access_status(ensure_serve=ensure_remote))
+    status.update(pilot_release_status(status.get("remote_url", "")))
     return status
 
 
 def print_start_status(status: Mapping[str, str], start_result: str | None = None) -> None:
     online = all(status[key] == "OK" for key in ("postgres", "evidence", "api", "ready"))
     print("\nFLEET MANAGER SERVER\n")
-    print(f"PostgreSQL      {'RUNNING' if status['postgres'] == 'OK' else 'FAILED'}")
-    print(f"Evidence Store  {'RUNNING' if status['evidence'] == 'OK' else 'FAILED'}")
-    print(f"API             {'RUNNING' if status['api'] == 'OK' else status['api']}")
-    print(f"Ready           {'YES' if status['ready'] == 'OK' else 'NO'}")
+    print(f"Docker          {status['docker']}")
+    print(f"PostgreSQL      {status['postgres']}")
+    print(f"Evidence Store  {status['evidence']}")
+    print(f"FastAPI         {status['api']}")
+    print(f"Local Ready     {status['ready']}")
     print(f"Remote Access   {status.get('remote', 'OFFLINE')}")
+    print(
+        "Tailscale       "
+        + ("CONNECTED" if status.get("tailscale") == "ONLINE" else "OFFLINE")
+    )
+    print(f"Tailscale Svc   {status.get('tailscale_service', 'UNKNOWN')}")
+    print(f"Serve Root      {status.get('serve_root', 'MISSING')}")
+    print(f"Serve /pilot    {status.get('serve_pilot', 'MISSING')}")
+    print(f"Funnel          {status.get('funnel', 'UNKNOWN')}")
     if status.get("remote_url"):
-        print(f"Remote URL      {status['remote_url']}")
+        print(f"\nRemote URL:\n{status['remote_url']}")
+    print(f"\nPilot APK:\n{status.get('pilot_apk', 'NOT PUBLISHED')}")
+    if status.get("apk_url") and status.get("serve_pilot") == "OK":
+        print(f"\nAPK:\n{status['apk_url']}")
+    if status.get("reason"):
+        print(f"\nReason          {status['reason']}")
+    if status.get("pilot_warning"):
+        print(f"Warning         {status['pilot_warning']}")
     if start_result == "ALREADY RUNNING":
         print("\nALREADY RUNNING")
     print("\nSERVER IS ONLINE" if online else "\nSERVER START FAILED")
@@ -590,8 +727,25 @@ def print_check_status(status: Mapping[str, str]) -> None:
     print(f"/health         {status['health']}")
     print(f"/ready          {status['ready']}")
     print(f"Remote Access   {status.get('remote', 'OFFLINE')}")
+    print(
+        "Tailscale       "
+        + ("CONNECTED" if status.get("tailscale") == "ONLINE" else "OFFLINE")
+    )
+    print(f"Tailscale Svc   {status.get('tailscale_service', 'UNKNOWN')}")
+    print(f"Serve Root      {status.get('serve_root', 'MISSING')}")
+    print(f"Serve /pilot    {status.get('serve_pilot', 'MISSING')}")
+    print(f"Funnel          {status.get('funnel', 'UNKNOWN')}")
+    print(f"Remote /health  {status.get('remote_health', 'OFFLINE')}")
+    print(f"Remote /ready   {status.get('remote_ready', 'OFFLINE')}")
+    print(f"Pilot APK       {status.get('pilot_apk', 'NOT PUBLISHED')}")
     if status.get("remote_url"):
         print(f"Remote URL      {status['remote_url']}")
+    if status.get("apk_url") and status.get("serve_pilot") == "OK":
+        print(f"APK URL         {status['apk_url']}")
+    if status.get("reason"):
+        print(f"Reason          {status['reason']}")
+    if status.get("pilot_warning"):
+        print(f"Warning         {status['pilot_warning']}")
     print(f"\nOVERALL         {'ONLINE' if online else 'OFFLINE'}")
 
 
@@ -604,12 +758,13 @@ def start_server() -> int:
         ensure_docker(docker, env)
         ensure_infrastructure(docker, env)
         ensure_evidence_root(env)
+        ensure_pilot_release_directory()
         result = start_api(env)
     except ServerError as error:
         print(f"\n[FAILED] {error}")
         print_start_status(component_status(docker, env), result)
         return 1
-    print_start_status(component_status(docker, env), result)
+    print_start_status(component_status(docker, env, ensure_remote=True), result)
     return 0
 
 
@@ -685,6 +840,144 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def stable_sha256(path: Path) -> tuple[str, int]:
+    before = path.stat()
+    digest = sha256(path)
+    after = path.stat()
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise ServerError(f"File changed while it was being verified: {path.name}")
+    return digest, after.st_size
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, raw_temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    temporary = Path(raw_temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def ensure_pilot_release_directory() -> None:
+    if PILOT_RELEASE_DIR.exists() and not PILOT_RELEASE_DIR.is_dir():
+        raise ServerError(f"Pilot release path is not a directory: {PILOT_RELEASE_DIR}")
+    PILOT_RELEASE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def pilot_release_status(remote_url: str = "") -> dict[str, str]:
+    result = {
+        "pilot_directory": "OK" if PILOT_RELEASE_DIR.is_dir() else "MISSING",
+        "pilot_apk": "NOT PUBLISHED",
+        "pilot_warning": "",
+        "apk_url": "",
+    }
+    apk = PILOT_RELEASE_DIR / PILOT_APK_NAME
+    checksum_file = PILOT_RELEASE_DIR / PILOT_SHA256_NAME
+    if not apk.is_file():
+        return result
+    try:
+        digest, _ = stable_sha256(apk)
+    except (OSError, ServerError) as error:
+        result["pilot_apk"] = "WARNING"
+        result["pilot_warning"] = str(error)
+        return result
+    expected_line = f"{digest}  {PILOT_APK_NAME}\n"
+    if not checksum_file.exists():
+        try:
+            atomic_write_text(checksum_file, expected_line)
+        except OSError as error:
+            result["pilot_apk"] = "WARNING"
+            result["pilot_warning"] = f"Could not create {PILOT_SHA256_NAME}: {error}"
+            return result
+    try:
+        fields = checksum_file.read_text(encoding="utf-8").strip().split()
+    except (OSError, UnicodeError) as error:
+        result["pilot_apk"] = "WARNING"
+        result["pilot_warning"] = f"Could not read {PILOT_SHA256_NAME}: {error}"
+        return result
+    filename_ok = len(fields) == 1 or (
+        len(fields) == 2 and fields[1].lstrip("*") == PILOT_APK_NAME
+    )
+    if not fields or fields[0].casefold() != digest or not filename_ok:
+        result["pilot_apk"] = "WARNING"
+        result["pilot_warning"] = "Pilot APK SHA-256 metadata is inconsistent."
+        return result
+    result["pilot_apk"] = "PUBLISHED"
+    if remote_url:
+        result["apk_url"] = f"{remote_url}{TAILSCALE_PILOT_PATH}/{PILOT_APK_NAME}"
+    return result
+
+
+def publish_pilot_apk(source: Path, version_file: Path | None = None) -> int:
+    if not source.is_file():
+        raise ServerError(f"Pilot APK source was not found: {source}")
+    if source.suffix.casefold() != ".apk":
+        raise ServerError("Pilot publish source must be an APK file.")
+    ensure_pilot_release_directory()
+    source = source.resolve(strict=True)
+    destination = PILOT_RELEASE_DIR / PILOT_APK_NAME
+    if source == destination.resolve(strict=False):
+        raise ServerError("Pilot APK is already at the publish destination.")
+    candidate = version_file
+    if candidate is None:
+        adjacent = source.parent / PILOT_VERSION_NAME
+        candidate = adjacent if adjacent.is_file() else None
+    version_text: str | None = None
+    if candidate is not None:
+        if not candidate.is_file():
+            raise ServerError(f"Pilot version metadata was not found: {candidate}")
+        version_text = candidate.read_text(encoding="utf-8")
+        if len(version_text.encode("utf-8")) > 4096:
+            raise ServerError("Pilot version metadata is unexpectedly large.")
+    source_digest, source_size = stable_sha256(source)
+    temporary = PILOT_RELEASE_DIR / f".{PILOT_APK_NAME}.{uuid4().hex}.tmp"
+    try:
+        shutil.copyfile(source, temporary)
+        copied_digest, copied_size = stable_sha256(temporary)
+        if copied_size != source_size or copied_digest != source_digest:
+            raise ServerError("Pilot APK copy verification failed; nothing was published.")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    atomic_write_text(
+        PILOT_RELEASE_DIR / PILOT_SHA256_NAME,
+        f"{source_digest}  {PILOT_APK_NAME}\n",
+    )
+    if version_text is not None:
+        atomic_write_text(PILOT_RELEASE_DIR / PILOT_VERSION_NAME, version_text)
+
+    remote = remote_access_status(ensure_serve=True)
+    release = pilot_release_status(remote.get("remote_url", ""))
+    if release["pilot_apk"] != "PUBLISHED":
+        raise ServerError(release["pilot_warning"] or "Pilot APK verification failed.")
+    download_url = release["apk_url"]
+    if (
+        remote.get("remote") != "ONLINE"
+        or remote.get("serve_pilot") != "OK"
+        or not download_url
+    ):
+        raise ServerError(
+            "Pilot APK was published locally, but its private Tailscale URL is not ready."
+        )
+    probe = default_http_probe(download_url, timeout=10)
+    if probe is None or probe.status != 200:
+        raise ServerError(
+            "Pilot APK was published locally, but its private download URL is unreachable."
+        )
+    print("\nFLEET MANAGER PILOT APK\n")
+    print("PUBLISHED       YES")
+    print(f"APK             {destination}")
+    print(f"SHA-256         {source_digest}")
+    print(f"PRIVATE URL     {download_url}")
+    return 0
 
 
 def atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -1090,12 +1383,18 @@ def update_server() -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Control the local Fleet Manager server.")
-    parser.add_argument("command", choices=("start", "check", "stop", "backup", "update"))
+    parser.add_argument(
+        "command",
+        choices=("start", "check", "stop", "backup", "update", "publish-apk"),
+    )
+    parser.add_argument("apk", nargs="?", type=Path)
+    parser.add_argument("--version-file", type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    command = build_parser().parse_args(argv).command
+    args = build_parser().parse_args(argv)
+    command = args.command
     try:
         if command == "start":
             return start_server()
@@ -1105,6 +1404,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return stop_server()
         if command == "backup":
             return backup_server()
+        if command == "publish-apk":
+            if args.apk is None:
+                raise ServerError("Publish Pilot APK requires a source APK path.")
+            return publish_pilot_apk(args.apk, args.version_file)
         return update_server()
     except ServerError as error:
         print(f"\n[FAILED] {error}")
