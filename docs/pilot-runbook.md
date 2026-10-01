@@ -40,6 +40,25 @@ avoid TallyPrime's port 9000. If they are changed, update
 `FLEET_S3_ENDPOINT_URL`, `MINIO_API_PORT`, and `MINIO_CONSOLE_PORT` together;
 keep MinIO's container-internal ports at 9000/9001.
 
+### Remote test server filesystem mode
+
+The Windows remote-test-server wrappers use Compose only for PostgreSQL and run
+FastAPI natively on `127.0.0.1:8000`. On that machine, configure the ignored
+`.env` with:
+
+```dotenv
+FLEET_OBJECT_STORAGE_PROVIDER=filesystem
+FLEET_FILESYSTEM_STORAGE_ROOT=F:\FleetManagerData\evidence
+```
+
+The directory is private application storage, not a static-files directory or
+web root. Evidence is still uploaded and read only through the authenticated
+application endpoints. `Start Fleet Manager Server.bat` initializes and probes
+the directory, while `Stop Fleet Manager Server.bat` stops only the owned
+FastAPI process and this project's PostgreSQL Compose service. The Compose
+MinIO service remains available for development/S3 testing but is not started
+by the remote-server wrapper.
+
 ## Backup and restore
 
 Set `PGHOST`, `PGPORT`, `PGUSER`, and `PGPASSWORD` outside the repository (or
@@ -65,6 +84,15 @@ credentials held outside this repository and export with:
 
 Verify that the database backup and evidence export are timestamped and stored
 under separate retention policies.
+
+For the Windows remote-test-server filesystem mode, run
+`Backup Fleet Manager Server.bat`. It writes the validated custom-format
+PostgreSQL dump under `F:\FleetManagerBackups\database` and a timestamped,
+SHA-256-manifested evidence snapshot under `C:\FleetManagerEvidenceBackup`.
+Restore rehearsals must use a clearly named temporary PostgreSQL database and
+an isolated evidence directory. Validate the dump with container-matched
+`pg_restore --list`, validate every evidence file against
+`evidence-backup-manifest.json`, and never restore over either active location.
 
 ## Onboarding
 

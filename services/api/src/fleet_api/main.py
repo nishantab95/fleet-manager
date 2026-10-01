@@ -23,6 +23,8 @@ from fleet_api.core.config import Settings, get_settings
 from fleet_api.core.request_id import RequestIdMiddleware
 from fleet_api.core.structured_logging import configure_logging
 from fleet_api.db.session import check_database
+from fleet_api.domain.errors import ObjectStorageUnavailableError
+from fleet_api.storage.objects import build_object_storage
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +113,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={"status": "not_ready", "database": "unavailable"},
             )
-        return {"status": "ready", "database": "available"}
+        try:
+            build_object_storage(runtime_settings).check_ready()
+        except ObjectStorageUnavailableError:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "status": "not_ready",
+                    "database": "available",
+                    "object_storage": "unavailable",
+                },
+            )
+        return {
+            "status": "ready",
+            "database": "available",
+            "object_storage": "available",
+        }
 
     return app
 

@@ -1,5 +1,6 @@
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,6 +33,7 @@ class Settings(BaseSettings):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = Field(default=None, repr=False)
     object_storage_provider: str = "unavailable"
+    filesystem_storage_root: Path | None = None
     evidence_max_bytes: int = 5_000_000
     evidence_allowed_mime_types: str = "image/jpeg,image/png,image/webp"
     event_future_skew_seconds: int = 300
@@ -94,6 +96,9 @@ class Settings(BaseSettings):
 
         environment = self.environment.lower()
         otp_provider = self.otp_provider.lower()
+        object_storage_provider = self.object_storage_provider.lower()
+        if object_storage_provider == "filesystem" and self.filesystem_storage_root is None:
+            raise ValueError("filesystem object storage requires FLEET_FILESYSTEM_STORAGE_ROOT")
         pilot_codes = {
             "FLEET_PILOT_OTP": self.pilot_otp,
             "FLEET_PILOT_DRIVER_OTP": self.pilot_driver_otp,
@@ -143,7 +148,7 @@ class Settings(BaseSettings):
                 raise ValueError("production requires explicit CORS origins")
             if not self.allowed_host_values or "*" in self.allowed_host_values:
                 raise ValueError("production requires explicit allowed hosts")
-            if self.object_storage_provider.lower() != "s3":
+            if object_storage_provider != "s3":
                 raise ValueError("production requires private S3-compatible object storage")
             if not self.s3_access_key_id or not self.s3_secret_access_key:
                 raise ValueError("production requires object-storage credentials")

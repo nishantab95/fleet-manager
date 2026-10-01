@@ -1,1 +1,1 @@
-"""Private S3-compatible object storage boundary."""
+"""Private pluggable object-storage boundary."""
