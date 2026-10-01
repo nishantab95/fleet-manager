@@ -1,8 +1,9 @@
-"""Local-only Fleet Manager server control and backup helper.
+"""Fleet Manager remote-test server control, update, and backup helper.
 
 The remote-test architecture uses Compose only for PostgreSQL. FastAPI is an
 owned native process bound to 127.0.0.1, and evidence remains private in a
-configured local filesystem root.
+configured local filesystem root. Optional remote status uses private Tailscale
+Serve without making local health depend on Tailscale availability.
 """
 
 from __future__ import annotations
@@ -56,6 +57,9 @@ ENV_FILE = ROOT / ".env"
 BACKUP_ROOT = Path(r"F:\FleetManagerBackups")
 EVIDENCE_BACKUP_ROOT = Path(r"C:\FleetManagerEvidenceBackup")
 EVIDENCE_MANIFEST_NAME = "evidence-backup-manifest.json"
+TAILSCALE_EXE = Path(r"C:\Program Files\Tailscale\tailscale.exe")
+TAILSCALE_PROXY_TARGET = "http://127.0.0.1:8000"
+LOCAL_STATUS_KEYS = ("docker", "postgres", "evidence", "api", "health", "ready")
 
 
 class ServerError(RuntimeError):
@@ -98,6 +102,30 @@ def checked(
         safe_tail = "\n".join(detail[-12:])
         raise ServerError(f"{label} failed.\n{safe_tail}" if safe_tail else f"{label} failed.")
     return result
+
+
+def git_output(*args: str, timeout: int = 120) -> str:
+    result = checked(
+        ["git", *args],
+        label=f"git {' '.join(args)}",
+        timeout=timeout,
+    )
+    return (result.stdout or "").strip()
+
+
+def find_uv() -> str | None:
+    resolved = shutil.which("uv")
+    if resolved:
+        return resolved
+    user_profile = Path(os.environ.get("USERPROFILE", ""))
+    local_app_data = Path(os.environ.get("LOCALAPPDATA", ""))
+    candidates = (
+        user_profile / ".local" / "bin" / "uv.exe",
+        local_app_data / "uv" / "uv.exe",
+        user_profile / ".cargo" / "bin" / "uv.exe",
+        user_profile / "scoop" / "shims" / "uv.exe",
+    )
+    return next((str(path) for path in candidates if path.is_file()), None)
 
 
 def load_server_environment() -> dict[str, str]:
@@ -355,6 +383,100 @@ def api_ready_ok() -> bool:
     return probe is not None and probe.status == 200
 
 
+def tailscale_executable() -> str | None:
+    resolved = shutil.which("tailscale")
+    if resolved:
+        return resolved
+    return str(TAILSCALE_EXE) if TAILSCALE_EXE.is_file() else None
+
+
+def _private_serve_target(config: Mapping[str, Any], dns_name: str) -> str | None:
+    web = config.get("Web")
+    if not isinstance(web, dict):
+        return None
+    host_config = web.get(f"{dns_name}:443")
+    if not isinstance(host_config, dict):
+        return None
+    handlers = host_config.get("Handlers")
+    if not isinstance(handlers, dict):
+        return None
+    root_handler = handlers.get("/")
+    if not isinstance(root_handler, dict):
+        return None
+    proxy = root_handler.get("Proxy")
+    return proxy if isinstance(proxy, str) else None
+
+
+def _funnel_enabled(config: Mapping[str, Any]) -> bool:
+    allowed = config.get("AllowFunnel")
+    if allowed is True:
+        return True
+    if isinstance(allowed, dict) and any(value is True for value in allowed.values()):
+        return True
+    if isinstance(allowed, list) and bool(allowed):
+        return True
+    tcp = config.get("TCP")
+    if not isinstance(tcp, dict):
+        return False
+    return any(
+        isinstance(listener, dict) and listener.get("Funnel") is True
+        for listener in tcp.values()
+    )
+
+
+def remote_access_status() -> dict[str, str]:
+    result = {
+        "remote": "OFFLINE",
+        "remote_url": "",
+        "tailscale": "OFFLINE",
+        "funnel": "UNKNOWN",
+    }
+    executable = tailscale_executable()
+    if not executable:
+        return result
+    status = run_capture([executable, "status", "--json"], timeout=10)
+    if status.returncode != 0:
+        return result
+    try:
+        status_payload = json.loads(status.stdout or "{}")
+    except json.JSONDecodeError:
+        return result
+    self_status = status_payload.get("Self")
+    if status_payload.get("BackendState") != "Running" or not isinstance(
+        self_status, dict
+    ):
+        return result
+    if self_status.get("Online") is not True:
+        return result
+    result["tailscale"] = "ONLINE"
+    dns_name = str(self_status.get("DNSName") or "").strip().rstrip(".").lower()
+    if not dns_name:
+        return result
+    result["remote_url"] = f"https://{dns_name}"
+    serve = run_capture([executable, "serve", "status", "--json"], timeout=10)
+    funnel = run_capture([executable, "funnel", "status", "--json"], timeout=10)
+    if serve.returncode != 0 or funnel.returncode != 0:
+        return result
+    try:
+        serve_payload = json.loads(serve.stdout or "{}")
+        funnel_payload = json.loads(funnel.stdout or "{}")
+    except json.JSONDecodeError:
+        return result
+    if not isinstance(serve_payload, dict) or not isinstance(funnel_payload, dict):
+        return result
+    funnel_enabled = _funnel_enabled(funnel_payload)
+    result["funnel"] = "ENABLED" if funnel_enabled else "DISABLED"
+    if funnel_enabled:
+        return result
+    if _private_serve_target(serve_payload, dns_name) != TAILSCALE_PROXY_TARGET:
+        return result
+    health = default_http_probe(f"{result['remote_url']}/health", timeout=5)
+    ready = default_http_probe(f"{result['remote_url']}/ready", timeout=5)
+    if is_expected_api_health(health) and ready is not None and ready.status == 200:
+        result["remote"] = "ONLINE"
+    return result
+
+
 def recorded_api() -> tuple[dict[str, Any], ProcessInfo | None]:
     state = read_state()
     pid = state.get("pid")
@@ -431,7 +553,7 @@ def component_status(docker: str | None, env: Mapping[str, str] | None) -> dict[
     api_state = "OK" if owned and listener and health else "OFFLINE"
     if listener and not owned:
         api_state = "UNMANAGED"
-    return {
+    status = {
         "docker": "OK" if docker_ok else "OFFLINE",
         "postgres": "OK" if compose.get("postgres") == "healthy" else "OFFLINE",
         "evidence": "OK" if evidence_store_available(env) else "OFFLINE",
@@ -439,6 +561,8 @@ def component_status(docker: str | None, env: Mapping[str, str] | None) -> dict[
         "health": "OK" if health else "OFFLINE",
         "ready": "OK" if ready else "OFFLINE",
     }
+    status.update(remote_access_status())
+    return status
 
 
 def print_start_status(status: Mapping[str, str], start_result: str | None = None) -> None:
@@ -448,13 +572,16 @@ def print_start_status(status: Mapping[str, str], start_result: str | None = Non
     print(f"Evidence Store  {'RUNNING' if status['evidence'] == 'OK' else 'FAILED'}")
     print(f"API             {'RUNNING' if status['api'] == 'OK' else status['api']}")
     print(f"Ready           {'YES' if status['ready'] == 'OK' else 'NO'}")
+    print(f"Remote Access   {status.get('remote', 'OFFLINE')}")
+    if status.get("remote_url"):
+        print(f"Remote URL      {status['remote_url']}")
     if start_result == "ALREADY RUNNING":
         print("\nALREADY RUNNING")
     print("\nSERVER IS ONLINE" if online else "\nSERVER START FAILED")
 
 
 def print_check_status(status: Mapping[str, str]) -> None:
-    online = all(value == "OK" for value in status.values())
+    online = all(status.get(key) == "OK" for key in LOCAL_STATUS_KEYS)
     print("\nFLEET MANAGER SERVER STATUS\n")
     print(f"Docker          {status['docker']}")
     print(f"PostgreSQL      {status['postgres']}")
@@ -462,6 +589,9 @@ def print_check_status(status: Mapping[str, str]) -> None:
     print(f"FastAPI         {status['api']}")
     print(f"/health         {status['health']}")
     print(f"/ready          {status['ready']}")
+    print(f"Remote Access   {status.get('remote', 'OFFLINE')}")
+    if status.get("remote_url"):
+        print(f"Remote URL      {status['remote_url']}")
     print(f"\nOVERALL         {'ONLINE' if online else 'OFFLINE'}")
 
 
@@ -492,7 +622,7 @@ def check_server() -> int:
         return 1
     status = component_status(docker, env)
     print_check_status(status)
-    return 0 if all(value == "OK" for value in status.values()) else 1
+    return 0 if all(status.get(key) == "OK" for key in LOCAL_STATUS_KEYS) else 1
 
 
 def stop_api() -> int:
@@ -837,9 +967,130 @@ def backup_server() -> int:
     return 0
 
 
+def _backup_manifests() -> set[Path]:
+    releases = BACKUP_ROOT / "releases"
+    if not releases.is_dir():
+        return set()
+    return set(releases.glob("*/server-backup-manifest.json"))
+
+
+def _sync_locked_dependencies() -> None:
+    uv = find_uv()
+    if not uv:
+        raise ServerError("uv is required for locked dependency synchronization.")
+    sync_env = dict(os.environ)
+    sync_env["UV_PYTHON_DOWNLOADS"] = "never"
+    checked(
+        [
+            uv,
+            "--cache-dir",
+            str(ROOT / ".uv-cache"),
+            "sync",
+            "--project",
+            str(API_PROJECT),
+            "--python",
+            str(PROJECT_PYTHON),
+            "--locked",
+            "--all-groups",
+        ],
+        label="Locked Python dependency synchronization",
+        env=sync_env,
+        timeout=600,
+    )
+
+
+def _print_update_failure(
+    error: ServerError, old_commit: str, new_commit: str, backup: Path
+) -> None:
+    print("\nUPDATE FAILED")
+    print(f"OLD COMMIT     {old_commit}")
+    print(f"NEW COMMIT     {new_commit}")
+    print(f"BACKUP LOCATION {backup}")
+    print(str(error))
+    print("Automatic migration downgrade was not attempted.")
+    print("Keep the backup for manual recovery.")
+
+
+def update_server() -> int:
+    if git_output("status", "--porcelain", "--untracked-files=normal"):
+        raise ServerError("Update refused: the Git working tree is not clean.")
+    branch = git_output("branch", "--show-current")
+    if branch != "main":
+        raise ServerError(f"Update refused: expected branch main, found {branch or 'detached HEAD'}.")
+    if not git_output("remote", "get-url", "origin"):
+        raise ServerError("Update refused: origin is not configured.")
+    old_commit = git_output("rev-parse", "HEAD")
+    git_output("fetch", "origin", timeout=300)
+    target_commit = git_output("rev-parse", "origin/main")
+    if old_commit == target_commit:
+        print("\nFLEET MANAGER SERVER UPDATE\n")
+        print("ALREADY UP TO DATE")
+        print(f"CURRENT COMMIT  {old_commit}")
+        return 0
+
+    ancestor = run_capture(
+        ["git", "merge-base", "--is-ancestor", old_commit, target_commit],
+        timeout=30,
+    )
+    if ancestor.returncode != 0:
+        raise ServerError(
+            "Update refused: origin/main cannot be applied as a fast-forward. "
+            "No backup, stop, pull, or migration was performed."
+        )
+
+    before_backups = _backup_manifests()
+    backup_server()
+    created_backups = _backup_manifests() - before_backups
+    if len(created_backups) != 1:
+        raise ServerError("Update refused: the pre-update backup location was not unambiguous.")
+    backup = created_backups.pop()
+    new_commit = old_commit
+    try:
+        stop_api()
+        git_output("pull", "--ff-only", "origin", "main", timeout=300)
+        new_commit = git_output("rev-parse", "HEAD")
+        if new_commit != target_commit:
+            raise ServerError("git pull completed at an unexpected commit.")
+        _sync_locked_dependencies()
+        env = load_server_environment()
+        checked(
+            [str(PROJECT_PYTHON), "-m", "alembic", "upgrade", "head"],
+            label="Alembic upgrade",
+            cwd=API_PROJECT,
+            env=env,
+            timeout=300,
+        )
+        start = checked(
+            [str(PROJECT_PYTHON), str(Path(__file__).resolve()), "start"],
+            label="Fleet Manager restart",
+            timeout=180,
+        )
+        if start.stdout:
+            print(start.stdout.rstrip())
+        if not api_health_ok() or not api_ready_ok():
+            raise ServerError("Updated API failed its local health or readiness check.")
+        remote = remote_access_status()
+        if remote["tailscale"] == "ONLINE" and remote["remote"] != "ONLINE":
+            raise ServerError("Updated API failed its private Tailscale health check.")
+    except ServerError as error:
+        try:
+            new_commit = git_output("rev-parse", "HEAD")
+        except ServerError:
+            pass
+        _print_update_failure(error, old_commit, new_commit, backup)
+        return 1
+
+    print("\nFLEET MANAGER SERVER UPDATE\n")
+    print("UPDATE COMPLETE")
+    print(f"OLD COMMIT      {old_commit}")
+    print(f"NEW COMMIT      {new_commit}")
+    print(f"BACKUP LOCATION {backup}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Control the local Fleet Manager server.")
-    parser.add_argument("command", choices=("start", "check", "stop", "backup"))
+    parser.add_argument("command", choices=("start", "check", "stop", "backup", "update"))
     return parser
 
 
@@ -852,7 +1103,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return check_server()
         if command == "stop":
             return stop_server()
-        return backup_server()
+        if command == "backup":
+            return backup_server()
+        return update_server()
     except ServerError as error:
         print(f"\n[FAILED] {error}")
         return 1
