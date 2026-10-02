@@ -19,17 +19,31 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Emergencies'), findsOneWidget);
-      expect(find.text('Assets'), findsWidgets);
+      expect(find.text('Nagaraj'), findsOneWidget);
+      expect(find.text('ABL Railway · Supervisor'), findsOneWidget);
+      expect(find.text('EMERGENCIES'), findsOneWidget);
+      expect(find.text('DIESEL APPROVALS'), findsOneWidget);
+      expect(find.text('TRIP APPROVALS'), findsOneWidget);
+      expect(find.text('METER READINGS'), findsOneWidget);
+      expect(
+        find.byKey(const Key('supervisor-count-emergency')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('supervisor-count-diesel')), findsOneWidget);
+      expect(find.byKey(const Key('supervisor-count-trips')), findsOneWidget);
+      expect(find.byKey(const Key('supervisor-count-meter')), findsOneWidget);
       expect(find.text('PILOT-12'), findsWidgets);
       expect(find.text('EXC-07'), findsOneWidget);
-      expect(find.text('Unassigned'), findsNWidgets(2));
-      expect(find.text('NEED REVIEW'), findsNWidgets(2));
-      expect(find.text('Today summary'), findsOneWidget);
-      expect(find.text('Review'), findsOneWidget);
-      expect(find.text('Timeline'), findsOneWidget);
+      expect(find.text('UNASSIGNED'), findsWidgets);
+      expect(find.text('NEED REVIEW'), findsOneWidget);
+      expect(find.text('Review queue'), findsOneWidget);
+      expect(find.text('Site fleet'), findsOneWidget);
+      expect(find.text('Recent activity'), findsOneWidget);
       expect(find.byKey(const Key('supervisor-site-selector')), findsNothing);
       expect(find.text('Pilot Site'), findsNothing);
+      expect(find.text('ACKNOWLEDGE'), findsNothing);
+      await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
+      await tester.pumpAndSettle();
       expect(find.text('ACKNOWLEDGE'), findsOneWidget);
     },
   );
@@ -47,28 +61,40 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('1 pending'), findsNWidgets(2));
-      if (find.text('APPROVE').evaluate().isEmpty) {
-        await tester.tap(find.text('Review'));
-        await tester.pumpAndSettle();
-      }
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('supervisor-count-meter')))
+            .data,
+        '1',
+      );
+      await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
+      await tester.pumpAndSettle();
       expect(find.text('APPROVE'), findsOneWidget);
       await tester.tap(find.text('APPROVE'));
       await tester.pumpAndSettle();
 
       expect(api.approvedEventId, _FakeRoleApi.startEventId);
-      expect(find.text('1 pending'), findsNothing);
-      expect(find.text('0 pending'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('supervisor-count-meter')))
+            .data,
+        '0',
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('supervisor-count-emergency')))
+            .data,
+        '1',
+      );
       expect(find.text('APPROVE'), findsNothing);
       expect(find.text('Record approved.'), findsOneWidget);
-      expect(find.text('ACKNOWLEDGE'), findsOneWidget);
     },
   );
 
   testWidgets('supervisor changes driver from an authorized site asset', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(1080, 1800));
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = _FakeRoleApi();
     await tester.pumpWidget(
@@ -94,7 +120,7 @@ void main() {
   testWidgets('supervisor assigns an operator to unassigned machinery', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(1080, 1800));
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = _FakeRoleApi();
     await tester.pumpWidget(
@@ -151,7 +177,7 @@ void main() {
       find.byKey(const Key('supervisor-asset-search')),
       '',
     );
-    await tester.tap(find.text('UNASSIGNED'));
+    await tester.tap(find.byKey(const Key('supervisor-filter-unassigned')));
     await tester.pump();
     expect(
       find.byKey(const Key('supervisor-site-asset-pilot-asset')),
@@ -200,9 +226,20 @@ void main() {
         find.descendant(of: card, matching: find.textContaining('Trips')),
         findsNothing,
       );
-      expect(find.text('2 pending'), findsWidgets);
-      expect(find.text('Review'), findsOneWidget);
-      expect(find.text('Timeline'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('supervisor-count-meter')))
+            .data,
+        '2',
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('supervisor-count-diesel')))
+            .data,
+        '0',
+      );
+      expect(find.text('Review queue'), findsOneWidget);
+      expect(find.text('Recent activity'), findsOneWidget);
     },
   );
 
@@ -220,7 +257,6 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('$assetCount'), findsAtLeastNWidgets(1));
       expect(
         find.byKey(const Key('supervisor-site-asset-scale-0')),
         findsOneWidget,
@@ -237,7 +273,7 @@ void main() {
   testWidgets(
     'multi-site supervisor uses one selector and keeps emergencies global',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(390, 1000));
+      await tester.binding.setSurfaceSize(const Size(390, 2400));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final api = _MultiSiteRoleApi();
       await tester.pumpWidget(
@@ -248,16 +284,117 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('supervisor-site-selector')), findsOneWidget);
-      expect(find.text('North Site'), findsWidgets);
-      expect(find.textContaining('South Site'), findsWidgets);
+      expect(find.text('NORTH · Supervisor'), findsOneWidget);
+      expect(find.text('NORTH'), findsWidgets);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('supervisor-count-emergency')))
+            .data,
+        '1',
+      );
+      expect(find.text('South emergency'), findsNothing);
+      await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
+      await tester.pumpAndSettle();
       expect(find.text('South emergency'), findsOneWidget);
       expect(
         find.text('A deliberately very long asset name that must not overflow'),
         findsOneWidget,
       );
+      await tester.tap(find.byKey(const Key('supervisor-site-selector')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('SOUTH').last);
+      await tester.pumpAndSettle();
+      expect(find.text('SOUTH · Supervisor'), findsOneWidget);
+      expect(
+        find.byKey(const Key('supervisor-site-asset-south-asset')),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final width in [360.0, 390.0, 412.0]) {
+    testWidgets('supervisor action grid is stable at ${width.toInt()} px', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(Size(width, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SupervisorHomeScreen(
+            api: _ScaleRoleApi(assetCount: 1),
+            onSignOut: () async {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      for (final key in const [
+        'supervisor-tile-emergency',
+        'supervisor-tile-diesel',
+        'supervisor-tile-trips',
+        'supervisor-tile-meter',
+      ]) {
+        final tile = find.byKey(Key(key));
+        expect(tile, findsOneWidget);
+        expect(tester.getSize(tile).width, greaterThan(150));
+        expect(tester.getSize(tile).height, greaterThan(90));
+      }
+      for (final key in const [
+        'supervisor-count-emergency',
+        'supervisor-count-diesel',
+        'supervisor-count-trips',
+        'supervisor-count-meter',
+      ]) {
+        expect(tester.widget<Text>(find.byKey(Key(key))).data, '0');
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('attention tiles open the matching oldest-first review queue', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(
+          api: _AttentionRoleApi(),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-diesel')));
+    await tester.pumpAndSettle();
+    expect(find.text('21 LITRES'), findsOneWidget);
+    expect(find.text('42 LITRES'), findsOneWidget);
+    expect(
+      tester
+          .widgetList<Text>(find.textContaining('LITRES'))
+          .map((widget) => widget.data)
+          .toList(),
+      ['21 LITRES', '42 LITRES'],
+    );
+    expect(find.text('Trip Complete'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-trips')));
+    await tester.pumpAndSettle();
+    expect(find.text('Trip Complete'), findsOneWidget);
+    expect(find.text('42 LITRES'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
+    await tester.pumpAndSettle();
+    expect(find.text('START KM · 777'), findsOneWidget);
+    expect(find.text('Trip Complete'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
+    await tester.pumpAndSettle();
+    expect(find.text('Attention fixture emergency'), findsOneWidget);
+    expect(find.text('START KM · 777'), findsNothing);
+  });
 
   test(
     'physical event statuses yield zero normal review items after approval',
@@ -497,6 +634,9 @@ class _FakeRoleApi extends ApiClient {
   _FakeRoleApi() : super(baseUrl: 'http://test');
 
   @override
+  Future<String> currentDisplayName() async => 'Nagaraj';
+
+  @override
   Future<List<OwnerAsset>> ownerAssets({
     String? status,
     String? ownershipType,
@@ -518,7 +658,11 @@ class _FakeRoleApi extends ApiClient {
   static const startEventId = '7cb203af-aaf4-4c8d-af39-84d2ca6e263f';
   static const emergencyEventId = 'cb0915c7-4e29-4f19-8e0c-4f6c95d51c74';
 
-  final _site = const SupervisorSite(id: 'site-1', name: 'Pilot Site');
+  final _site = const SupervisorSite(
+    id: 'site-1',
+    name: 'Pilot Site',
+    shortName: 'ABL Railway',
+  );
   String? approvedEventId;
   String? assignedAssetId;
   String? assignedDriverId;
@@ -960,8 +1104,16 @@ class _ScaleRoleApi extends _FakeRoleApi {
 }
 
 class _MultiSiteRoleApi extends _FakeRoleApi {
-  static const _north = SupervisorSite(id: 'north', name: 'North Site');
-  static const _south = SupervisorSite(id: 'south', name: 'South Site');
+  static const _north = SupervisorSite(
+    id: 'north',
+    name: 'North Site',
+    shortName: 'NORTH',
+  );
+  static const _south = SupervisorSite(
+    id: 'south',
+    name: 'South Site',
+    shortName: 'SOUTH',
+  );
 
   @override
   Future<List<SupervisorSite>> supervisorSites() async => [_north, _south];
@@ -1006,6 +1158,75 @@ class _MultiSiteRoleApi extends _FakeRoleApi {
     ];
   }
 }
+
+class _AttentionRoleApi extends _FakeRoleApi {
+  @override
+  Future<List<SupervisorEvent>> supervisorEvents(
+    String siteId, {
+    String? verificationStatus,
+    DateTime? reviewDate,
+  }) async => [
+    _attentionEvent(
+      id: 'diesel-oldest',
+      type: 'DIESEL',
+      createdAt: '2026-09-30T05:00:00Z',
+      litres: 21,
+    ),
+    _attentionEvent(
+      id: 'diesel-newer',
+      type: 'DIESEL',
+      createdAt: '2026-09-30T06:00:00Z',
+      litres: 42,
+    ),
+    _attentionEvent(
+      id: 'trip',
+      type: 'TRIP_COMPLETE',
+      createdAt: '2026-09-30T07:00:00Z',
+    ),
+    _attentionEvent(
+      id: 'meter',
+      type: 'KM_READING',
+      createdAt: '2026-09-30T08:00:00Z',
+      readingType: 'START_READING',
+      readingValue: 777,
+    ),
+    _attentionEvent(
+      id: 'emergency',
+      type: 'EMERGENCY',
+      createdAt: '2026-09-30T09:00:00Z',
+      emergencyDescription: 'Attention fixture emergency',
+    ),
+  ];
+}
+
+SupervisorEvent _attentionEvent({
+  required String id,
+  required String type,
+  required String createdAt,
+  double? litres,
+  String? readingType,
+  double? readingValue,
+  String? emergencyDescription,
+}) => SupervisorEvent.fromJson({
+  'event_id': id,
+  'event_type': type,
+  'assignment_id': 'attention-assignment',
+  'driver_name': 'Attention Driver',
+  'driver_phone': '9606743463',
+  'asset_code': 'TIPPER-12',
+  'asset_short_name': 'Attention Tipper',
+  'tipper_registration_number': 'PILOT-12',
+  'site_id': 'site-1',
+  'site_name': 'Pilot Site',
+  'device_created_at': createdAt,
+  'verification_status': 'PENDING_VERIFICATION',
+  'litres': litres,
+  'reading_type': readingType,
+  'reading_value': readingValue,
+  'emergency_status': type == 'EMERGENCY' ? 'OPEN' : null,
+  'emergency_description': emergencyDescription,
+  'evidence_available': type == 'DIESEL',
+});
 
 class _MachineryRoleApi extends _FakeRoleApi {
   @override

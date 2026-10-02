@@ -322,6 +322,15 @@ class ApiClient
     await _request('GET', '/api/v1/auth/me', authenticated: true);
   }
 
+  Future<String> currentDisplayName() async {
+    final response = await _request(
+      'GET',
+      '/api/v1/auth/me',
+      authenticated: true,
+    );
+    return '${_json(response)['display_name'] ?? 'Supervisor'}';
+  }
+
   @override
   Future<DriverAssignment?> currentAssignment() async {
     final response = await _request(

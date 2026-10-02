@@ -75,6 +75,7 @@ def _event_response(view: SupervisorEvent) -> SupervisorEventResponse:
         driver_name=view.driver.display_name,
         driver_phone=(view.driver.phone_number if view.emergency is not None else None),
         asset_code=view.asset.asset_code,
+        asset_short_name=view.asset.short_name,
         asset_type=view.asset.asset_type,
         tipper_registration_number=view.asset.registration_number or view.asset.asset_code,
         site_id=view.site.id,
@@ -154,6 +155,7 @@ def list_supervisor_sites(
             SupervisorSiteResponse(
                 id=site.id,
                 name=site.name,
+                short_name=site.short_name,
                 code=site.code,
                 status=site.status,
             )

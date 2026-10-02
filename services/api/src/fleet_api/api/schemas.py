@@ -474,6 +474,7 @@ class EvidenceUploadResponse(BaseModel):
 class SupervisorSiteResponse(BaseModel):
     id: UUID
     name: str
+    short_name: str
     code: str | None
     status: SiteStatus
 
@@ -493,6 +494,7 @@ class SupervisorEventResponse(BaseModel):
     driver_name: str
     driver_phone: str | None
     asset_code: str
+    asset_short_name: str | None
     asset_type: FleetAssetType
     tipper_registration_number: str
     site_id: UUID

@@ -9,6 +9,7 @@ import 'data/secure_session_store.dart';
 import 'data/sync_engine.dart';
 import 'domain/driver_models.dart';
 import 'domain/role_models.dart';
+import 'fleet_theme.dart';
 import 'role_screens.dart';
 
 const appVersion = String.fromEnvironment(
@@ -100,19 +101,7 @@ class FleetManagerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Fleet Manager',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF155E63),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF7F9F8),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-          filled: true,
-          fillColor: Colors.white,
-        ),
-      ),
+      theme: fleetTheme(),
       home: dependencies == null
           ? const _UnavailableScreen()
           : DriverSessionScreen(dependencies: dependencies!),
@@ -1068,6 +1057,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final canCapture = assignment != null;
     final canOperate = canCapture && !_busy && _duty.isOperationallyActive;
     final canReadMeter = canCapture && !_busy && _duty.canReadKm;
+    final dutyActionLabel = _duty.canEnd
+        ? 'END DUTY · $meterLabel'
+        : 'START DUTY · $meterLabel';
     final dutyLabel = switch (_duty.localState) {
       LocalDutyState.startPendingSync => 'Saved on phone · Syncing start',
       LocalDutyState.activeConfirmed => 'Duty active',
@@ -1110,28 +1102,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
         children: [
           _AssignmentCard(assignment: assignment),
-          const SizedBox(height: 20),
-          Text(
-            _pendingCount == 0
-                ? 'Synced'
-                : '$_pendingCount event(s) pending sync',
-            style: Theme.of(context).textTheme.titleMedium,
+          const SizedBox(height: 12),
+          _DriverStatePanel(
+            dutyLabel: dutyLabel,
+            siteName: assignment?.siteName,
+            pendingCount: _pendingCount,
+            actionLabel: dutyActionLabel,
+            onDutyAction: canReadMeter
+                ? (hourMeter ? _showHmrDialog : _showKmDialog)
+                : null,
           ),
-          const SizedBox(height: 8),
-          Text(dutyLabel, textAlign: TextAlign.center),
-          if (assignment != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              assignment.siteName,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
           const SizedBox(height: 16),
           GridView.count(
             crossAxisCount: 2,
@@ -1174,7 +1157,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           ),
           if (_message != null) ...[
             const SizedBox(height: 16),
-            Text(_message!, textAlign: TextAlign.center),
+            Card(
+              color: _message == 'Synced'
+                  ? Theme.of(context).colorScheme.primaryContainer
+                  : Theme.of(context).colorScheme.tertiaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Icon(
+                      _message == 'Synced'
+                          ? Icons.check_circle_outline
+                          : Icons.info_outline,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(_message!)),
+                  ],
+                ),
+              ),
+            ),
           ],
         ],
       ),
@@ -1424,6 +1425,86 @@ class _AssignmentCard extends StatelessWidget {
   }
 }
 
+class _DriverStatePanel extends StatelessWidget {
+  const _DriverStatePanel({
+    required this.dutyLabel,
+    required this.pendingCount,
+    required this.actionLabel,
+    required this.onDutyAction,
+    this.siteName,
+  });
+
+  final String dutyLabel;
+  final String? siteName;
+  final int pendingCount;
+  final String actionLabel;
+  final VoidCallback? onDutyAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final synced = pendingCount == 0;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  onDutyAction == null
+                      ? Icons.pause_circle_outline
+                      : Icons.play_circle_outline,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        dutyLabel,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      if (siteName != null)
+                        Text(
+                          siteName!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                    ],
+                  ),
+                ),
+                Chip(
+                  avatar: Icon(
+                    synced
+                        ? Icons.cloud_done_outlined
+                        : Icons.cloud_upload_outlined,
+                    size: 16,
+                  ),
+                  label: Text(synced ? 'SYNCED' : '$pendingCount PENDING'),
+                  backgroundColor: synced
+                      ? Theme.of(context).colorScheme.primaryContainer
+                      : Theme.of(context).colorScheme.tertiaryContainer,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: onDutyAction,
+              icon: const Icon(Icons.speed_outlined),
+              label: Text(actionLabel),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ActionButton extends StatelessWidget {
   const _ActionButton({
     required this.label,
@@ -1439,22 +1520,26 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: SizedBox(
-        height: 64,
-        child: FilledButton.icon(
-          onPressed: onPressed,
-          style: danger
-              ? FilledButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.error,
-                )
-              : null,
-          icon: Icon(icon),
-          label: Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
+    return SizedBox(
+      height: 72,
+      child: FilledButton.icon(
+        onPressed: onPressed,
+        style: danger
+            ? FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+                side: BorderSide(color: Theme.of(context).colorScheme.error),
+              )
+            : FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                foregroundColor: Theme.of(context).colorScheme.primary,
+                side: BorderSide(color: Theme.of(context).colorScheme.outline),
+              ),
+        icon: Icon(icon),
+        label: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontWeight: FontWeight.bold),
         ),
       ),
     );

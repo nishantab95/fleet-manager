@@ -139,13 +139,19 @@ def test_owner_people_crud_duplicate_and_tenant_boundaries(
         )
         assert created.status_code == 201
         person_id = created.json()["membership_id"]
-        assert client.post(
+        second_role = client.post(
             "/api/v1/owner/people/invite",
             json={
                 "phone": phone,
                 "display_name": "Duplicate",
                 "role": "SUPERVISOR",
             },
+        )
+        assert second_role.status_code == 201
+        assert second_role.json()["role"] == "SUPERVISOR"
+        assert client.post(
+            "/api/v1/owner/people/invite",
+            json={"phone": phone, "display_name": "Duplicate", "role": "DRIVER"},
         ).status_code == 409
         updated = client.patch(
             f"/api/v1/owner/people/{person_id}",
@@ -160,6 +166,68 @@ def test_owner_people_crud_duplicate_and_tenant_boundaries(
         active = client.post(f"/api/v1/owner/people/{person_id}/reactivate")
         assert active.status_code == 200
         assert active.json()["membership_id"] == person_id
+    finally:
+        client.close()
+
+
+def test_existing_company_person_can_hold_login_and_revoke_multiple_roles(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    owner = value(tenant_records, "owner_a", CompanyMembership)
+    identity = db_session.get(User, owner.user_id)
+    assert identity is not None
+    client = owner_client(db_session, owner)
+    granted_ids: dict[MembershipRole, str] = {}
+    try:
+        for role in (MembershipRole.DRIVER, MembershipRole.SUPERVISOR):
+            response = client.post(
+                "/api/v1/owner/people/invite",
+                json={
+                    "phone": identity.phone_number,
+                    "display_name": identity.display_name,
+                    "role": role.value,
+                },
+            )
+            assert response.status_code == 201, response.text
+            assert response.json()["status"] == MembershipStatus.ACTIVE.value
+            granted_ids[role] = response.json()["membership_id"]
+
+        listed = client.get("/api/v1/owner/people")
+        assert listed.status_code == 200
+        roles = {
+            item["role"]
+            for item in listed.json()
+            if item["user_id"] == str(identity.id) and item["status"] == "ACTIVE"
+        }
+        assert roles == {"OWNER_ADMIN", "DRIVER", "SUPERVISOR"}
+
+        pilot_settings = settings().model_copy(update={"otp_provider": "pilot"})
+        for role in MembershipRole:
+            provider = FakeOtpProvider()
+            auth = AuthService(db_session, pilot_settings, provider)
+            challenge = auth.request_otp(
+                phone=identity.phone_number,
+                requested_role=role,
+            )
+            pre_session, _ = auth.verify_otp(
+                challenge_id=challenge,
+                otp=provider.deliveries[challenge],
+            )
+            options = auth.list_memberships(pre_session_token=pre_session)
+            selected = next(item for item in options if item[3] == role)
+            tokens = auth.create_session(
+                pre_session_token=pre_session,
+                membership_id=selected[0],
+            )
+            assert tokens.context.membership.role == role
+
+        assert client.post(f"/api/v1/owner/people/{owner.id}/deactivate").status_code == 409
+        for role in (MembershipRole.DRIVER, MembershipRole.SUPERVISOR):
+            revoked = client.post(
+                f"/api/v1/owner/people/{granted_ids[role]}/deactivate"
+            )
+            assert revoked.status_code == 200
+            assert revoked.json()["status"] == MembershipStatus.INACTIVE.value
     finally:
         client.close()
 

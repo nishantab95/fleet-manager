@@ -151,6 +151,8 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
    Keep these rules scoped: Driver, Supervisor and test-lab surfaces share
    the original primitives above. */
 .owner-shell {
+  --owner-sidebar-compact: 64px;
+  --owner-sidebar-expanded: 224px;
   --owner-ink: #17211f;
   --owner-muted: #65716d;
   --owner-brand: #174c43;
@@ -340,24 +342,62 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 
 .owner-layout {
   display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
+  grid-template-columns: var(--owner-sidebar-compact) minmax(0, 1fr);
   align-items: start;
   min-height: calc(100vh - 82px);
+  transition: grid-template-columns 180ms ease;
 }
+
+.owner-layout[data-sidebar-pinned="true"] { grid-template-columns: var(--owner-sidebar-expanded) minmax(0, 1fr); }
 
 .owner-sidebar {
   position: sticky;
+  z-index: 20;
   top: 0;
   display: grid;
   align-content: start;
-  gap: 16px;
+  gap: 12px;
+  width: var(--owner-sidebar-compact);
   height: 100vh;
-  padding: 22px 13px;
+  padding: 12px 8px;
   overflow-y: auto;
+  overflow-x: hidden;
   border-right: 1px solid var(--owner-border);
   background: #e9eeeaeb;
   box-shadow: inset -1px 0 #ffffffa8;
+  transition: width 180ms ease, box-shadow 180ms ease;
 }
+
+.owner-sidebar:hover,
+.owner-sidebar:focus-within,
+.owner-layout[data-sidebar-pinned="true"] .owner-sidebar {
+  width: var(--owner-sidebar-expanded);
+  box-shadow: 10px 0 28px #173c3518, inset -1px 0 #ffffffa8;
+}
+
+.owner-sidebar-pin {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #66746f;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.owner-sidebar-pin:hover { border-color: var(--owner-border-strong); background: #f7f9f7; color: var(--owner-brand); }
+.owner-sidebar-pin svg { width: 20px; height: 20px; flex: 0 0 20px; }
+.owner-sidebar-pin span { opacity: 0; transition: opacity 100ms ease 45ms; }
+.owner-sidebar:hover .owner-sidebar-pin span,
+.owner-sidebar:focus-within .owner-sidebar-pin span,
+.owner-layout[data-sidebar-pinned="true"] .owner-sidebar-pin span { opacity: 1; }
 
 .owner-nav-group {
   display: grid;
@@ -366,21 +406,31 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 }
 
 .owner-nav-group h2 {
-  margin: 0 8px 4px;
+  height: 0;
+  margin: 0 8px;
+  overflow: hidden;
   color: #77827e;
   font-size: 0.64rem;
   font-weight: 850;
   letter-spacing: 0.12em;
+  opacity: 0;
   text-transform: uppercase;
+  white-space: nowrap;
+  transition: height 180ms ease, margin 180ms ease, opacity 100ms ease;
 }
+
+.owner-sidebar:hover .owner-nav-group h2,
+.owner-sidebar:focus-within .owner-nav-group h2,
+.owner-layout[data-sidebar-pinned="true"] .owner-nav-group h2 { height: 14px; margin-bottom: 4px; opacity: 1; }
 
 .owner-nav-item {
   position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
-  min-height: 35px;
-  padding: 7px 9px;
+  min-height: 40px;
+  padding: 8px 11px;
+  overflow: hidden;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -388,18 +438,27 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
   font-size: 0.82rem;
   font-weight: 750;
   text-align: left;
+  white-space: nowrap;
 }
 
 .owner-nav-item:hover { border-color: #cbd5cf; background: #f7f9f7; color: var(--owner-brand); }
 .owner-nav-item.is-active { border-color: #c4d4cc; background: #fff; color: var(--owner-brand); box-shadow: 0 4px 14px #173c3510; }
 
 .owner-nav-item__marker {
+  position: absolute;
+  left: 1px;
   width: 4px;
   height: 4px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: #9ba9a3;
 }
+
+.owner-nav-item__icon { width: 21px; height: 21px; flex: 0 0 21px; }
+.owner-nav-item__label { opacity: 0; transition: opacity 100ms ease 45ms; }
+.owner-sidebar:hover .owner-nav-item__label,
+.owner-sidebar:focus-within .owner-nav-item__label,
+.owner-layout[data-sidebar-pinned="true"] .owner-nav-item__label { opacity: 1; }
 
 .owner-nav-item.is-active .owner-nav-item__marker {
   width: 4px;
@@ -410,10 +469,10 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 
 .owner-content.content {
   width: 100%;
-  max-width: 1600px;
+  max-width: 1920px;
   min-width: 0;
   margin-inline: auto;
-  padding: clamp(20px, 2.6vw, 36px);
+  padding: clamp(16px, 1.7vw, 28px);
 }
 
 .owner-panel { display: grid; gap: 14px; min-width: 0; }
@@ -601,6 +660,11 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .owner-chip-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .owner-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: var(--owner-brand-soft); color: var(--owner-brand); font-size: 0.72rem; font-weight: 750; }
 .owner-chip button { min-height: 18px; padding: 0 2px; background: transparent; color: inherit; line-height: 1; }
+
+.owner-role-management { display: grid; gap: 8px; }
+.owner-role-management > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--owner-border); border-radius: 9px; background: var(--owner-surface); }
+.owner-role-management > div > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.owner-role-management small { color: var(--owner-muted); text-align: right; }
 
 .owner-inline-operation { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 6px; }
 .owner-inline-operation label { flex: 1 1 240px; }
@@ -892,7 +956,8 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
   .owner-command-metric { padding-inline: 8px; }
   .owner-command-metric span { font-size: 0.64rem; }
   .owner-role-nav { display: none; }
-  .owner-layout { grid-template-columns: 176px minmax(0, 1fr); }
+  .owner-layout,
+  .owner-layout[data-sidebar-pinned="true"] { grid-template-columns: var(--owner-sidebar-compact) minmax(0, 1fr); }
   .owner-sidebar { padding-inline: 10px; }
   .owner-content.content { padding: 22px; }
   .owner-shell .fleet-metrics { grid-template-columns: repeat(3, minmax(112px, 1fr)); }
@@ -921,10 +986,21 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
     border-bottom: 1px solid var(--owner-border);
     box-shadow: 0 5px 16px #173c3512;
   }
+  .owner-sidebar:hover,
+  .owner-sidebar:focus-within,
+  .owner-layout[data-sidebar-pinned="true"] .owner-sidebar { width: 100%; box-shadow: 0 5px 16px #173c3512; }
+  .owner-sidebar-pin { display: none; }
   .owner-nav-group { display: flex; flex: 0 0 auto; gap: 4px; }
   .owner-nav-group + .owner-nav-group { padding-left: 8px; border-left: 1px solid var(--owner-border-strong); }
-  .owner-nav-group h2 { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  .owner-nav-group h2,
+  .owner-sidebar:hover .owner-nav-group h2,
+  .owner-sidebar:focus-within .owner-nav-group h2,
+  .owner-layout[data-sidebar-pinned="true"] .owner-nav-group h2 { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
   .owner-nav-item { min-width: max-content; min-height: 34px; }
+  .owner-nav-item__label,
+  .owner-sidebar:hover .owner-nav-item__label,
+  .owner-sidebar:focus-within .owner-nav-item__label,
+  .owner-layout[data-sidebar-pinned="true"] .owner-nav-item__label { opacity: 1; }
   .owner-nav-item.is-active .owner-nav-item__marker { width: 7px; height: 7px; border-radius: 50%; }
   .owner-content.content { padding: 18px 16px 28px; }
   .owner-overview-heading,

@@ -61,9 +61,17 @@ for (const role of roles) {
         }
 
         if (role.name === "owner") {
-          const sidebar = await page.locator(".owner-sidebar").boundingBox();
-          expect(sidebar?.width).toBeGreaterThanOrEqual(190);
-          expect(sidebar?.width).toBeLessThanOrEqual(205);
+          const sidebar = page.locator(".owner-sidebar");
+          const compact = await sidebar.boundingBox();
+          expect(compact?.width).toBeGreaterThanOrEqual(56);
+          expect(compact?.width).toBeLessThanOrEqual(68);
+          await sidebar.hover();
+          await expect(sidebar).toHaveCSS("width", "224px");
+          await expect(page.getByRole("button", { name: "Fleet", exact: true })).toHaveAttribute("title", "Fleet");
+          await page.getByRole("button", { name: "Pin sidebar" }).click();
+          await page.mouse.move(viewport - 20, 400);
+          await expect(page.locator(".owner-layout")).toHaveAttribute("data-sidebar-pinned", "true");
+          await expect(sidebar).toHaveCSS("width", "224px");
           await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
           await expect(page.getByLabel("Live fleet readiness")).toBeVisible();
         }

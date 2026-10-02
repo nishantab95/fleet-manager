@@ -138,7 +138,7 @@ void main() {
   });
 
   testWidgets(
-    'machinery header omits missing registration and exposes three actions',
+    'machinery header omits missing registration and exposes duty plus three actions',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(800, 1000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -182,9 +182,10 @@ void main() {
       expect(find.text('HMR READING'), findsOneWidget);
       expect(find.text('DIESEL'), findsOneWidget);
       expect(find.text('EMERGENCY'), findsOneWidget);
+      expect(find.textContaining('START DUTY'), findsOneWidget);
       expect(find.text('TRIP COMPLETE'), findsNothing);
       expect(find.text('KM READING'), findsNothing);
-      expect(find.byType(FilledButton), findsNWidgets(3));
+      expect(find.byType(FilledButton), findsNWidgets(4));
       expect(
         tester
             .widget<FilledButton>(find.widgetWithText(FilledButton, 'DIESEL'))

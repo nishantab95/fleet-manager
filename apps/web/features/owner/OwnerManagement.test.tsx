@@ -53,6 +53,12 @@ const activeDriver: OwnerPerson = {
   status: "ACTIVE",
 };
 
+const activeOwner: OwnerPerson = {
+  ...activeDriver,
+  membership_id: "owner-active",
+  role: "OWNER_ADMIN",
+};
+
 const deployedMachine: OwnerAsset = {
   id: "asset-deployed",
   asset_code: "EXC-INTERNAL",
@@ -133,6 +139,8 @@ describe("Owner operations tables", () => {
 
     expect(screen.getByRole("table", { name: "Fleet assets" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /Short name/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Registration" }));
+    expect(screen.getByRole("columnheader", { name: /Registration/ })).toHaveAttribute("aria-sort", "ascending");
     expect(screen.getByText("Rental Co")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
@@ -152,6 +160,8 @@ describe("Owner operations tables", () => {
     render(<SitesPanel sites={[siteOne]} people={[]} {...props} />);
 
     expect(screen.getByRole("table", { name: "Sites" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Deployed assets" }));
+    expect(screen.getByRole("columnheader", { name: /Deployed assets/ })).toHaveAttribute("aria-sort", "ascending");
     expect(screen.getByText("Quarry")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add site" }));
     expect(screen.queryByLabelText(/Site code/i)).not.toBeInTheDocument();
@@ -175,6 +185,8 @@ describe("Owner operations tables", () => {
     expect(within(deploySelect).getByRole("option", { name: /Road grader/ })).toBeInTheDocument();
     expect(within(deploySelect).queryByRole("option", { name: /Big digger/ })).not.toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Current deployments" })).toHaveTextContent("Big digger");
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Deployment date" }));
+    expect(screen.getByRole("columnheader", { name: /Deployment date/ })).toHaveAttribute("aria-sort", "ascending");
 
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
     const destination = screen.getByLabelText("Move destination site");
@@ -195,6 +207,29 @@ describe("Owner operations tables", () => {
     expect(screen.getByText("Saved and assignable; first login/onboarding is not yet complete.")).toBeInTheDocument();
     expect(screen.getByText("Operator Invited")).toBeInTheDocument();
     expect(screen.getAllByText("INVITED").length).toBeGreaterThan(0);
+  });
+
+  it("groups one identity's memberships and grants another role through the normal Owner API", async () => {
+    const apiRequest = vi.fn().mockResolvedValue({});
+    const props = common(apiRequest);
+    render(<PeoplePanel people={[activeOwner, activeDriver]} assets={[]} {...props} />);
+
+    const table = screen.getByRole("table", { name: "People" });
+    expect(within(table).getAllByRole("row")).toHaveLength(2);
+    expect(within(table).getByText("Owner")).toBeInTheDocument();
+    expect(within(table).getByText("DRIVER")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Role(s)" }));
+    expect(screen.getByRole("columnheader", { name: /Role\(s\)/ })).toHaveAttribute("aria-sort", "ascending");
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage roles" }));
+    const dialog = screen.getByRole("dialog", { name: "Manage Operator Active" });
+    expect(within(dialog).getByText("Sole Owner protection is enforced by the server.")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Supervisor" }));
+
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("/api/v1/owner/people/invite", {
+      method: "POST",
+      body: JSON.stringify({ phone: activeDriver.phone, display_name: activeDriver.display_name, role: "SUPERVISOR" }),
+    }));
   });
 
   it("loads and assigns an INVITED Driver / Operator to a deployed rented machine", async () => {
@@ -223,6 +258,8 @@ describe("Owner operations tables", () => {
     render(<AssignmentsPanel assets={[assignedTipper]} people={[{ ...activeDriver, current_asset_id: assignedTipper.id, current_asset_code: assignedTipper.asset_code, current_site_id: "site-1", current_site_name: "Quarry", has_active_assignment: true }]} {...props} />);
 
     const table = screen.getByRole("table", { name: "Current assignments" });
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Phone" }));
+    expect(screen.getByRole("columnheader", { name: /Phone/ })).toHaveAttribute("aria-sort", "ascending");
     expect(table).toHaveTextContent("BENZ-1");
     expect(table).toHaveTextContent("+919100000002");
     expect(table).toHaveTextContent("10 hours");

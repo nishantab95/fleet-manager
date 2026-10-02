@@ -121,9 +121,6 @@ class OwnerPeopleSiteService:
             select(CompanyMembership).where(
                 CompanyMembership.id == membership_id,
                 CompanyMembership.company_id == self.company_id,
-                CompanyMembership.role.in_(
-                    (MembershipRole.DRIVER, MembershipRole.SUPERVISOR)
-                ),
             )
         )
         if membership is None:
@@ -217,9 +214,6 @@ class OwnerPeopleSiteService:
             .join(User, User.id == CompanyMembership.user_id)
             .where(
                 CompanyMembership.company_id == self.company_id,
-                CompanyMembership.role.in_(
-                    (MembershipRole.DRIVER, MembershipRole.SUPERVISOR)
-                ),
             )
             .order_by(
                 CompanyMembership.status,
@@ -254,20 +248,46 @@ class OwnerPeopleSiteService:
             self.session.flush()
         elif user.status != UserStatus.ACTIVE:
             raise ConflictError("phone belongs to an inactive identity")
-        duplicate = self.session.scalar(
+        existing_role = self.session.scalar(
+            select(CompanyMembership).where(
+                CompanyMembership.company_id == self.company_id,
+                CompanyMembership.user_id == user.id,
+                CompanyMembership.role == role,
+            )
+        )
+        if existing_role is not None:
+            if existing_role.status != MembershipStatus.INACTIVE:
+                raise ConflictError("person already has this role in the company")
+            old_status = existing_role.status
+            existing_role.status = MembershipStatus.ACTIVE
+            existing_role.display_name = clean_name
+            self.session.flush()
+            self._audit(
+                action="OWNER_PERSON_ROLE_REACTIVATED",
+                entity_type="COMPANY_MEMBERSHIP",
+                entity_id=existing_role.id,
+                old_values={"status": old_status.value},
+                new_values={"role": role.value, "status": MembershipStatus.ACTIVE.value},
+            )
+            return self._person_view(existing_role, user)
+        existing_company_membership = self.session.scalar(
             select(CompanyMembership.id).where(
                 CompanyMembership.company_id == self.company_id,
                 CompanyMembership.user_id == user.id,
+                CompanyMembership.status == MembershipStatus.ACTIVE,
             )
         )
-        if duplicate is not None:
-            raise ConflictError("person already belongs to this company")
+        membership_status = (
+            MembershipStatus.ACTIVE
+            if existing_company_membership is not None
+            else MembershipStatus.INVITED
+        )
         membership = CompanyMembership(
             company_id=self.company_id,
             user_id=user.id,
             display_name=clean_name,
             role=role,
-            status=MembershipStatus.INVITED,
+            status=membership_status,
         )
         self.session.add(membership)
         try:
@@ -275,7 +295,11 @@ class OwnerPeopleSiteService:
         except IntegrityError as exc:
             raise ConflictError("membership already exists") from exc
         self._audit(
-            action="OWNER_PERSON_INVITED",
+            action=(
+                "OWNER_PERSON_ROLE_GRANTED"
+                if membership_status == MembershipStatus.ACTIVE
+                else "OWNER_PERSON_INVITED"
+            ),
             entity_type="COMPANY_MEMBERSHIP",
             entity_id=membership.id,
             new_values={
@@ -283,7 +307,7 @@ class OwnerPeopleSiteService:
                 "phone": normalized_phone,
                 "display_name": clean_name,
                 "role": role.value,
-                "status": MembershipStatus.INVITED.value,
+                "status": membership_status.value,
             },
         )
         return self._person_view(membership, user)
@@ -332,6 +356,16 @@ class OwnerPeopleSiteService:
         view = self.get_person(membership_id)
         if view.membership.status == MembershipStatus.INACTIVE:
             return view
+        if view.membership.role == MembershipRole.OWNER_ADMIN:
+            active_owner_count = self.session.scalar(
+                select(func.count(CompanyMembership.id)).where(
+                    CompanyMembership.company_id == self.company_id,
+                    CompanyMembership.role == MembershipRole.OWNER_ADMIN,
+                    CompanyMembership.status == MembershipStatus.ACTIVE,
+                )
+            )
+            if int(active_owner_count or 0) <= 1:
+                raise ConflictError("the sole active Owner cannot be deactivated")
         if view.has_active_assignment or view.has_active_duty:
             raise ConflictError("person has an active assignment or duty session")
         if view.membership.role == MembershipRole.SUPERVISOR and view.sites:

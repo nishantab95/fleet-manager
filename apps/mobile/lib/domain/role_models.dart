@@ -19,18 +19,21 @@ class SupervisorSite {
   const SupervisorSite({
     required this.id,
     required this.name,
+    this.shortName,
     this.code,
     this.status = 'ACTIVE',
   });
 
   final String id;
   final String name;
+  final String? shortName;
   final String? code;
   final String status;
 
   factory SupervisorSite.fromJson(Map<String, dynamic> json) => SupervisorSite(
     id: '${json['id']}',
     name: '${json['name'] ?? 'Site'}',
+    shortName: json['short_name'] as String?,
     code: json['code'] as String?,
     status: '${json['status'] ?? 'ACTIVE'}',
   );
@@ -81,6 +84,7 @@ class SupervisorEvent {
     this.emergencyStatus,
     this.emergencyDescription,
     this.history = const [],
+    this.assetShortName,
   });
 
   final String id;
@@ -90,6 +94,7 @@ class SupervisorEvent {
   final String driverName;
   final String? driverPhone;
   final String? assetCode;
+  final String? assetShortName;
   final String assetType;
   final String tipperRegistration;
   final String siteId;
@@ -110,7 +115,8 @@ class SupervisorEvent {
   bool get isKm => eventType == 'KM_READING';
   bool get isHmr => eventType == 'HMR_READING';
   bool get isDiesel => eventType == 'DIESEL';
-  bool get isOpenEmergency => isEmergency && emergencyStatus == 'OPEN';
+  bool get isOpenEmergency =>
+      isEmergency && emergencyStatus != null && emergencyStatus != 'RESOLVED';
   bool get isPending => verificationStatus == 'PENDING_VERIFICATION';
   bool get needsSupervisorReview => isPending && !isEmergency;
 
@@ -125,6 +131,7 @@ class SupervisorEvent {
       driverName: '${json['driver_name'] ?? 'Driver'}',
       driverPhone: json['driver_phone'] as String?,
       assetCode: json['asset_code'] as String?,
+      assetShortName: json['asset_short_name'] as String?,
       assetType: '${json['asset_type'] ?? 'TIPPER'}',
       tipperRegistration: '${json['tipper_registration_number'] ?? ''}',
       siteId: '${json['site_id']}',
