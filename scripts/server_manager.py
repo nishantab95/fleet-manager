@@ -17,10 +17,18 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
+from sqlalchemy.pool import NullPool
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +54,8 @@ API_READY_URL = "http://127.0.0.1:8000/ready"
 DOCKER_TIMEOUT_SECONDS = 120
 INFRA_TIMEOUT_SECONDS = 90
 API_TIMEOUT_SECONDS = 60
+DATABASE_CONNECT_TIMEOUT_SECONDS = 2
+DATABASE_REVISION_TIMEOUT_SECONDS = 5
 RUNTIME_DIR = ROOT / ".runtime" / "server"
 LOG_DIR = ROOT / ".runtime" / "logs"
 STATE_FILE = RUNTIME_DIR / "api.json"
@@ -65,10 +75,49 @@ PILOT_APK_NAME = "FleetManager-Pilot-latest.apk"
 PILOT_SHA256_NAME = "sha256.txt"
 PILOT_VERSION_NAME = "version.txt"
 LOCAL_STATUS_KEYS = ("docker", "postgres", "evidence", "api", "health", "ready")
+DEPLOYMENT_SOURCE_PATHS = (
+    API_PROJECT / "src",
+    API_PROJECT / "migrations",
+    API_PROJECT / "pyproject.toml",
+    API_PROJECT / "uv.lock",
+)
 
 
 class ServerError(RuntimeError):
     """Expected server-control failure with an operator-safe message."""
+
+
+@dataclass(frozen=True)
+class DeploymentState:
+    """Read-only assessment of the state required for a current deployment."""
+
+    dependencies_current: bool
+    database_current: bool
+    database_revisions: tuple[str, ...]
+    repository_heads: tuple[str, ...]
+    api_running: bool
+    api_stale: bool
+    health_ok: bool
+    ready_ok: bool
+    remote_current: bool
+
+    @property
+    def api_current(self) -> bool:
+        return (
+            self.api_running
+            and not self.api_stale
+            and self.health_ok
+            and self.ready_ok
+        )
+
+    @property
+    def current(self) -> bool:
+        return (
+            self.dependencies_current
+            and self.database_current
+            and self.api_current
+            and self.remote_current
+        )
 
 
 def run_capture(
@@ -156,6 +205,9 @@ def load_server_environment() -> dict[str, str]:
     effective = dict(os.environ)
     for key, value in values.items():
         effective.setdefault(key, value)
+    # Alembic intentionally honors FLEET_TEST_DATABASE_URL for the test suite.
+    # The server controller must always target the same FLEET_DATABASE_URL as FastAPI.
+    effective.pop("FLEET_TEST_DATABASE_URL", None)
     return effective
 
 
@@ -293,6 +345,10 @@ def read_state() -> dict[str, Any]:
 
 def save_state(pid: int, command: Sequence[str]) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        repository_head = git_output("rev-parse", "HEAD")
+    except ServerError:
+        repository_head = ""
     STATE_FILE.write_text(
         json.dumps(
             {
@@ -301,6 +357,7 @@ def save_state(pid: int, command: Sequence[str]) -> None:
                 "cwd": str(ROOT),
                 "owned": True,
                 "started_at": datetime.now(UTC).isoformat(),
+                "repository_head": repository_head,
             },
             indent=2,
         )
@@ -1122,12 +1179,7 @@ def safe_backup_manifest(
     env: Mapping[str, str],
 ) -> dict[str, Any]:
     head = checked(["git", "rev-parse", "HEAD"], label="Git revision check").stdout.strip()
-    current = checked(
-        [str(PROJECT_PYTHON), "-m", "alembic", "current"],
-        label="Alembic revision check",
-        cwd=API_PROJECT,
-        env=env,
-    ).stdout.strip()
+    current = ", ".join(_database_alembic_revisions(env))
     containers: dict[str, str] = {}
     for service in ("postgres",):
         result = run_capture(
@@ -1267,29 +1319,204 @@ def _backup_manifests() -> set[Path]:
     return set(releases.glob("*/server-backup-manifest.json"))
 
 
-def _sync_locked_dependencies() -> None:
+def _uv_sync_arguments(*, check: bool = False) -> list[str]:
     uv = find_uv()
     if not uv:
-        raise ServerError("uv is required for locked dependency synchronization.")
+        operation = "verification" if check else "synchronization"
+        raise ServerError(f"uv is required for locked dependency {operation}.")
+    arguments = [
+        uv,
+        "--cache-dir",
+        str(ROOT / ".uv-cache"),
+        "sync",
+        "--project",
+        str(API_PROJECT),
+        "--python",
+        str(PROJECT_PYTHON),
+        "--locked",
+        "--all-groups",
+    ]
+    if check:
+        arguments.extend(("--check", "--offline"))
+    return arguments
+
+
+def _locked_dependencies_current() -> bool:
+    sync_env = dict(os.environ)
+    sync_env["UV_PYTHON_DOWNLOADS"] = "never"
+    result = run_capture(
+        _uv_sync_arguments(check=True),
+        env=sync_env,
+        timeout=120,
+    )
+    return result.returncode == 0
+
+
+def _sync_locked_dependencies() -> None:
     sync_env = dict(os.environ)
     sync_env["UV_PYTHON_DOWNLOADS"] = "never"
     checked(
-        [
-            uv,
-            "--cache-dir",
-            str(ROOT / ".uv-cache"),
-            "sync",
-            "--project",
-            str(API_PROJECT),
-            "--python",
-            str(PROJECT_PYTHON),
-            "--locked",
-            "--all-groups",
-        ],
+        _uv_sync_arguments(),
         label="Locked Python dependency synchronization",
         env=sync_env,
         timeout=600,
     )
+
+
+def _repository_alembic_heads() -> tuple[str, ...]:
+    config = Config(str(API_PROJECT / "alembic.ini"))
+    config.set_main_option("script_location", str(API_PROJECT / "migrations"))
+    return tuple(sorted(ScriptDirectory.from_config(config).get_heads()))
+
+
+def _database_revision_timed_out(error: BaseException) -> bool:
+    original = error.orig if isinstance(error, DBAPIError) else error
+    sqlstate = getattr(original, "sqlstate", None)
+    detail = str(original).casefold()
+    return sqlstate in {"55P03", "57014"} or "timed out" in detail or "timeout" in detail
+
+
+def _database_alembic_revisions(env: Mapping[str, str]) -> tuple[str, ...]:
+    database_url = env.get("FLEET_DATABASE_URL", "").strip()
+    if not database_url:
+        raise ServerError("Database revision check has no configured database URL.")
+    engine: Engine | None = None
+    try:
+        engine = create_engine(
+            database_url,
+            poolclass=NullPool,
+            connect_args={
+                "connect_timeout": DATABASE_CONNECT_TIMEOUT_SECONDS,
+                "options": (
+                    f"-c statement_timeout={DATABASE_REVISION_TIMEOUT_SECONDS * 1000} "
+                    f"-c lock_timeout={DATABASE_REVISION_TIMEOUT_SECONDS * 1000}"
+                ),
+            },
+        )
+        with engine.connect() as connection:
+            revisions = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalars().all()
+    except OperationalError as error:
+        if _database_revision_timed_out(error):
+            if error.statement:
+                raise ServerError(
+                    "Database revision query timed out or was blocked by a database lock."
+                ) from error
+            raise ServerError(
+                "Database revision check timed out while connecting to PostgreSQL."
+            ) from error
+        raise ServerError(
+            "Database revision check could not connect to configured PostgreSQL."
+        ) from error
+    except DBAPIError as error:
+        if _database_revision_timed_out(error):
+            raise ServerError(
+                "Database revision query timed out or was blocked by a database lock."
+            ) from error
+        raise ServerError("Database revision query failed.") from error
+    except SQLAlchemyError as error:
+        raise ServerError("Database revision query failed.") from error
+    finally:
+        if engine is not None:
+            engine.dispose()
+    if len(revisions) != 1:
+        raise ServerError("Database alembic_version must contain exactly one revision row.")
+    revision = revisions[0]
+    if not isinstance(revision, str) or not revision.strip():
+        raise ServerError("Database alembic_version contains an invalid revision value.")
+    return (revision.strip(),)
+
+
+def _latest_deployment_source_mtime() -> float:
+    latest = 0.0
+    for path in DEPLOYMENT_SOURCE_PATHS:
+        candidates = path.rglob("*.py") if path.is_dir() else (path,)
+        for candidate in candidates:
+            try:
+                latest = max(latest, candidate.stat().st_mtime)
+            except OSError:
+                continue
+    return latest
+
+
+def _api_process_is_stale(state: Mapping[str, Any], current_commit: str) -> bool:
+    recorded_commit = state.get("repository_head")
+    if isinstance(recorded_commit, str) and recorded_commit:
+        return recorded_commit != current_commit
+    started_at = state.get("started_at")
+    if not isinstance(started_at, str):
+        return True
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return True
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return _latest_deployment_source_mtime() > started.timestamp()
+
+
+def _deployment_state(current_commit: str) -> DeploymentState:
+    env = load_server_environment()
+    repository_heads = _repository_alembic_heads()
+    if len(repository_heads) != 1:
+        raise ServerError("Repository must have exactly one Alembic head.")
+    database_revisions = _database_alembic_revisions(env)
+    state, info = recorded_api()
+    api_running = is_owned_listener(state, info)
+    remote = remote_access_status()
+    return DeploymentState(
+        dependencies_current=_locked_dependencies_current(),
+        database_current=database_revisions == repository_heads,
+        database_revisions=database_revisions,
+        repository_heads=repository_heads,
+        api_running=api_running,
+        api_stale=api_running and _api_process_is_stale(state, current_commit),
+        health_ok=api_health_ok(),
+        ready_ok=api_ready_ok(),
+        remote_current=(
+            remote.get("tailscale") != "ONLINE" or remote.get("remote") == "ONLINE"
+        ),
+    )
+
+
+def _format_revisions(revisions: tuple[str, ...]) -> str:
+    return ", ".join(revisions) if revisions else "NONE"
+
+
+def _print_deployment_state(source_current: bool, state: DeploymentState) -> None:
+    print("\nFLEET MANAGER SERVER UPDATE\n")
+    print(f"SOURCE          {'CURRENT' if source_current else 'UPDATE REQUIRED'}")
+    print(
+        "DEPENDENCIES    "
+        + ("CURRENT" if state.dependencies_current else "SYNCHRONIZATION REQUIRED")
+    )
+    if state.database_current:
+        print("DATABASE        CURRENT")
+    else:
+        print("DATABASE        MIGRATION REQUIRED")
+        print(f"DATABASE REV    {_format_revisions(state.database_revisions)}")
+        print(f"REPOSITORY HEAD {_format_revisions(state.repository_heads)}")
+    if state.api_current:
+        print("API             CURRENT")
+    elif state.api_stale:
+        print("API             STALE PROCESS - RESTART REQUIRED")
+    elif not state.api_running:
+        print("API             STOPPED OR UNMANAGED - RECOVERY REQUIRED")
+    else:
+        print("API             UNHEALTHY - RESTART REQUIRED")
+    print(f"/health         {'CURRENT' if state.health_ok else 'FAILED'}")
+    print(f"/ready          {'CURRENT' if state.ready_ok else 'FAILED'}")
+    print(f"REMOTE STATUS   {'CURRENT' if state.remote_current else 'REVALIDATION REQUIRED'}")
+
+
+def _require_verified_backup() -> Path:
+    before_backups = _backup_manifests()
+    backup_server()
+    created_backups = _backup_manifests() - before_backups
+    if len(created_backups) != 1:
+        raise ServerError("Update refused: the pre-update backup location was not unambiguous.")
+    return created_backups.pop()
 
 
 def _print_update_failure(
@@ -1315,44 +1542,50 @@ def update_server() -> int:
     old_commit = git_output("rev-parse", "HEAD")
     git_output("fetch", "origin", timeout=300)
     target_commit = git_output("rev-parse", "origin/main")
-    if old_commit == target_commit:
-        print("\nFLEET MANAGER SERVER UPDATE\n")
-        print("ALREADY UP TO DATE")
+    source_current = old_commit == target_commit
+    if not source_current:
+        ancestor = run_capture(
+            ["git", "merge-base", "--is-ancestor", old_commit, target_commit],
+            timeout=30,
+        )
+        if ancestor.returncode != 0:
+            raise ServerError(
+                "Update refused: origin/main cannot be applied as a fast-forward. "
+                "No backup, stop, pull, or migration was performed."
+            )
+
+    state = _deployment_state(old_commit)
+    _print_deployment_state(source_current, state)
+    if source_current and state.current:
+        print("\nALREADY UP TO DATE")
         print(f"CURRENT COMMIT  {old_commit}")
         return 0
 
-    ancestor = run_capture(
-        ["git", "merge-base", "--is-ancestor", old_commit, target_commit],
-        timeout=30,
-    )
-    if ancestor.returncode != 0:
-        raise ServerError(
-            "Update refused: origin/main cannot be applied as a fast-forward. "
-            "No backup, stop, pull, or migration was performed."
-        )
-
-    before_backups = _backup_manifests()
-    backup_server()
-    created_backups = _backup_manifests() - before_backups
-    if len(created_backups) != 1:
-        raise ServerError("Update refused: the pre-update backup location was not unambiguous.")
-    backup = created_backups.pop()
+    backup = _require_verified_backup()
     new_commit = old_commit
     try:
         stop_api()
-        git_output("pull", "--ff-only", "origin", "main", timeout=300)
-        new_commit = git_output("rev-parse", "HEAD")
-        if new_commit != target_commit:
-            raise ServerError("git pull completed at an unexpected commit.")
-        _sync_locked_dependencies()
+        if not source_current:
+            git_output("pull", "--ff-only", "origin", "main", timeout=300)
+            new_commit = git_output("rev-parse", "HEAD")
+            if new_commit != target_commit:
+                raise ServerError("git pull completed at an unexpected commit.")
+        if not _locked_dependencies_current():
+            _sync_locked_dependencies()
         env = load_server_environment()
-        checked(
-            [str(PROJECT_PYTHON), "-m", "alembic", "upgrade", "head"],
-            label="Alembic upgrade",
-            cwd=API_PROJECT,
-            env=env,
-            timeout=300,
-        )
+        repository_heads = _repository_alembic_heads()
+        if len(repository_heads) != 1:
+            raise ServerError("Repository must have exactly one Alembic head.")
+        database_revisions = _database_alembic_revisions(env)
+        if database_revisions != repository_heads:
+            print("DATABASE MIGRATION REQUIRED")
+            checked(
+                [str(PROJECT_PYTHON), "-m", "alembic", "upgrade", "head"],
+                label="Alembic upgrade",
+                cwd=API_PROJECT,
+                env=env,
+                timeout=300,
+            )
         start = checked(
             [str(PROJECT_PYTHON), str(Path(__file__).resolve()), "start"],
             label="Fleet Manager restart",
@@ -1360,11 +1593,10 @@ def update_server() -> int:
         )
         if start.stdout:
             print(start.stdout.rstrip())
-        if not api_health_ok() or not api_ready_ok():
-            raise ServerError("Updated API failed its local health or readiness check.")
-        remote = remote_access_status()
-        if remote["tailscale"] == "ONLINE" and remote["remote"] != "ONLINE":
-            raise ServerError("Updated API failed its private Tailscale health check.")
+        verified = _deployment_state(new_commit)
+        if not verified.current:
+            _print_deployment_state(True, verified)
+            raise ServerError("Updated deployment failed final state verification.")
     except ServerError as error:
         try:
             new_commit = git_output("rev-parse", "HEAD")
@@ -1373,7 +1605,7 @@ def update_server() -> int:
         _print_update_failure(error, old_commit, new_commit, backup)
         return 1
 
-    print("\nFLEET MANAGER SERVER UPDATE\n")
+    _print_deployment_state(True, verified)
     print("UPDATE COMPLETE")
     print(f"OLD COMMIT      {old_commit}")
     print(f"NEW COMMIT      {new_commit}")

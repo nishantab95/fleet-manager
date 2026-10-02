@@ -453,6 +453,227 @@ def test_publish_rejects_missing_version_metadata_before_copy(
     assert not (release / server_manager.PILOT_APK_NAME).exists()
 
 
+def deployment_state(
+    *,
+    dependencies_current: bool = True,
+    database_current: bool = True,
+    database_revisions: tuple[str, ...] = ("0017_internal_ids",),
+    repository_heads: tuple[str, ...] = ("0017_internal_ids",),
+    api_running: bool = True,
+    api_stale: bool = False,
+    health_ok: bool = True,
+    ready_ok: bool = True,
+    remote_current: bool = True,
+) -> server_manager.DeploymentState:
+    return server_manager.DeploymentState(
+        dependencies_current=dependencies_current,
+        database_current=database_current,
+        database_revisions=database_revisions,
+        repository_heads=repository_heads,
+        api_running=api_running,
+        api_stale=api_stale,
+        health_ok=health_ok,
+        ready_ok=ready_ok,
+        remote_current=remote_current,
+    )
+
+
+def mock_database_revision_rows(
+    monkeypatch: pytest.MonkeyPatch, rows: list[object]
+) -> None:
+    class Result:
+        def scalars(self) -> Result:
+            return self
+
+        def all(self) -> list[object]:
+            return rows
+
+    class Connection:
+        def __enter__(self) -> Connection:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def execute(self, _: object) -> Result:
+            return Result()
+
+    class Engine:
+        def connect(self) -> Connection:
+            return Connection()
+
+        def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(server_manager, "create_engine", lambda *_, **__: Engine())
+
+
+def test_database_revision_current_returns_single_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_database_revision_rows(monkeypatch, ["0017_internal_ids"])
+
+    assert server_manager._database_alembic_revisions(
+        {"FLEET_DATABASE_URL": "postgresql+psycopg://example.invalid/fleet"}
+    ) == ("0017_internal_ids",)
+
+
+def test_database_revision_wrong_value_requires_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_database_revision_rows(monkeypatch, ["0016_report_templates"])
+
+    revisions = server_manager._database_alembic_revisions(
+        {"FLEET_DATABASE_URL": "postgresql+psycopg://example.invalid/fleet"}
+    )
+
+    assert revisions != ("0017_internal_ids",)
+
+
+@pytest.mark.parametrize("rows", [[], ["0016_report_templates", "0017_internal_ids"]])
+def test_database_revision_refuses_missing_or_multiple_rows(
+    monkeypatch: pytest.MonkeyPatch, rows: list[object]
+) -> None:
+    mock_database_revision_rows(monkeypatch, rows)
+
+    with pytest.raises(server_manager.ServerError, match="exactly one revision row"):
+        server_manager._database_alembic_revisions(
+            {"FLEET_DATABASE_URL": "postgresql+psycopg://example.invalid/fleet"}
+        )
+
+
+@pytest.mark.parametrize("value", ["", "   ", None, 17])
+def test_database_revision_refuses_malformed_value(
+    monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    mock_database_revision_rows(monkeypatch, [value])
+
+    with pytest.raises(server_manager.ServerError, match="invalid revision value"):
+        server_manager._database_alembic_revisions(
+            {"FLEET_DATABASE_URL": "postgresql+psycopg://example.invalid/fleet"}
+        )
+
+
+def test_database_revision_timeout_is_distinct_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timed_out(*_: object, **__: object) -> None:
+        raise server_manager.OperationalError(
+            None, {}, TimeoutError("connection timed out")
+        )
+
+    monkeypatch.setattr(server_manager, "create_engine", timed_out)
+
+    with pytest.raises(server_manager.ServerError, match="timed out while connecting"):
+        server_manager._database_alembic_revisions(
+            {"FLEET_DATABASE_URL": "postgresql+psycopg://example.invalid/fleet"}
+        )
+
+
+def test_database_revision_unreachable_is_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unreachable(*_: object, **__: object) -> None:
+        raise server_manager.OperationalError(
+            None, {}, ConnectionRefusedError("connection refused")
+        )
+
+    monkeypatch.setattr(server_manager, "create_engine", unreachable)
+
+    with pytest.raises(server_manager.ServerError, match="could not connect"):
+        server_manager._database_alembic_revisions(
+            {"FLEET_DATABASE_URL": "postgresql+psycopg://example.invalid/fleet"}
+        )
+
+
+def test_server_environment_removes_test_database_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "FLEET_ENVIRONMENT=pilot",
+                "FLEET_DATABASE_URL=postgresql+psycopg://server.invalid/fleet",
+                "FLEET_JWT_SIGNING_KEY=test-signing-key",
+                "FLEET_OBJECT_STORAGE_PROVIDER=filesystem",
+                f"FLEET_FILESYSTEM_STORAGE_ROOT={tmp_path / 'evidence'}",
+                "POSTGRES_DB=fleet",
+                "POSTGRES_USER=fleet",
+                "POSTGRES_PASSWORD=test-password",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_manager, "ENV_FILE", env_file)
+    monkeypatch.delenv("FLEET_DATABASE_URL", raising=False)
+    monkeypatch.setenv(
+        "FLEET_TEST_DATABASE_URL", "postgresql+psycopg://test.invalid/fleet_test"
+    )
+
+    environment = server_manager.load_server_environment()
+
+    assert environment["FLEET_DATABASE_URL"].endswith("server.invalid/fleet")
+    assert "FLEET_TEST_DATABASE_URL" not in environment
+
+
+def mock_current_git(monkeypatch: pytest.MonkeyPatch, current: str) -> None:
+    def git_output(*args: str, **_: object) -> str:
+        values = {
+            ("status", "--porcelain", "--untracked-files=normal"): "",
+            ("branch", "--show-current"): "main",
+            ("remote", "get-url", "origin"): "https://example.invalid/fleet.git",
+            ("rev-parse", "HEAD"): current,
+            ("fetch", "origin"): "",
+            ("rev-parse", "origin/main"): current,
+        }
+        return values[args]
+
+    monkeypatch.setattr(server_manager, "git_output", git_output)
+
+
+def configure_current_repair(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    before: server_manager.DeploymentState,
+    events: list[str],
+    backup: Path,
+    database_revisions: tuple[str, ...] = ("0017_internal_ids",),
+) -> None:
+    states = iter((before, deployment_state()))
+
+    def create_backup() -> Path:
+        events.append("backup")
+        return backup
+
+    def stop_api() -> int:
+        events.append("stop")
+        return 0
+
+    monkeypatch.setattr(server_manager, "_deployment_state", lambda _: next(states))
+    monkeypatch.setattr(server_manager, "_require_verified_backup", create_backup)
+    monkeypatch.setattr(server_manager, "stop_api", stop_api)
+    monkeypatch.setattr(server_manager, "_locked_dependencies_current", lambda: True)
+    monkeypatch.setattr(server_manager, "load_server_environment", lambda: {})
+    monkeypatch.setattr(
+        server_manager,
+        "_repository_alembic_heads",
+        lambda: ("0017_internal_ids",),
+    )
+    monkeypatch.setattr(
+        server_manager,
+        "_database_alembic_revisions",
+        lambda _: database_revisions,
+    )
+
+    def checked(args: list[str], *, label: str, **_: object) -> subprocess.CompletedProcess[str]:
+        del args
+        events.append("start" if label == "Fleet Manager restart" else "migrate")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(server_manager, "checked", checked)
+
+
 def test_update_already_current_exits_before_backup(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -470,6 +691,7 @@ def test_update_already_current_exits_before_backup(
         return values[args]
 
     monkeypatch.setattr(server_manager, "git_output", git_output)
+    monkeypatch.setattr(server_manager, "_deployment_state", lambda _: deployment_state())
     monkeypatch.setattr(
         server_manager,
         "backup_server",
@@ -479,7 +701,172 @@ def test_update_already_current_exits_before_backup(
     assert server_manager.update_server() == 0
     output = capsys.readouterr().out
     assert "ALREADY UP TO DATE" in output
+    assert "SOURCE          CURRENT" in output
+    assert "DATABASE        CURRENT" in output
+    assert "API             CURRENT" in output
     assert current in output
+
+
+def test_update_unknown_database_revision_never_reports_current(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    current = "a" * 40
+    mock_current_git(monkeypatch, current)
+    monkeypatch.setattr(
+        server_manager,
+        "_deployment_state",
+        lambda _: (_ for _ in ()).throw(
+            server_manager.ServerError("Database revision check timed out")
+        ),
+    )
+    monkeypatch.setattr(
+        server_manager,
+        "backup_server",
+        lambda: pytest.fail("unknown revision must fail before backup"),
+    )
+
+    with pytest.raises(server_manager.ServerError, match="revision check timed out"):
+        server_manager.update_server()
+
+    assert "ALREADY UP TO DATE" not in capsys.readouterr().out
+
+
+def test_update_git_current_database_behind_migrates_without_pull(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    current = "a" * 40
+    backup = Path(r"F:\FleetManagerBackups\releases\test\server-backup-manifest.json")
+    events: list[str] = []
+    mock_current_git(monkeypatch, current)
+    configure_current_repair(
+        monkeypatch,
+        before=deployment_state(
+            database_current=False,
+            database_revisions=("0016_report_templates",),
+        ),
+        events=events,
+        backup=backup,
+        database_revisions=("0016_report_templates",),
+    )
+
+    assert server_manager.update_server() == 0
+    assert events == ["backup", "stop", "migrate", "start"]
+    output = capsys.readouterr().out
+    assert "SOURCE          CURRENT" in output
+    assert "DATABASE        MIGRATION REQUIRED" in output
+    assert "UPDATE COMPLETE" in output
+
+
+def test_update_git_current_stale_api_restarts_without_migration(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    current = "a" * 40
+    backup = Path(r"F:\FleetManagerBackups\releases\test\server-backup-manifest.json")
+    events: list[str] = []
+    mock_current_git(monkeypatch, current)
+    configure_current_repair(
+        monkeypatch,
+        before=deployment_state(api_stale=True),
+        events=events,
+        backup=backup,
+    )
+
+    assert server_manager.update_server() == 0
+    assert events == ["backup", "stop", "start"]
+    assert "STALE PROCESS - RESTART REQUIRED" in capsys.readouterr().out
+
+
+def test_update_git_current_stopped_api_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = "a" * 40
+    backup = Path(r"F:\FleetManagerBackups\releases\test\server-backup-manifest.json")
+    events: list[str] = []
+    mock_current_git(monkeypatch, current)
+    configure_current_repair(
+        monkeypatch,
+        before=deployment_state(api_running=False, health_ok=False, ready_ok=False),
+        events=events,
+        backup=backup,
+    )
+
+    assert server_manager.update_server() == 0
+    assert events == ["backup", "stop", "start"]
+
+
+def test_update_git_current_unhealthy_api_restarts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = "a" * 40
+    backup = Path(r"F:\FleetManagerBackups\releases\test\server-backup-manifest.json")
+    events: list[str] = []
+    mock_current_git(monkeypatch, current)
+    configure_current_repair(
+        monkeypatch,
+        before=deployment_state(health_ok=False, ready_ok=False),
+        events=events,
+        backup=backup,
+    )
+
+    assert server_manager.update_server() == 0
+    assert events == ["backup", "stop", "start"]
+
+
+def test_update_syncs_only_when_locked_environment_is_outdated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = "a" * 40
+    backup = Path(r"F:\FleetManagerBackups\releases\test\server-backup-manifest.json")
+    events: list[str] = []
+    mock_current_git(monkeypatch, current)
+    configure_current_repair(
+        monkeypatch,
+        before=deployment_state(dependencies_current=False),
+        events=events,
+        backup=backup,
+    )
+    monkeypatch.setattr(server_manager, "_locked_dependencies_current", lambda: False)
+    monkeypatch.setattr(
+        server_manager,
+        "_sync_locked_dependencies",
+        lambda: events.append("sync"),
+    )
+
+    assert server_manager.update_server() == 0
+    assert events == ["backup", "stop", "sync", "start"]
+
+
+def test_update_refuses_dirty_worktree_before_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        server_manager,
+        "git_output",
+        lambda *args, **_: " M scripts/server_manager.py"
+        if args == ("status", "--porcelain", "--untracked-files=normal")
+        else pytest.fail(f"unexpected Git call: {args}"),
+    )
+    monkeypatch.setattr(
+        server_manager,
+        "backup_server",
+        lambda: pytest.fail("dirty-tree update must not create a backup"),
+    )
+
+    with pytest.raises(server_manager.ServerError, match="working tree is not clean"):
+        server_manager.update_server()
+
+
+def test_api_staleness_uses_recorded_commit_and_legacy_start_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = "b" * 40
+    assert server_manager._api_process_is_stale({"repository_head": "a" * 40}, current)
+    assert not server_manager._api_process_is_stale({"repository_head": current}, current)
+
+    monkeypatch.setattr(server_manager, "_latest_deployment_source_mtime", lambda: 20.0)
+    assert server_manager._api_process_is_stale(
+        {"started_at": "1970-01-01T00:00:10+00:00"}, current
+    )
 
 
 def test_update_refuses_non_fast_forward_before_backup(
@@ -515,7 +902,7 @@ def test_update_refuses_non_fast_forward_before_backup(
         server_manager.update_server()
 
 
-def test_update_fast_forward_runs_backup_stop_pull_sync_migrate_start(
+def test_update_git_behind_runs_backup_pull_migrate_and_restart(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     old = "a" * 40
@@ -544,7 +931,15 @@ def test_update_fast_forward_runs_backup_stop_pull_sync_migrate_start(
             return ""
         raise AssertionError(f"unexpected git call: {args}")
 
-    manifest_calls = iter((set(), {backup}))
+    states = iter(
+        (
+            deployment_state(
+                database_revisions=("0016_report_templates",),
+                repository_heads=("0016_report_templates",),
+            ),
+            deployment_state(),
+        )
+    )
 
     def checked(args: list[str], *, label: str, **_: object) -> subprocess.CompletedProcess[str]:
         del args
@@ -557,28 +952,41 @@ def test_update_fast_forward_runs_backup_stop_pull_sync_migrate_start(
         "run_capture",
         lambda args, **_: subprocess.CompletedProcess(args, 0, "", ""),
     )
-    monkeypatch.setattr(server_manager, "_backup_manifests", lambda: next(manifest_calls))
     monkeypatch.setattr(
-        server_manager, "backup_server", lambda: events.append("backup") or 0
+        server_manager,
+        "_deployment_state",
+        lambda _: next(states),
     )
-    monkeypatch.setattr(server_manager, "stop_api", lambda: events.append("stop") or 0)
+    def create_backup() -> Path:
+        events.append("backup")
+        return backup
+
+    def stop_api() -> int:
+        events.append("stop")
+        return 0
+
+    monkeypatch.setattr(server_manager, "_require_verified_backup", create_backup)
+    monkeypatch.setattr(server_manager, "stop_api", stop_api)
     monkeypatch.setattr(server_manager, "load_server_environment", lambda: {})
     monkeypatch.setattr(
         server_manager,
-        "_sync_locked_dependencies",
-        lambda: events.append("sync"),
+        "_locked_dependencies_current",
+        lambda: True,
     )
-    monkeypatch.setattr(server_manager, "checked", checked)
-    monkeypatch.setattr(server_manager, "api_health_ok", lambda: True)
-    monkeypatch.setattr(server_manager, "api_ready_ok", lambda: True)
     monkeypatch.setattr(
         server_manager,
-        "remote_access_status",
-        lambda: {"tailscale": "ONLINE", "remote": "ONLINE"},
+        "_repository_alembic_heads",
+        lambda: ("0017_internal_ids",),
     )
+    monkeypatch.setattr(
+        server_manager,
+        "_database_alembic_revisions",
+        lambda _: ("0016_report_templates",),
+    )
+    monkeypatch.setattr(server_manager, "checked", checked)
 
     assert server_manager.update_server() == 0
-    assert events == ["backup", "stop", "pull", "sync", "migrate", "start"]
+    assert events == ["backup", "stop", "pull", "migrate", "start"]
     output = capsys.readouterr().out
     assert "UPDATE COMPLETE" in output
     assert old in output
@@ -586,31 +994,23 @@ def test_update_fast_forward_runs_backup_stop_pull_sync_migrate_start(
     assert str(backup) in output
 
 
-def test_update_failure_reports_commits_and_keeps_backup(
+def test_update_migration_failure_reports_and_keeps_backup(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     old = "a" * 40
-    target = "b" * 40
+    target = old
     backup = Path(r"F:\FleetManagerBackups\releases\test\server-backup-manifest.json")
-    head = old
 
     def git_output(*args: str, **_: object) -> str:
-        nonlocal head
         values = {
             ("status", "--porcelain", "--untracked-files=normal"): "",
             ("branch", "--show-current"): "main",
             ("remote", "get-url", "origin"): "https://example.invalid/fleet.git",
             ("fetch", "origin"): "",
             ("rev-parse", "origin/main"): target,
+            ("rev-parse", "HEAD"): old,
         }
-        if args == ("rev-parse", "HEAD"):
-            return head
-        if args == ("pull", "--ff-only", "origin", "main"):
-            head = target
-            return ""
         return values[args]
-
-    manifest_calls = iter((set(), {backup}))
 
     def checked(args: list[str], *, label: str, **_: object) -> subprocess.CompletedProcess[str]:
         del args
@@ -621,14 +1021,26 @@ def test_update_failure_reports_commits_and_keeps_backup(
     monkeypatch.setattr(server_manager, "git_output", git_output)
     monkeypatch.setattr(
         server_manager,
-        "run_capture",
-        lambda args, **_: subprocess.CompletedProcess(args, 0, "", ""),
+        "_deployment_state",
+        lambda _: deployment_state(
+            database_current=False,
+            database_revisions=("0016_report_templates",),
+        ),
     )
-    monkeypatch.setattr(server_manager, "_backup_manifests", lambda: next(manifest_calls))
-    monkeypatch.setattr(server_manager, "backup_server", lambda: 0)
+    monkeypatch.setattr(server_manager, "_require_verified_backup", lambda: backup)
     monkeypatch.setattr(server_manager, "stop_api", lambda: 0)
     monkeypatch.setattr(server_manager, "load_server_environment", lambda: {})
-    monkeypatch.setattr(server_manager, "_sync_locked_dependencies", lambda: None)
+    monkeypatch.setattr(server_manager, "_locked_dependencies_current", lambda: True)
+    monkeypatch.setattr(
+        server_manager,
+        "_repository_alembic_heads",
+        lambda: ("0017_internal_ids",),
+    )
+    monkeypatch.setattr(
+        server_manager,
+        "_database_alembic_revisions",
+        lambda _: ("0016_report_templates",),
+    )
     monkeypatch.setattr(server_manager, "checked", checked)
 
     assert server_manager.update_server() == 1
