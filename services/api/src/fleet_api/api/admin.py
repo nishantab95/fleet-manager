@@ -106,7 +106,11 @@ def create_site(
     db: Session = Depends(get_db),
 ) -> SiteResponse:
     try:
-        site = service.create_site(name=payload.name, code=payload.code)
+        site = service.create_site(
+            name=payload.name,
+            short_name=payload.short_name,
+            code=payload.code,
+        )
         db.commit()
         return SiteResponse.model_validate(site)
     except DomainError as exc:
@@ -132,8 +136,10 @@ def update_site(
         site = service.update_site(
             site_id,
             name=payload.name,
+            short_name=payload.short_name,
             code=payload.code,
             status=payload.status,
+            short_name_was_sent="short_name" in payload.model_fields_set,
             code_was_sent="code" in payload.model_fields_set,
         )
         db.commit()

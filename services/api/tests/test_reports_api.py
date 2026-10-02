@@ -962,6 +962,7 @@ def test_timezone_boundary_and_assignment_transfer_are_historical_and_not_double
     second_site = Site(
         company_id=company.id,
         name="Second Site",
+        short_name="Second Site",
         code="SECOND",
         status=SiteStatus.ACTIVE,
     )

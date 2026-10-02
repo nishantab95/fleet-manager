@@ -14,6 +14,8 @@ async function mockApi(page: Page, role: (typeof roles)[number]["apiRole"]) {
       ? { access_token: "layout-test-token", expires_in: 3600, membership_id: "membership-1", company_id: "company-1", role }
       : path.endsWith("/auth/me")
         ? { user_id: "user-1", display_name: "Layout test user", membership_id: "membership-1", company_id: "company-1", company_name: "Layout Test Company", role }
+        : path.endsWith("/owner/assets") || path.endsWith("/owner/people") || path.endsWith("/owner/sites")
+          ? []
         : path.endsWith("/driver/assignment/current")
           ? { assignment_id: "assignment-1", tipper_id: "tipper-1", tipper_registration_number: "PILOT-12", tipper_short_name: "Tipper 12", site_id: "site-1", site_name: "Pilot Site", supervisor_name: "Pilot Supervisor" }
           : path.endsWith("/supervisor/sites")
@@ -40,7 +42,7 @@ for (const role of roles) {
         await page.setViewportSize({ width: viewport, height: 900 });
         await mockApi(page, role.apiRole);
         await page.goto(role.path);
-        await expect(page.locator(".admin-layout")).toBeVisible();
+        await expect(page.locator(role.name === "owner" ? ".owner-layout" : ".admin-layout")).toBeVisible();
 
         const content = await page.locator(".content").boundingBox();
         expect(content?.width).toBeGreaterThanOrEqual(role.name === "owner" ? 1000 : 1200);
@@ -59,10 +61,11 @@ for (const role of roles) {
         }
 
         if (role.name === "owner") {
-          const sidebar = await page.locator(".sidebar").boundingBox();
-          expect(sidebar?.width).toBeGreaterThanOrEqual(220);
-          expect(sidebar?.width).toBeLessThanOrEqual(260);
-          await expect(page.getByRole("heading", { name: "Owner operations" })).toBeVisible();
+          const sidebar = await page.locator(".owner-sidebar").boundingBox();
+          expect(sidebar?.width).toBeGreaterThanOrEqual(190);
+          expect(sidebar?.width).toBeLessThanOrEqual(205);
+          await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
+          await expect(page.getByLabel("Live fleet readiness")).toBeVisible();
         }
 
         if (role.name === "supervisor") {

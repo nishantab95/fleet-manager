@@ -46,7 +46,7 @@ test.describe("private evidence browser acceptance", () => {
     const ownerContext = await browser.newContext();
     const ownerPage = await ownerContext.newPage();
     await authenticate(ownerPage, ownerPhone!, ownerOtp!, "owner");
-    await ownerPage.getByRole("button", { name: "Operations" }).click();
+    await ownerPage.getByRole("button", { name: "Reports", exact: true }).click();
     await expect(ownerPage.getByRole("heading", { name: "Owner operations" })).toBeVisible();
     await ownerPage.getByRole("button", { name: /Pilot Site/ }).first().click();
     await expect(ownerPage.getByRole("heading", { name: /Pilot Site · daily detail/ })).toBeVisible();

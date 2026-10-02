@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -22,6 +22,7 @@ from fleet_api.db.models import (
     SupervisorSiteAccess,
     User,
 )
+from fleet_api.domain.assets import generated_site_code, normalize_site_code
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     DutySessionStatus,
@@ -132,7 +133,7 @@ class OwnerPeopleSiteService:
     def _person_view(self, membership: CompanyMembership, user: User) -> PersonView:
         now = datetime.now(UTC)
         sites = [
-            PersonSite(site_id=row.id, site_name=row.name)
+            PersonSite(site_id=row.id, site_name=row.short_name)
             for row in self.session.execute(
                 select(Site)
                 .join(
@@ -146,7 +147,7 @@ class OwnerPeopleSiteService:
                     SupervisorSiteAccess.company_id == self.company_id,
                     SupervisorSiteAccess.supervisor_membership_id == membership.id,
                 )
-                .order_by(Site.name, Site.id)
+                .order_by(Site.short_name, Site.id)
             ).scalars()
         ]
         current_asset_id: UUID | None = None
@@ -185,7 +186,7 @@ class OwnerPeopleSiteService:
                 current_asset_id = asset.id
                 current_asset_code = asset.asset_code
                 current_site_id = site.id
-                current_site_name = site.name
+                current_site_name = site.short_name
         has_duty = (
             self.session.scalar(
                 select(DutySession.id)
@@ -409,7 +410,7 @@ class OwnerPeopleSiteService:
         sites = self.session.scalars(
             select(Site)
             .where(Site.company_id == self.company_id)
-            .order_by(Site.status, Site.name, Site.id)
+            .order_by(Site.status, Site.short_name, Site.id)
         ).all()
         return [self._site_view(site) for site in sites]
 
@@ -417,11 +418,18 @@ class OwnerPeopleSiteService:
         return self._site_view(self._site(site_id))
 
     def _ensure_unique_site(
-        self, *, name: str, code: str | None, exclude_site_id: UUID | None = None
+        self,
+        *,
+        name: str,
+        short_name: str,
+        code: str,
+        exclude_site_id: UUID | None = None,
     ) -> None:
-        collisions = [func.lower(Site.name) == name.lower()]
-        if code is not None:
-            collisions.append(func.lower(Site.code) == code.lower())
+        collisions = [
+            func.lower(Site.name) == name.lower(),
+            func.lower(Site.short_name) == short_name.lower(),
+            func.lower(Site.code) == code.lower(),
+        ]
         duplicate = select(Site.id).where(
             Site.company_id == self.company_id,
             or_(*collisions),
@@ -429,25 +437,41 @@ class OwnerPeopleSiteService:
         if exclude_site_id is not None:
             duplicate = duplicate.where(Site.id != exclude_site_id)
         if self.session.scalar(duplicate.limit(1)) is not None:
-            raise ConflictError("site name or code is already used")
+            raise ConflictError("site name, short name, or code is already used")
 
     def create_site(
         self,
         *,
-        name: str,
+        name: str | None,
+        short_name: str | None,
         code: str | None,
         location_description: str | None,
         latitude: Decimal | None,
         longitude: Decimal | None,
     ) -> SiteView:
-        clean_name = _clean_required(name, "name")
-        clean_code = _clean_optional(code)
-        if clean_code:
-            clean_code = clean_code.upper()
-        self._ensure_unique_site(name=clean_name, code=clean_code)
+        clean_name = _clean_optional(name)
+        clean_short_name = _clean_optional(short_name)
+        if clean_name is None and clean_short_name is None:
+            raise DomainError("name or short_name is required")
+        if clean_name is None:
+            clean_name = clean_short_name
+        if clean_short_name is None:
+            clean_short_name = clean_name
+        assert clean_name is not None and clean_short_name is not None
+        site_id = uuid4()
+        clean_code = (
+            normalize_site_code(code) if code is not None else generated_site_code(site_id)
+        )
+        self._ensure_unique_site(
+            name=clean_name,
+            short_name=clean_short_name,
+            code=clean_code,
+        )
         site = Site(
+            id=site_id,
             company_id=self.company_id,
             name=clean_name,
+            short_name=clean_short_name,
             code=clean_code,
             location_description=_clean_optional(location_description),
             latitude=latitude,
@@ -458,7 +482,7 @@ class OwnerPeopleSiteService:
         try:
             self.session.flush()
         except IntegrityError as exc:
-            raise ConflictError("site name or code is already used") from exc
+            raise ConflictError("site name, short name, or code is already used") from exc
         self._audit(
             action="OWNER_SITE_CREATED",
             entity_type="SITE",
@@ -471,6 +495,7 @@ class OwnerPeopleSiteService:
     def _site_values(site: Site) -> dict[str, object]:
         return {
             "name": site.name,
+            "short_name": site.short_name,
             "code": site.code,
             "location_description": site.location_description,
             "latitude": str(site.latitude) if site.latitude is not None else None,
@@ -483,6 +508,7 @@ class OwnerPeopleSiteService:
         site_id: UUID,
         *,
         name: str | None,
+        short_name: str | None,
         code: str | None,
         location_description: str | None,
         latitude: Decimal | None,
@@ -494,22 +520,33 @@ class OwnerPeopleSiteService:
         if "name" in fields_set:
             if name is None:
                 raise DomainError("name is required")
+            old_name = site.name
             site.name = _clean_required(name, "name")
+            if "short_name" not in fields_set and site.short_name == old_name:
+                site.short_name = site.name
+        if "short_name" in fields_set:
+            if short_name is None:
+                raise DomainError("short_name is required")
+            site.short_name = _clean_required(short_name, "short_name")
         if "code" in fields_set:
-            site.code = _clean_optional(code)
-            if site.code:
-                site.code = site.code.upper()
+            if code is None or normalize_site_code(code) != normalize_site_code(site.code):
+                raise DomainError("Site code is immutable.")
         if "location_description" in fields_set:
             site.location_description = _clean_optional(location_description)
         if "latitude" in fields_set:
             site.latitude = latitude
         if "longitude" in fields_set:
             site.longitude = longitude
-        self._ensure_unique_site(name=site.name, code=site.code, exclude_site_id=site.id)
+        self._ensure_unique_site(
+            name=site.name,
+            short_name=site.short_name,
+            code=site.code,
+            exclude_site_id=site.id,
+        )
         try:
             self.session.flush()
         except IntegrityError as exc:
-            raise ConflictError("site name or code is already used") from exc
+            raise ConflictError("site name, short name, or code is already used") from exc
         self._audit(
             action="OWNER_SITE_UPDATED",
             entity_type="SITE",

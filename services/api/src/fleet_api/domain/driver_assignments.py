@@ -138,10 +138,10 @@ class DriverAssetAssignmentService:
         if membership.role != MembershipRole.DRIVER:
             raise RoleViolationError("assignment requires a Driver / Operator membership")
         if (
-            membership.status != MembershipStatus.ACTIVE
+            membership.status not in (MembershipStatus.INVITED, MembershipStatus.ACTIVE)
             or user.status != UserStatus.ACTIVE
         ):
-            raise ConflictError("Driver / Operator must be active before assignment.")
+            raise ConflictError("Driver / Operator must be invited or active before assignment.")
         return DriverCandidate(membership, user)
 
     def _current_for_asset(
@@ -237,7 +237,9 @@ class DriverAssetAssignmentService:
             .where(
                 CompanyMembership.company_id == self.company_id,
                 CompanyMembership.role == MembershipRole.DRIVER,
-                CompanyMembership.status == MembershipStatus.ACTIVE,
+                CompanyMembership.status.in_(
+                    (MembershipStatus.INVITED, MembershipStatus.ACTIVE)
+                ),
                 User.status == UserStatus.ACTIVE,
                 CompanyMembership.id.not_in(assigned_driver_ids),
             )

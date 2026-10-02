@@ -727,3 +727,95 @@ def test_0016_seeds_exact_builtin_report_templates_for_existing_company(
                 text("DELETE FROM companies WHERE id = :company"),
                 {"company": company_id},
             )
+
+
+def test_0017_backfills_site_short_names_and_internal_codes(
+    postgres_engine: Engine,
+) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("70000000-0000-0000-0000-000000000001")
+    generated_site_id = UUID("70000000-0000-0000-0000-000000000002")
+    explicit_site_id = UUID("70000000-0000-0000-0000-000000000003")
+    blank_name_site_id = UUID("70000000-0000-0000-0000-000000000004")
+    command.downgrade(config, "0016_report_templates")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'Site Identity Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO sites (id, company_id, name, code, status) VALUES "
+                    "(:generated, :company, 'Generated Code Site', NULL, 'ACTIVE'), "
+                    "(:explicit, :company, 'Explicit Code Site', 'LEGACY-CODE', 'ACTIVE'), "
+                    "(:blank_name, :company, '   ', NULL, 'ACTIVE')"
+                ),
+                {
+                    "generated": generated_site_id,
+                    "explicit": explicit_site_id,
+                    "blank_name": blank_name_site_id,
+                    "company": company_id,
+                },
+            )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.connect() as connection:
+            sites = connection.execute(
+                text(
+                    "SELECT id, name, short_name, code FROM sites "
+                    "WHERE company_id = :company ORDER BY id"
+                ),
+                {"company": company_id},
+            ).mappings().all()
+            assert [dict(row) for row in sites] == [
+                {
+                    "id": generated_site_id,
+                    "name": "Generated Code Site",
+                    "short_name": "Generated Code Site",
+                    "code": f"SITE-{generated_site_id.hex.upper()}",
+                },
+                {
+                    "id": explicit_site_id,
+                    "name": "Explicit Code Site",
+                    "short_name": "Explicit Code Site",
+                    "code": "LEGACY-CODE",
+                },
+                {
+                    "id": blank_name_site_id,
+                    "name": "   ",
+                    "short_name": f"Legacy Site {blank_name_site_id.hex.upper()}",
+                    "code": f"SITE-{blank_name_site_id.hex.upper()}",
+                },
+            ]
+            nullable: dict[str, str] = {
+                str(row["column_name"]): str(row["is_nullable"])
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name, is_nullable FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'sites' "
+                        "AND column_name IN ('short_name', 'code')"
+                    )
+                ).mappings()
+            }
+            assert nullable == {"code": "NO", "short_name": "NO"}
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM sites WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM report_templates WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :company"),
+                {"company": company_id},
+            )

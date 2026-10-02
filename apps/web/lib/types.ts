@@ -36,7 +36,15 @@ export type SupervisorAccess = { id: string; supervisor_membership_id: string; s
 export type Assignment = { id: string; driver_membership_id: string; driver_name: string; supervisor_membership_id: string; supervisor_name: string; tipper_id: string; registration_number: string; site_id: string; site_name: string; starts_at: string; ends_at: string | null; regular_duty_minutes: number };
 
 export type AssetSiteDeployment = { id: string; asset_id: string; site_id: string; site_name: string; starts_at: string; ends_at: string | null };
-export type OwnerAssetAssignment = { assignment_id: string; site_id: string; site_name: string; driver_membership_id: string; driver_name: string; starts_at: string };
+export type OwnerAssetAssignment = {
+  assignment_id: string;
+  site_id: string;
+  site_name: string;
+  driver_membership_id: string;
+  driver_name: string;
+  starts_at: string;
+  regular_duty_minutes?: number;
+};
 export type OwnerAsset = {
   id: string;
   asset_code: string;
@@ -72,6 +80,7 @@ export type OwnerPerson = {
 export type OwnerSite = {
   id: string;
   name: string;
+  short_name?: string | null;
   code: string | null;
   location_description: string | null;
   latitude: number | null;
@@ -94,7 +103,12 @@ export type DriverAssetAssignment = {
   ends_at: string | null;
   regular_duty_minutes: number;
 };
-export type DriverCandidate = { membership_id: string; display_name: string };
+export type DriverCandidate = {
+  membership_id: string;
+  display_name: string;
+  phone?: string;
+  status?: MembershipStatus;
+};
 export type ReportTemplate = {
   id: string;
   name: string;

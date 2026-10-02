@@ -122,6 +122,7 @@ def add_site(
     site = Site(
         company_id=company.id,
         name=name,
+        short_name=name,
         code=name.upper().replace(" ", "-")[:64],
         status=status,
     )
@@ -196,6 +197,7 @@ def test_owner_deploys_owned_rented_and_generic_unassigned_assets(
 ) -> None:
     company = value(tenant_records, "company_a", Company)
     site = value(tenant_records, "site_a", Site)
+    site.short_name = "Alpha Operations"
     assets = [
         add_asset(db_session, company, code="OWN-T02"),
         add_asset(
@@ -225,6 +227,7 @@ def test_owner_deploys_owned_rented_and_generic_unassigned_assets(
         by_code = {item["asset_code"]: item for item in listed.json()}
         assert {asset.asset_code for asset in assets} <= set(by_code)
         assert by_code["OWN-T02"]["driver_name"] is None
+        assert by_code["OWN-T02"]["current_deployment"]["site_name"] == "Alpha Operations"
         assert by_code["RENT-T03"]["ownership_type"] == "RENTED"
         assert by_code["EXC-01"]["asset_type"] == "EXCAVATOR"
     finally:

@@ -260,6 +260,8 @@ def eligible_asset_drivers(
             DriverCandidateResponse(
                 membership_id=item.membership.id,
                 display_name=item.membership.display_name or item.user.display_name,
+                phone=item.user.phone_number,
+                status=item.membership.status,
             )
             for item in service.eligible_drivers(asset_id)
         ]

@@ -91,6 +91,8 @@ def test_owner_admin_management_is_tenant_scoped_and_uses_domain_rules(
             json={"name": "New Alpha Site", "code": "NEW-A"},
         )
         assert created_site.status_code == 201
+        assert created_site.json()["short_name"] == "New Alpha Site"
+        assert created_site.json()["code"] == "NEW-A"
         new_site_id = created_site.json()["id"]
         assert (
             client.patch(
@@ -99,6 +101,29 @@ def test_owner_admin_management_is_tenant_scoped_and_uses_domain_rules(
             ).json()["status"]
             == SiteStatus.INACTIVE
         )
+        generated_site = client.post(
+            "/api/v1/admin/sites",
+            json={"name": "Generated Code Site", "short_name": "Generated"},
+        )
+        assert generated_site.status_code == 201, generated_site.text
+        generated_code = generated_site.json()["code"]
+        assert generated_code.startswith("SITE-")
+        assert client.patch(
+            f"/api/v1/admin/sites/{generated_site.json()['id']}",
+            json={"code": generated_code.lower()},
+        ).status_code == 200
+        assert client.patch(
+            f"/api/v1/admin/sites/{generated_site.json()['id']}",
+            json={"code": "CHANGED"},
+        ).status_code == 422
+        site_a.code = "legacy-Mixed"
+        db_session.flush()
+        unchanged_legacy_code = client.patch(
+            f"/api/v1/admin/sites/{site_a.id}",
+            json={"code": "legacy-Mixed"},
+        )
+        assert unchanged_legacy_code.status_code == 200, unchanged_legacy_code.text
+        assert unchanged_legacy_code.json()["code"] == "legacy-Mixed"
         assert client.get(f"/api/v1/admin/sites/{site_b.id}").status_code == 404
 
         created_tipper = client.post(

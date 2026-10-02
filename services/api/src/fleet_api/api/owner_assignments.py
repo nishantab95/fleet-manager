@@ -54,7 +54,7 @@ def assignment_response(view: DriverAssetAssignmentView) -> DriverAssetAssignmen
         driver_name=view.driver_membership.display_name or view.driver.display_name,
         asset_site_deployment_id=view.deployment.id,
         site_id=view.site.id,
-        site_name=view.site.name,
+        site_name=view.site.short_name,
         starts_at=view.assignment.starts_at,
         ends_at=view.assignment.ends_at,
         regular_duty_minutes=view.assignment.regular_duty_minutes,
@@ -112,6 +112,8 @@ def eligible_drivers(
             DriverCandidateResponse(
                 membership_id=item.membership.id,
                 display_name=item.membership.display_name or item.user.display_name,
+                phone=item.user.phone_number,
+                status=item.membership.status,
             )
             for item in service.eligible_drivers(asset_id)
         ]

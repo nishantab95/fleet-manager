@@ -134,6 +134,7 @@ def test_owner_lists_assets_with_filters_and_active_assignment(
         assert body[0]["has_active_assignment"] is True
         assert body[0]["active_assignment"]["site_name"] == "Alpha Site"
         assert body[0]["active_assignment"]["driver_name"] == "Driver A"
+        assert body[0]["active_assignment"]["regular_duty_minutes"] == 600
     finally:
         client.close()
 
@@ -150,6 +151,64 @@ def test_owner_creates_owned_tipper(
         assert asset["registration_number"] == "KA04AA4444"
         assert asset["ownership_type"] == "OWNED"
         assert asset["rental_party_name"] is None
+    finally:
+        client.close()
+
+
+def test_owner_generates_stable_immutable_asset_code_when_omitted(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    client = owner_client(
+        db_session, value(tenant_records, "owner_a", CompanyMembership)
+    )
+    try:
+        payload = owned_payload(registration_number="KA04AA4499")
+        payload.pop("asset_code")
+        created = client.post("/api/v1/owner/assets", json=payload)
+        assert created.status_code == 201, created.text
+        asset = created.json()
+        code = asset["asset_code"]
+        assert code.startswith("TIPPER-")
+        assert len(code.removeprefix("TIPPER-")) == 32
+        int(code.removeprefix("TIPPER-"), 16)
+
+        echoed = client.patch(
+            f"/api/v1/owner/assets/{asset['id']}",
+            json={"asset_code": code.lower(), "short_name": "Renamed display"},
+        )
+        assert echoed.status_code == 200, echoed.text
+        assert echoed.json()["asset_code"] == code
+
+        changed = client.patch(
+            f"/api/v1/owner/assets/{asset['id']}",
+            json={"asset_code": "DIFFERENT-CODE"},
+        )
+        assert changed.status_code == 422
+        assert "immutable" in changed.json()["detail"]["message"].lower()
+        assert client.get(f"/api/v1/owner/assets/{asset['id']}").json()["asset_code"] == code
+    finally:
+        client.close()
+
+
+def test_generated_asset_codes_are_unique_for_identical_machinery_labels(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    client = owner_client(
+        db_session, value(tenant_records, "owner_a", CompanyMembership)
+    )
+    try:
+        payload = owned_payload(
+            asset_type="EXCAVATOR",
+            registration_number=None,
+            short_name="Excavator",
+        )
+        payload.pop("asset_code")
+        first = client.post("/api/v1/owner/assets", json=payload)
+        second = client.post("/api/v1/owner/assets", json=payload)
+        assert first.status_code == second.status_code == 201
+        assert first.json()["asset_code"] != second.json()["asset_code"]
+        assert first.json()["asset_code"].startswith("EXCAVATOR-")
+        assert second.json()["asset_code"].startswith("EXCAVATOR-")
     finally:
         client.close()
 
@@ -302,7 +361,7 @@ def test_owner_edits_asset_without_recreating_it_or_history(
         response = client.patch(
             f"/api/v1/owner/assets/{asset_id}",
             json={
-                "asset_code": "ALPHA-RENAMED",
+                "asset_code": asset.asset_code.lower(),
                 "registration_number": "KA01AB9999",
                 "short_name": "Renamed Tipper",
                 "manufacturer": "Ashok Leyland",
@@ -311,6 +370,7 @@ def test_owner_edits_asset_without_recreating_it_or_history(
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == str(asset_id)
+        assert response.json()["asset_code"] == asset.asset_code
         assert response.json()["registration_number"] == "KA01AB9999"
         db_session.expire_all()
         preserved = db_session.get(Assignment, assignment_id)

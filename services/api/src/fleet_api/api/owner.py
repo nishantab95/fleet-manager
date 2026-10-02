@@ -77,6 +77,7 @@ def _response(view: OwnerAssetView) -> OwnerAssetResponse:
                 driver_membership_id=assignment.driver_membership_id,
                 driver_name=assignment.driver_name,
                 starts_at=assignment.starts_at,
+                regular_duty_minutes=assignment.regular_duty_minutes,
             )
             if assignment is not None
             else None

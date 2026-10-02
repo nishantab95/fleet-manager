@@ -50,7 +50,8 @@ class Site(UpdatedTimestampModel):
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    short_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
     location_description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
@@ -60,8 +61,14 @@ class Site(UpdatedTimestampModel):
 
     __table_args__ = (
         UniqueConstraint("company_id", "name", name="uq_sites_company_name"),
+        UniqueConstraint("company_id", "short_name", name="uq_sites_company_short_name"),
         UniqueConstraint("company_id", "code", name="uq_sites_company_code"),
         UniqueConstraint("company_id", "id", name="uq_sites_company_id"),
+        CheckConstraint(
+            "length(btrim(short_name)) BETWEEN 1 AND 200",
+            name="ck_sites_short_name_non_empty",
+        ),
+        CheckConstraint("length(btrim(code)) > 0", name="ck_sites_code_non_empty"),
         CheckConstraint(
             "latitude IS NULL OR (latitude >= -90 AND latitude <= 90)",
             name="ck_sites_latitude_range",

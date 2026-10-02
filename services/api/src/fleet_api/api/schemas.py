@@ -111,11 +111,13 @@ class CompanySettingsUpdateRequest(BaseModel):
 
 class SiteCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    short_name: str | None = Field(default=None, min_length=1, max_length=200)
     code: str | None = Field(default=None, max_length=64)
 
 
 class SiteUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
+    short_name: str | None = Field(default=None, min_length=1, max_length=200)
     code: str | None = Field(default=None, max_length=64)
     status: SiteStatus | None = None
 
@@ -125,7 +127,8 @@ class SiteResponse(BaseModel):
 
     id: UUID
     name: str
-    code: str | None
+    short_name: str
+    code: str
     status: SiteStatus
 
 
@@ -150,7 +153,7 @@ class TipperResponse(BaseModel):
 
 
 class OwnerAssetCreateRequest(BaseModel):
-    asset_code: str = Field(min_length=1, max_length=64)
+    asset_code: str | None = Field(default=None, min_length=1, max_length=64)
     asset_type: FleetAssetType = FleetAssetType.TIPPER
     ownership_type: AssetOwnershipType
     registration_number: str | None = Field(default=None, min_length=1, max_length=32)
@@ -181,6 +184,7 @@ class OwnerAssetAssignmentResponse(BaseModel):
     driver_membership_id: UUID
     driver_name: str
     starts_at: datetime
+    regular_duty_minutes: int
 
 
 class DriverAssetAssignmentRequest(BaseModel):
@@ -191,6 +195,8 @@ class DriverAssetAssignmentRequest(BaseModel):
 class DriverCandidateResponse(BaseModel):
     membership_id: UUID
     display_name: str
+    phone: str
+    status: MembershipStatus
 
 
 class DriverAssetAssignmentResponse(BaseModel):
@@ -287,7 +293,8 @@ class OwnerPersonResponse(BaseModel):
 
 
 class OwnerSiteCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    short_name: str | None = Field(default=None, min_length=1, max_length=200)
     code: str | None = Field(default=None, max_length=64)
     location_description: str | None = Field(default=None, max_length=500)
     latitude: Decimal | None = Field(default=None, ge=-90, le=90)
@@ -296,6 +303,7 @@ class OwnerSiteCreateRequest(BaseModel):
 
 class OwnerSiteUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
+    short_name: str | None = Field(default=None, min_length=1, max_length=200)
     code: str | None = Field(default=None, max_length=64)
     location_description: str | None = Field(default=None, max_length=500)
     latitude: Decimal | None = Field(default=None, ge=-90, le=90)
@@ -315,7 +323,8 @@ class OwnerSiteSupervisorResponse(BaseModel):
 class OwnerSiteResponse(BaseModel):
     id: UUID
     name: str
-    code: str | None
+    short_name: str
+    code: str
     location_description: str | None
     latitude: Decimal | None
     longitude: Decimal | None

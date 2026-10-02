@@ -159,12 +159,14 @@ def tenant_records(db_session: Session) -> dict[str, object]:
     site_a = Site(
         company_id=company_a.id,
         name="Alpha Site",
+        short_name="Alpha Site",
         code="ALPHA",
         status=SiteStatus.ACTIVE,
     )
     site_b = Site(
         company_id=company_b.id,
         name="Beta Site",
+        short_name="Beta Site",
         code="BETA",
         status=SiteStatus.ACTIVE,
     )

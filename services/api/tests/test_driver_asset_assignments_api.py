@@ -132,6 +132,59 @@ def test_owner_assignment_lifecycle_updates_people_driver_and_audit(
         owner_client.close()
 
 
+def test_invited_driver_is_eligible_and_assignable_before_first_login(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    owner = value(tenant_records, "owner_a", CompanyMembership)
+    site = value(tenant_records, "site_a", Site)
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    user = User(
+        phone_number=f"+916{uuid4().int % 1_000_000_000:09d}",
+        display_name="Invited Operator",
+        status=UserStatus.ACTIVE,
+    )
+    db_session.add(user)
+    db_session.flush()
+    invited = CompanyMembership(
+        company_id=company.id,
+        user_id=user.id,
+        display_name="Invited Operator",
+        role=MembershipRole.DRIVER,
+        status=MembershipStatus.INVITED,
+    )
+    db_session.add(invited)
+    db_session.commit()
+
+    owner_client = client_for(db_session, owner)
+    try:
+        deploy(owner_client, asset, site)
+        eligible = owner_client.get(
+            f"/api/v1/owner/assets/{asset.id}/eligible-drivers"
+        )
+        assert eligible.status_code == 200
+        candidate = next(
+            row for row in eligible.json() if row["membership_id"] == str(invited.id)
+        )
+        assert candidate == {
+            "membership_id": str(invited.id),
+            "display_name": "Invited Operator",
+            "phone": user.phone_number,
+            "status": "INVITED",
+        }
+
+        assigned = owner_client.post(
+            f"/api/v1/owner/assets/{asset.id}/assignment",
+            json={"driver_membership_id": str(invited.id)},
+        )
+        assert assigned.status_code == 201, assigned.text
+        db_session.refresh(invited)
+        assert invited.status == MembershipStatus.INVITED
+    finally:
+        owner_client.close()
+
+
 def test_supervisor_authorization_multi_supervisor_and_eligibility_guards(
     db_session: Session,
     tenant_records: dict[str, object],

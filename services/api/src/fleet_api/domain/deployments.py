@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -281,10 +281,11 @@ class OwnerDeploymentService:
         return [DeploymentView(deployment, site) for deployment, site in rows]
 
     def site_assets(self, site_id: UUID) -> list[DeployedAssetView]:
-        self._site(site_id)
-        return list_current_site_assets(
+        site = self._site(site_id)
+        views = list_current_site_assets(
             self.session, company_id=self.company_id, site_id=site_id
         )
+        return [replace(view, site_name=site.short_name) for view in views]
 
     def _ensure_no_operational_dependency(self, asset_id: UUID, action: str) -> None:
         active_duty = self.session.scalar(

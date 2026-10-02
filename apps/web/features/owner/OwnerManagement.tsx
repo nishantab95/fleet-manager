@@ -1,85 +1,361 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { AssetOwnershipType, AssetSiteDeployment, DriverAssetAssignment, DriverCandidate, FleetAssetType, MembershipRole, OwnerAsset, OwnerPerson, OwnerSite } from "../../lib/types";
-import { Badge, Metric, Select } from "../shared/Ui";
-import { assetCapabilities, assetTypes, title } from "./catalogs";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
+
+import type {
+  AssetOwnershipType,
+  AssetSiteDeployment,
+  DriverAssetAssignment,
+  DriverCandidate,
+  FleetAssetType,
+  MembershipRole,
+  OwnerAsset,
+  OwnerPerson,
+  OwnerSite,
+} from "../../lib/types";
+import { assetTypes, title } from "./catalogs";
+import {
+  ConfirmDialog,
+  DetailsDialog,
+  EmptyTableRow,
+  FilterToolbar,
+  InlineFeedback,
+  OperationsTable,
+  PanelHeading,
+  SortButton,
+  StatusChip,
+} from "./OwnerUi";
 
 type WebRequest = <T>(path: string, options?: RequestInit) => Promise<T>;
-type Common = { apiRequest: WebRequest; reload: () => Promise<void>; setError: (message: string) => void };
+type Common = {
+  apiRequest: WebRequest;
+  reload: () => Promise<void>;
+  setError: (message: string) => void;
+};
+type SortDirection = "asc" | "desc";
 
-async function act(setError: Common["setError"], reload: Common["reload"], action: () => Promise<unknown>) {
-  setError("");
-  try { await action(); await reload(); }
-  catch (caught) { setError(caught instanceof Error ? caught.message : "The request failed."); }
+function useOwnerAction({ reload, setError }: Pick<Common, "reload" | "setError">) {
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const run = useCallback(
+    async (successMessage: string, action: () => Promise<unknown>) => {
+      setBusy(true);
+      setError("");
+      setLocalError("");
+      setSuccess("");
+      try {
+        await action();
+        await reload();
+        setSuccess(successMessage);
+        return true;
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "The request failed.";
+        setLocalError(message);
+        setError(message);
+        return false;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [reload, setError],
+  );
+
+  return { busy, localError, run, success };
 }
 
-function assetLabel(asset: OwnerAsset) { return asset.registration_number || asset.short_name || asset.asset_code; }
+function assetLabel(asset: OwnerAsset) {
+  return asset.short_name || asset.registration_number || "Unnamed asset";
+}
+
+function assetSearchText(asset: OwnerAsset) {
+  return [
+    asset.short_name,
+    asset.registration_number,
+    asset.asset_type,
+    asset.ownership_type,
+    asset.manufacturer,
+    asset.model,
+    asset.rental_party_name,
+    asset.current_deployment?.site_name,
+    asset.active_assignment?.driver_name,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function siteLabel(site: OwnerSite) {
+  return site.short_name || site.name;
+}
+
+function personForAsset(asset: OwnerAsset, people: OwnerPerson[]) {
+  const membershipId = asset.active_assignment?.driver_membership_id;
+  return membershipId ? people.find((person) => person.membership_id === membershipId) : undefined;
+}
+
+function dateTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function toggleSort<T extends string>(selected: T, next: T, direction: SortDirection) {
+  return { key: next, direction: selected === next && direction === "asc" ? "desc" as const : "asc" as const };
+}
+
+function compareText(left: string | null | undefined, right: string | null | undefined) {
+  return (left ?? "").localeCompare(right ?? "", undefined, { numeric: true, sensitivity: "base" });
+}
 
 export function FleetOverview({ assets }: { assets: OwnerAsset[] }) {
   const active = assets.filter((asset) => asset.status === "ACTIVE");
-  const tippers = active.filter((asset) => asset.asset_type === "TIPPER").length;
-  return <section aria-labelledby="fleet-overview-title"><h2 id="fleet-overview-title">Fleet overview</h2><div className="metric-grid fleet-metrics">
-    <Metric label="Active assets" value={active.length} /><Metric label="Tippers" value={tippers} /><Metric label="Machinery" value={active.length - tippers} />
-    <Metric label="Owned" value={active.filter((asset) => asset.ownership_type === "OWNED").length} /><Metric label="Rented" value={active.filter((asset) => asset.ownership_type === "RENTED").length} />
-    <Metric label="Assigned" value={active.filter((asset) => asset.has_active_assignment).length} /><Metric label="Unassigned" value={active.filter((asset) => !asset.has_active_assignment).length} />
-    <Metric label="Deployed" value={active.filter((asset) => asset.current_deployment).length} /><Metric label="Undeployed" value={active.filter((asset) => !asset.current_deployment).length} />
-  </div></section>;
+  const assigned = active.filter((asset) => asset.has_active_assignment).length;
+  const deployed = active.filter((asset) => asset.current_deployment).length;
+  return (
+    <section aria-label="Live fleet readiness" className="owner-overview">
+      <div className="owner-overview-heading">
+        <div>
+          <p className="owner-section-eyebrow">Overview</p>
+          <h2>Operations overview</h2>
+          <p>Live readiness across active assets, deployments, and Driver / Operator assignments.</p>
+        </div>
+      </div>
+      <div className="owner-kpi-grid">
+        <div><span>Active assets</span><strong>{active.length}</strong></div>
+        <div><span>Assigned</span><strong>{assigned}</strong></div>
+        <div><span>Unassigned</span><strong>{active.length - assigned}</strong></div>
+        <div><span>Undeployed</span><strong>{active.length - deployed}</strong></div>
+        <div><span>Rented</span><strong>{active.filter((asset) => asset.ownership_type === "RENTED").length}</strong></div>
+      </div>
+    </section>
+  );
 }
 
-export function PeoplePanel({ people, apiRequest, reload, setError }: Common & { people: OwnerPerson[] }) {
-  const [query, setQuery] = useState(""); const [phone, setPhone] = useState(""); const [name, setName] = useState("");
-  const [role, setRole] = useState<"DRIVER" | "SUPERVISOR">("DRIVER"); const [editing, setEditing] = useState<OwnerPerson | null>(null);
-  const shown = people.filter((person) => person.role !== "OWNER_ADMIN" && `${person.display_name} ${person.phone} ${person.role}`.toLowerCase().includes(query.toLowerCase()));
-  const submit = (event: FormEvent) => { event.preventDefault(); void act(setError, reload, async () => { await apiRequest("/api/v1/owner/people/invite", { method: "POST", body: JSON.stringify({ phone, display_name: name, role }) }); setPhone(""); setName(""); }); };
-  return <section><div className="section-heading"><div><h2>People</h2><p className="muted">Invite Drivers and Supervisors, then manage their lifecycle without deleting history.</p></div><input aria-label="Search people" placeholder="Search people" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-    <form className="inline-form" onSubmit={submit}><input aria-label="Person phone" placeholder="Phone in E.164" value={phone} onChange={(event) => setPhone(event.target.value)} required /><input aria-label="Display name" placeholder="Display name" value={name} onChange={(event) => setName(event.target.value)} required /><select aria-label="Role" value={role} onChange={(event) => setRole(event.target.value as typeof role)}><option value="DRIVER">Driver / Operator</option><option value="SUPERVISOR">Supervisor</option></select><button type="submit">Invite person</button></form>
-    <div className="table-card">{shown.length === 0 && <p className="empty-state">No people match this search.</p>}{shown.map((person) => editing?.membership_id === person.membership_id ? <form className="table-row" key={person.membership_id} onSubmit={(event) => { event.preventDefault(); void act(setError, reload, async () => { await apiRequest(`/api/v1/owner/people/${person.membership_id}`, { method: "PATCH", body: JSON.stringify({ display_name: editing.display_name, role: editing.role }) }); setEditing(null); }); }}><input aria-label="Edit display name" value={editing.display_name} onChange={(event) => setEditing({ ...editing, display_name: event.target.value })} /><select aria-label="Edit role" value={editing.role} onChange={(event) => setEditing({ ...editing, role: event.target.value as MembershipRole })}><option value="DRIVER">Driver / Operator</option><option value="SUPERVISOR">Supervisor</option></select><button type="submit">Save</button><button className="secondary" type="button" onClick={() => setEditing(null)}>Cancel</button></form> : <div className="table-row" key={person.membership_id}><div><strong>{person.display_name}</strong><small>{person.phone}</small></div><span>{title(person.role)}</span><span className={`badge ${person.status === "ACTIVE" ? "active" : ""}`}>{person.status}</span><span>{person.current_asset_code ? `${person.current_asset_code} · ${person.current_site_name}` : person.sites.map((site) => site.site_name).join(", ") || "No current allocation"}</span><div className="row-actions"><button className="secondary" type="button" onClick={() => setEditing(person)}>Edit</button><button className="secondary" type="button" onClick={() => void act(setError, reload, () => apiRequest(`/api/v1/owner/people/${person.membership_id}/${person.status === "INACTIVE" ? "reactivate" : "deactivate"}`, { method: "POST" }))}>{person.status === "INACTIVE" ? "Reactivate" : "Deactivate"}</button></div></div>)}</div>
-  </section>;
-}
+type AssetDraft = {
+  asset_type: FleetAssetType;
+  ownership_type: AssetOwnershipType;
+  registration_number: string;
+  short_name: string;
+  manufacturer: string;
+  model: string;
+  rental_party_name: string;
+  rental_start_date: string;
+  rental_end_date: string;
+};
 
-export function SitesPanel({ sites, people, apiRequest, reload, setError }: Common & { sites: OwnerSite[]; people: OwnerPerson[] }) {
-  const [query, setQuery] = useState(""); const [name, setName] = useState(""); const [code, setCode] = useState(""); const [location, setLocation] = useState(""); const [editing, setEditing] = useState<OwnerSite | null>(null); const [grant, setGrant] = useState<Record<string, string>>({});
-  const supervisors = people.filter((person) => person.role === "SUPERVISOR" && person.status === "ACTIVE");
-  const shown = sites.filter((site) => `${site.name} ${site.code ?? ""} ${site.location_description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
-  return <section><div className="section-heading"><div><h2>Sites</h2><p className="muted">Maintain work sites and the Supervisors allowed to review each site.</p></div><input aria-label="Search sites" placeholder="Search sites" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-    <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void act(setError, reload, async () => { await apiRequest("/api/v1/owner/sites", { method: "POST", body: JSON.stringify({ name, code: code || null, location_description: location || null }) }); setName(""); setCode(""); setLocation(""); }); }}><input aria-label="Site name" placeholder="Site name" value={name} onChange={(event) => setName(event.target.value)} required /><input aria-label="Site code" placeholder="Code" value={code} onChange={(event) => setCode(event.target.value)} /><input aria-label="Site location" placeholder="Location description" value={location} onChange={(event) => setLocation(event.target.value)} /><button type="submit">Add site</button></form>
-    <div className="management-grid">{shown.map((site) => <article className="management-card" key={site.id}>{editing?.id === site.id ? <form className="stack" onSubmit={(event) => { event.preventDefault(); void act(setError, reload, async () => { await apiRequest(`/api/v1/owner/sites/${site.id}`, { method: "PATCH", body: JSON.stringify({ name: editing.name, code: editing.code || null, location_description: editing.location_description || null }) }); setEditing(null); }); }}><input aria-label="Edit site name" value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /><input aria-label="Edit site code" value={editing.code ?? ""} onChange={(event) => setEditing({ ...editing, code: event.target.value || null })} /><input aria-label="Edit location" value={editing.location_description ?? ""} onChange={(event) => setEditing({ ...editing, location_description: event.target.value || null })} /><div className="row-actions"><button type="submit">Save</button><button className="secondary" type="button" onClick={() => setEditing(null)}>Cancel</button></div></form> : <><div className="card-title"><div><h3>{site.name}</h3><p className="muted">{site.code || "No code"} · {site.location_description || "No location"}</p></div><Badge status={site.status} /></div><p>{site.asset_count} deployed asset{site.asset_count === 1 ? "" : "s"}</p><div className="chip-list">{site.supervisors.map((supervisor) => <span className="chip" key={supervisor.membership_id}>{supervisor.display_name}<button aria-label={`Revoke ${supervisor.display_name} from ${site.name}`} type="button" onClick={() => void act(setError, reload, () => apiRequest(`/api/v1/owner/sites/${site.id}/supervisors/${supervisor.membership_id}`, { method: "DELETE" }))}>×</button></span>)}</div><div className="row-actions"><button className="secondary" type="button" onClick={() => setEditing(site)}>Edit</button><button className="secondary" type="button" onClick={() => void act(setError, reload, () => apiRequest(`/api/v1/owner/sites/${site.id}/${site.status === "ACTIVE" ? "deactivate" : "reactivate"}`, { method: "POST" }))}>{site.status === "ACTIVE" ? "Deactivate" : "Reactivate"}</button></div></>}
-      {site.status === "ACTIVE" && <form className="inline-form compact" onSubmit={(event) => { event.preventDefault(); const supervisor = grant[site.id]; if (!supervisor) return; void act(setError, reload, () => apiRequest(`/api/v1/owner/sites/${site.id}/supervisors`, { method: "POST", body: JSON.stringify({ supervisor_membership_id: supervisor }) })); }}><select aria-label={`Supervisor for ${site.name}`} value={grant[site.id] ?? ""} onChange={(event) => setGrant({ ...grant, [site.id]: event.target.value })} required><option value="">Choose Supervisor…</option>{supervisors.filter((person) => !site.supervisors.some((item) => item.membership_id === person.membership_id)).map((person) => <option key={person.membership_id} value={person.membership_id}>{person.display_name}</option>)}</select><button type="submit">Grant access</button></form>}</article>)}</div>
-  </section>;
-}
+const blankAsset: AssetDraft = {
+  asset_type: "TIPPER", ownership_type: "OWNED", registration_number: "", short_name: "",
+  manufacturer: "", model: "", rental_party_name: "", rental_start_date: "", rental_end_date: "",
+};
 
-type AssetDraft = { asset_type: FleetAssetType; ownership_type: AssetOwnershipType; asset_code: string; registration_number: string; short_name: string; manufacturer: string; model: string; rental_party_name: string; rental_start_date: string; rental_end_date: string };
-const blankAsset: AssetDraft = { asset_type: "TIPPER", ownership_type: "OWNED", asset_code: "", registration_number: "", short_name: "", manufacturer: "", model: "", rental_party_name: "", rental_start_date: "", rental_end_date: "" };
-
-function AssetFields({ draft, setDraft, editing = false }: { draft: AssetDraft; setDraft: (draft: AssetDraft) => void; editing?: boolean }) {
+function AssetFields({ draft, editing, setDraft }: { draft: AssetDraft; editing: boolean; setDraft: (draft: AssetDraft) => void }) {
   const machinery = draft.asset_type !== "TIPPER";
-  return <><label>Asset type<select disabled={editing} value={draft.asset_type} onChange={(event) => setDraft({ ...draft, asset_type: event.target.value as FleetAssetType })}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label><label>Ownership<select value={draft.ownership_type} onChange={(event) => setDraft({ ...draft, ownership_type: event.target.value as AssetOwnershipType })}><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label><label>Asset code<input value={draft.asset_code} onChange={(event) => setDraft({ ...draft, asset_code: event.target.value })} required /></label>{!machinery && <label>Registration<input value={draft.registration_number} onChange={(event) => setDraft({ ...draft, registration_number: event.target.value })} required /></label>}<label>Short name<input value={draft.short_name} onChange={(event) => setDraft({ ...draft, short_name: event.target.value })} required={machinery} /></label><label>Manufacturer<input value={draft.manufacturer} onChange={(event) => setDraft({ ...draft, manufacturer: event.target.value })} /></label><label>Model<input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label>{draft.ownership_type === "RENTED" && <><label>Rental party<input value={draft.rental_party_name} onChange={(event) => setDraft({ ...draft, rental_party_name: event.target.value })} required /></label><label>Rental start<input type="date" value={draft.rental_start_date} onChange={(event) => setDraft({ ...draft, rental_start_date: event.target.value })} /></label><label>Rental end<input type="date" value={draft.rental_end_date} onChange={(event) => setDraft({ ...draft, rental_end_date: event.target.value })} /></label></>}</>;
+  return (
+    <div className="owner-form-grid">
+      <label>Asset type<select aria-label="Asset type" disabled={editing} onChange={(event) => setDraft({ ...draft, asset_type: event.target.value as FleetAssetType })} value={draft.asset_type}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
+      <label>Ownership<select aria-label="Ownership" onChange={(event) => setDraft({ ...draft, ownership_type: event.target.value as AssetOwnershipType })} value={draft.ownership_type}><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label>
+      {!machinery && <label>Registration<input aria-label="Registration" onChange={(event) => setDraft({ ...draft, registration_number: event.target.value })} required value={draft.registration_number} /></label>}
+      <label>Short name<input aria-label="Short name" onChange={(event) => setDraft({ ...draft, short_name: event.target.value })} placeholder={machinery ? "e.g. North excavator" : "e.g. BENZ-1"} required={machinery} value={draft.short_name} /></label>
+      <label>Manufacturer<input aria-label="Manufacturer" onChange={(event) => setDraft({ ...draft, manufacturer: event.target.value })} value={draft.manufacturer} /></label>
+      <label>Model<input aria-label="Model" onChange={(event) => setDraft({ ...draft, model: event.target.value })} value={draft.model} /></label>
+      {draft.ownership_type === "RENTED" && <><label>Rental party<input aria-label="Rental party" onChange={(event) => setDraft({ ...draft, rental_party_name: event.target.value })} required value={draft.rental_party_name} /></label><label>Rental start<input aria-label="Rental start" onChange={(event) => setDraft({ ...draft, rental_start_date: event.target.value })} type="date" value={draft.rental_start_date} /></label><label>Rental end<input aria-label="Rental end" onChange={(event) => setDraft({ ...draft, rental_end_date: event.target.value })} type="date" value={draft.rental_end_date} /></label></>}
+    </div>
+  );
 }
 
 function assetPayload(draft: AssetDraft, includeType: boolean) {
-  return { ...(includeType ? { asset_type: draft.asset_type } : {}), ownership_type: draft.ownership_type, asset_code: draft.asset_code, registration_number: draft.registration_number || null, short_name: draft.short_name || null, manufacturer: draft.manufacturer || null, model: draft.model || null, rental_party_name: draft.ownership_type === "RENTED" ? draft.rental_party_name || null : null, rental_start_date: draft.ownership_type === "RENTED" ? draft.rental_start_date || null : null, rental_end_date: draft.ownership_type === "RENTED" ? draft.rental_end_date || null : null };
+  return {
+    ...(includeType ? { asset_type: draft.asset_type } : {}),
+    ownership_type: draft.ownership_type,
+    registration_number: draft.registration_number || null,
+    short_name: draft.short_name || null,
+    manufacturer: draft.manufacturer || null,
+    model: draft.model || null,
+    rental_party_name: draft.ownership_type === "RENTED" ? draft.rental_party_name || null : null,
+    rental_start_date: draft.ownership_type === "RENTED" ? draft.rental_start_date || null : null,
+    rental_end_date: draft.ownership_type === "RENTED" ? draft.rental_end_date || null : null,
+  };
 }
 
-export function FleetPanel({ assets, apiRequest, reload, setError }: Common & { assets: OwnerAsset[] }) {
-  const [draft, setDraft] = useState<AssetDraft>(blankAsset); const [editingId, setEditingId] = useState(""); const [query, setQuery] = useState(""); const [typeFilter, setTypeFilter] = useState(""); const [ownershipFilter, setOwnershipFilter] = useState(""); const [statusFilter, setStatusFilter] = useState("");
-  const shown = assets.filter((asset) => (!query || `${asset.asset_code} ${asset.registration_number ?? ""} ${asset.short_name ?? ""}`.toLowerCase().includes(query.toLowerCase())) && (!typeFilter || asset.asset_type === typeFilter) && (!ownershipFilter || asset.ownership_type === ownershipFilter) && (!statusFilter || asset.status === statusFilter));
-  const edit = (asset: OwnerAsset) => { setEditingId(asset.id); setDraft({ asset_type: asset.asset_type, ownership_type: asset.ownership_type, asset_code: asset.asset_code, registration_number: asset.registration_number ?? "", short_name: asset.short_name ?? "", manufacturer: asset.manufacturer ?? "", model: asset.model ?? "", rental_party_name: asset.rental_party_name ?? "", rental_start_date: asset.rental_start_date ?? "", rental_end_date: asset.rental_end_date ?? "" }); };
-  return <section><h2>Fleet</h2><p className="muted">Manage Tippers and heavy machinery across owned and rented fleets.</p><form className="form-grid asset-form" onSubmit={(event) => { event.preventDefault(); const endpoint = editingId ? `/api/v1/owner/assets/${editingId}` : "/api/v1/owner/assets"; void act(setError, reload, async () => { await apiRequest(endpoint, { method: editingId ? "PATCH" : "POST", body: JSON.stringify(assetPayload(draft, !editingId)) }); setEditingId(""); setDraft(blankAsset); }); }}><AssetFields draft={draft} setDraft={setDraft} editing={Boolean(editingId)} /><div className="row-actions"><button type="submit">{editingId ? "Save asset" : "Add asset"}</button>{editingId && <button className="secondary" type="button" onClick={() => { setEditingId(""); setDraft(blankAsset); }}>Cancel</button>}</div></form>
-    <div className="filter-bar"><input aria-label="Search fleet" placeholder="Search fleet" value={query} onChange={(event) => setQuery(event.target.value)} /><select aria-label="Filter asset type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="">All asset types</option>{assetTypes.map((type) => <option value={type} key={type}>{title(type)}</option>)}</select><select aria-label="Filter ownership" value={ownershipFilter} onChange={(event) => setOwnershipFilter(event.target.value)}><option value="">Owned and rented</option><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select><select aria-label="Filter status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></div>
-    <div className="management-grid">{shown.map((asset) => { const capability = assetCapabilities[asset.asset_type]; return <article className="management-card" key={asset.id}><div className="card-title"><div><h3>{assetLabel(asset)}</h3><p className="muted">{asset.asset_code}</p></div><Badge status={asset.status} /></div><p><strong>{title(asset.asset_type)}</strong> · {title(asset.ownership_type)}</p><p>{[asset.manufacturer, asset.model].filter(Boolean).join(" ") || "Manufacturer/model not set"}</p>{asset.ownership_type === "RENTED" && <p>Rented from {asset.rental_party_name || "unspecified party"}</p>}<div className="chip-list">{capability.trips && <span className="chip">Trips</span>}{capability.odometer && <span className="chip">Odometer</span>}{capability.hourMeter && <span className="chip">HMR</span>}<span className="chip">Diesel</span><span className="chip">Duty</span></div><p className="muted">{asset.current_deployment ? `At ${asset.current_deployment.site_name}` : "Undeployed"} · {asset.active_assignment ? `Assigned to ${asset.active_assignment.driver_name}` : "Unassigned"}</p><div className="row-actions"><button className="secondary" type="button" onClick={() => edit(asset)}>Edit</button><button className="secondary" type="button" onClick={() => void act(setError, reload, () => apiRequest(`/api/v1/owner/assets/${asset.id}/${asset.status === "ACTIVE" ? "deactivate" : "reactivate"}`, { method: "POST" }))}>{asset.status === "ACTIVE" ? "Deactivate" : "Reactivate"}</button></div></article>; })}</div>
-  </section>;
+type FleetSort = "name" | "registration" | "type" | "ownership" | "site" | "status";
+
+export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[] }) {
+  const mutation = useOwnerAction({ reload, setError });
+  const [draft, setDraft] = useState<AssetDraft>(blankAsset);
+  const [editingId, setEditingId] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [ownershipFilter, setOwnershipFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [siteFilter, setSiteFilter] = useState("");
+  const [sortKey, setSortKey] = useState<FleetSort>("name");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [confirmAsset, setConfirmAsset] = useState<OwnerAsset | null>(null);
+
+  const shown = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const filtered = assets.filter((asset) => (!normalizedQuery || assetSearchText(asset).includes(normalizedQuery)) && (!typeFilter || asset.asset_type === typeFilter) && (!ownershipFilter || asset.ownership_type === ownershipFilter) && (!statusFilter || asset.status === statusFilter) && (!siteFilter || asset.current_deployment?.site_id === siteFilter));
+    const value = (asset: OwnerAsset) => sortKey === "name" ? assetLabel(asset) : sortKey === "registration" ? asset.registration_number : sortKey === "type" ? asset.asset_type : sortKey === "ownership" ? asset.ownership_type : sortKey === "site" ? asset.current_deployment?.site_name : asset.status;
+    return [...filtered].sort((left, right) => { const result = compareText(value(left), value(right)); return sortDirection === "asc" ? result : -result; });
+  }, [assets, ownershipFilter, query, siteFilter, sortDirection, sortKey, statusFilter, typeFilter]);
+
+  const changeSort = (next: FleetSort) => { const value = toggleSort(sortKey, next, sortDirection); setSortKey(value.key); setSortDirection(value.direction); };
+  const edit = (asset: OwnerAsset) => {
+    setEditingId(asset.id);
+    setDraft({ asset_type: asset.asset_type, ownership_type: asset.ownership_type, registration_number: asset.registration_number ?? "", short_name: asset.short_name ?? "", manufacturer: asset.manufacturer ?? "", model: asset.model ?? "", rental_party_name: asset.rental_party_name ?? "", rental_start_date: asset.rental_start_date ?? "", rental_end_date: asset.rental_end_date ?? "" });
+    setFormOpen(true);
+  };
+  const closeForm = () => { setDraft(blankAsset); setEditingId(""); setFormOpen(false); };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const endpoint = editingId ? `/api/v1/owner/assets/${editingId}` : "/api/v1/owner/assets";
+    const ok = await mutation.run(editingId ? "Asset updated." : "Asset added.", () => apiRequest(endpoint, { method: editingId ? "PATCH" : "POST", body: JSON.stringify(assetPayload(draft, !editingId)) }));
+    if (ok) closeForm();
+  };
+
+  return (
+    <section className="owner-panel">
+      <PanelHeading description="Search and manage the complete owned and rented fleet. Internal asset codes are generated automatically." eyebrow="Fleet management" title="Fleet" action={<button onClick={() => { setEditingId(""); setDraft(blankAsset); setFormOpen(true); }} type="button">Add asset</button>} />
+      <InlineFeedback error={mutation.localError} success={mutation.success} />
+      {formOpen && <form className="owner-form-panel" onSubmit={(event) => void submit(event)}><div className="owner-form-heading"><div><h3>{editingId ? "Edit asset" : "Add asset"}</h3><p>Use the operational name and registration. The internal code is handled by Fleet Manager.</p></div></div><AssetFields draft={draft} editing={Boolean(editingId)} setDraft={setDraft} /><div className="owner-form-actions"><button className="secondary" onClick={closeForm} type="button">Cancel</button><button disabled={mutation.busy} type="submit">{editingId ? "Save asset" : "Create asset"}</button></div></form>}
+      <FilterToolbar>
+        <label className="owner-search-field"><span>Search fleet</span><input aria-label="Search fleet" onChange={(event) => setQuery(event.target.value)} placeholder="Name, registration, site or operator" type="search" value={query} /></label>
+        <label>Asset type<select aria-label="Filter asset type" onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}><option value="">All types</option>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
+        <label>Ownership<select aria-label="Filter ownership" onChange={(event) => setOwnershipFilter(event.target.value)} value={ownershipFilter}><option value="">Owned and rented</option><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label>
+        <label>Status<select aria-label="Filter status" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
+        <label>Site<select aria-label="Filter site" onChange={(event) => setSiteFilter(event.target.value)} value={siteFilter}><option value="">All sites</option>{sites.filter((site) => site.status === "ACTIVE").map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>
+      </FilterToolbar>
+      <OperationsTable label="Fleet assets">
+        <thead><tr>
+          <th aria-sort={sortKey === "name" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "name"} direction={sortDirection} label="Short name" onClick={() => changeSort("name")} /></th>
+          <th aria-sort={sortKey === "registration" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "registration"} direction={sortDirection} label="Registration" onClick={() => changeSort("registration")} /></th>
+          <th scope="col"><SortButton active={sortKey === "type"} direction={sortDirection} label="Type" onClick={() => changeSort("type")} /></th>
+          <th scope="col"><SortButton active={sortKey === "ownership"} direction={sortDirection} label="Ownership" onClick={() => changeSort("ownership")} /></th>
+          <th scope="col">Manufacturer / model</th><th scope="col"><SortButton active={sortKey === "site"} direction={sortDirection} label="Current site" onClick={() => changeSort("site")} /></th><th scope="col">Driver / Operator</th><th scope="col">Duty</th>
+          <th scope="col"><SortButton active={sortKey === "status"} direction={sortDirection} label="Asset status" onClick={() => changeSort("status")} /></th><th scope="col">Actions</th>
+        </tr></thead>
+        <tbody>
+          {shown.length === 0 && <EmptyTableRow colSpan={10} detail="Adjust the search or filters, or add the first asset." title="No fleet assets match" />}
+          {shown.map((asset) => { const person = personForAsset(asset, people); return <tr key={asset.id}>
+            <td data-label="Short name"><strong>{assetLabel(asset)}</strong><details className="owner-technical"><summary>Technical details</summary><code>{asset.asset_code}</code></details></td>
+            <td data-label="Registration"><strong>{asset.registration_number || "—"}</strong></td><td data-label="Type">{title(asset.asset_type)}</td>
+            <td data-label="Ownership"><StatusChip status={asset.ownership_type} />{asset.ownership_type === "RENTED" && <small>{asset.rental_party_name || "Rental party not set"}</small>}</td>
+            <td data-label="Manufacturer / model">{[asset.manufacturer, asset.model].filter(Boolean).join(" ") || "—"}</td><td data-label="Current site">{asset.current_deployment?.site_name || <span className="owner-dim">Undeployed</span>}</td><td data-label="Driver / Operator">{asset.active_assignment?.driver_name || <span className="owner-dim">Unassigned</span>}</td>
+            <td data-label="Duty">{person?.has_active_duty ? <StatusChip label="On duty" status="ON_DUTY" /> : <StatusChip label={asset.has_active_assignment ? "Off duty" : "Not assigned"} status="AVAILABLE" />}</td><td data-label="Asset status"><StatusChip status={asset.status} /></td>
+            <td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => edit(asset)} type="button">Edit</button>{asset.status === "ACTIVE" ? <button className="owner-text-button owner-text-button--danger" onClick={() => setConfirmAsset(asset)} type="button">Deactivate</button> : <button className="owner-text-button" onClick={() => void mutation.run("Asset reactivated.", () => apiRequest(`/api/v1/owner/assets/${asset.id}/reactivate`, { method: "POST" }))} type="button">Reactivate</button>}</div></td>
+          </tr>; })}
+        </tbody>
+      </OperationsTable>
+      <ConfirmDialog busy={mutation.busy} confirmLabel="Deactivate" description={confirmAsset ? `Deactivate ${assetLabel(confirmAsset)}? Historical records will be preserved.` : ""} onCancel={() => setConfirmAsset(null)} onConfirm={() => { if (!confirmAsset) return; void mutation.run("Asset deactivated.", () => apiRequest(`/api/v1/owner/assets/${confirmAsset.id}/deactivate`, { method: "POST" })).then((ok) => { if (ok) setConfirmAsset(null); }); }} open={Boolean(confirmAsset)} title={`Deactivate ${confirmAsset ? assetLabel(confirmAsset) : "asset"}`} />
+    </section>
+  );
 }
 
-export function DeploymentsPanel({ assets, sites, apiRequest, reload, setError }: Common & { assets: OwnerAsset[]; sites: OwnerSite[] }) {
-  const selectable = assets.filter((asset) => asset.status === "ACTIVE"); const activeSites = sites.filter((site) => site.status === "ACTIVE"); const [assetId, setAssetId] = useState(""); const [siteId, setSiteId] = useState(""); const [history, setHistory] = useState<AssetSiteDeployment[]>([]); const selected = assets.find((asset) => asset.id === assetId);
-  useEffect(() => { if (!assetId) return; void apiRequest<AssetSiteDeployment[]>(`/api/v1/owner/assets/${assetId}/deployments`).then(setHistory).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load deployment history.")); }, [apiRequest, assetId, setError]);
-  return <section><h2>Deployments</h2><p className="muted">Deploy an asset before assigning a Driver / Operator. Moving an actively assigned asset is blocked by the server.</p><form className="form-grid" onSubmit={(event) => { event.preventDefault(); void act(setError, reload, () => apiRequest(`/api/v1/owner/assets/${assetId}/deployment`, { method: "POST", body: JSON.stringify({ site_id: siteId }) })); }}><Select label="Asset" value={assetId} onChange={(value) => { setAssetId(value); setHistory([]); }} options={selectable.map((asset) => [asset.id, `${assetLabel(asset)} · ${title(asset.asset_type)}`])} /><Select label="Site" value={siteId} onChange={setSiteId} options={activeSites.map((site) => [site.id, site.name])} /><button type="submit">{selected?.current_deployment ? "Move asset" : "Deploy asset"}</button></form>{selected && <article className="management-card"><h3>Current deployment</h3><p>{selected.current_deployment ? `${assetLabel(selected)} is at ${selected.current_deployment.site_name}.` : `${assetLabel(selected)} is undeployed.`}</p>{selected.current_deployment && <button className="secondary" type="button" onClick={() => void act(setError, reload, () => apiRequest(`/api/v1/owner/assets/${assetId}/deployment`, { method: "DELETE" }))}>Remove deployment</button>}<h3>History</h3><div className="table-card">{history.length === 0 && <p className="empty-state">No deployment history.</p>}{history.map((item) => <div className="table-row" key={item.id}><strong>{item.site_name}</strong><span>{new Date(item.starts_at).toLocaleString()}</span><span>{item.ends_at ? `Ended ${new Date(item.ends_at).toLocaleString()}` : "Current"}</span></div>)}</div></article>}</section>;
+export function PeoplePanel({ people, assets = [], apiRequest, reload, setError }: Common & { people: OwnerPerson[]; assets?: OwnerAsset[] }) {
+  const mutation = useOwnerAction({ reload, setError });
+  const [query, setQuery] = useState(""); const [roleFilter, setRoleFilter] = useState(""); const [statusFilter, setStatusFilter] = useState("");
+  const [phone, setPhone] = useState(""); const [name, setName] = useState(""); const [role, setRole] = useState<"DRIVER" | "SUPERVISOR">("DRIVER");
+  const [inviteOpen, setInviteOpen] = useState(false); const [editing, setEditing] = useState<OwnerPerson | null>(null); const [confirmPerson, setConfirmPerson] = useState<OwnerPerson | null>(null); const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const shown = useMemo(() => { const normalizedQuery = query.trim().toLowerCase(); return people.filter((person) => person.role !== "OWNER_ADMIN").filter((person) => !normalizedQuery || `${person.display_name} ${person.phone} ${person.role} ${person.current_site_name ?? ""}`.toLowerCase().includes(normalizedQuery)).filter((person) => !roleFilter || person.role === roleFilter).filter((person) => !statusFilter || person.status === statusFilter).sort((left, right) => (sortDirection === "asc" ? 1 : -1) * compareText(left.display_name, right.display_name)); }, [people, query, roleFilter, sortDirection, statusFilter]);
+  const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
+  const invite = async (event: FormEvent) => { event.preventDefault(); const ok = await mutation.run("Invitation saved. This person can now be pre-assigned.", () => apiRequest("/api/v1/owner/people/invite", { method: "POST", body: JSON.stringify({ phone, display_name: name, role }) })); if (ok) { setPhone(""); setName(""); setInviteOpen(false); } };
+  const savePerson = async (event: FormEvent) => { event.preventDefault(); if (!editing) return; const ok = await mutation.run("Person updated.", () => apiRequest(`/api/v1/owner/people/${editing.membership_id}`, { method: "PATCH", body: JSON.stringify({ display_name: editing.display_name, role: editing.role }) })); if (ok) setEditing(null); };
+  return (
+    <section className="owner-panel">
+      <PanelHeading action={<button onClick={() => setInviteOpen(true)} type="button">Invite person</button>} description="Prepare Drivers, Operators, and Supervisors before their first mobile login." eyebrow="Organization" title="People" />
+      <div className="owner-lifecycle-guide" role="note"><div><StatusChip status="INVITED" /><span>Saved and assignable; first login/onboarding is not yet complete.</span></div><div><StatusChip status="ACTIVE" /><span>Onboarding accepted and able to sign in.</span></div><div><StatusChip label="Deactivated" status="DEACTIVATED" /><span>Cannot sign in or receive a new assignment.</span></div></div>
+      <InlineFeedback error={mutation.localError} success={mutation.success} />
+      {inviteOpen && <form className="owner-form-panel owner-form-panel--compact" onSubmit={(event) => void invite(event)}><div className="owner-form-heading"><div><h3>Invite person</h3><p>An invited Driver / Operator can be assigned before completing first login.</p></div></div><div className="owner-form-grid"><label>Phone<input aria-label="Person phone" onChange={(event) => setPhone(event.target.value)} placeholder="Phone in E.164" required value={phone} /></label><label>Display name<input aria-label="Display name" onChange={(event) => setName(event.target.value)} required value={name} /></label><label>Role<select aria-label="Role" onChange={(event) => setRole(event.target.value as typeof role)} value={role}><option value="DRIVER">Driver / Operator</option><option value="SUPERVISOR">Supervisor</option></select></label></div><div className="owner-form-actions"><button className="secondary" onClick={() => setInviteOpen(false)} type="button">Cancel</button><button disabled={mutation.busy} type="submit">Send invitation</button></div></form>}
+      <FilterToolbar><label className="owner-search-field"><span>Search people</span><input aria-label="Search people" onChange={(event) => setQuery(event.target.value)} placeholder="Name, phone, site or role" type="search" value={query} /></label><label>Role<select aria-label="Filter people role" onChange={(event) => setRoleFilter(event.target.value)} value={roleFilter}><option value="">All roles</option><option value="DRIVER">Driver / Operator</option><option value="SUPERVISOR">Supervisor</option></select></label><label>Lifecycle<select aria-label="Filter people lifecycle" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="">All lifecycle states</option><option value="INVITED">Invited</option><option value="ACTIVE">Active</option><option value="INACTIVE">Deactivated</option></select></label></FilterToolbar>
+      <OperationsTable label="People"><thead><tr><th aria-sort={sortDirection === "asc" ? "ascending" : "descending"} scope="col"><SortButton active direction={sortDirection} label="Name" onClick={() => setSortDirection((value) => value === "asc" ? "desc" : "asc")} /></th><th scope="col">Phone</th><th scope="col">Role</th><th scope="col">Lifecycle</th><th scope="col">Current asset</th><th scope="col">Current site</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead><tbody>
+        {shown.length === 0 && <EmptyTableRow colSpan={8} detail="Adjust the filters or invite the first person." title="No people match" />}
+        {shown.map((person) => { const currentAsset = person.current_asset_id ? assetById.get(person.current_asset_id) : undefined; const operationalStatus = person.has_active_duty ? "On duty" : person.has_active_assignment ? "Assigned · off duty" : person.role === "DRIVER" ? "Available" : `${person.sites.length} site${person.sites.length === 1 ? "" : "s"}`; return <tr key={person.membership_id}><td data-label="Name"><strong>{person.display_name}</strong></td><td data-label="Phone">{person.phone}</td><td data-label="Role">{title(person.role)}</td><td data-label="Lifecycle"><StatusChip label={person.status === "INACTIVE" ? "Deactivated" : undefined} status={person.status === "INACTIVE" ? "DEACTIVATED" : person.status} /></td><td data-label="Current asset">{currentAsset ? <><strong>{assetLabel(currentAsset)}</strong><small>{currentAsset.registration_number || title(currentAsset.asset_type)}</small></> : <span className="owner-dim">—</span>}</td><td data-label="Current site">{person.current_site_name || person.sites.map((site) => site.site_name).join(", ") || <span className="owner-dim">—</span>}</td><td data-label="Status"><StatusChip label={operationalStatus} status={person.has_active_duty ? "ON_DUTY" : person.has_active_assignment ? "ASSIGNED" : "AVAILABLE"} /></td><td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => setEditing({ ...person })} type="button">Edit</button>{person.status === "INACTIVE" ? <button className="owner-text-button" onClick={() => void mutation.run("Person reactivated.", () => apiRequest(`/api/v1/owner/people/${person.membership_id}/reactivate`, { method: "POST" }))} type="button">Reactivate</button> : <button className="owner-text-button owner-text-button--danger" onClick={() => setConfirmPerson(person)} type="button">Deactivate</button>}</div></td></tr>; })}
+      </tbody></OperationsTable>
+      <DetailsDialog onClose={() => setEditing(null)} open={Boolean(editing)} title="Edit person">{editing && <form className="owner-dialog-form" onSubmit={(event) => void savePerson(event)}><label>Display name<input aria-label="Edit display name" onChange={(event) => setEditing({ ...editing, display_name: event.target.value })} required value={editing.display_name} /></label><label>Role<select aria-label="Edit role" disabled={editing.status !== "INVITED"} onChange={(event) => setEditing({ ...editing, role: event.target.value as MembershipRole })} value={editing.role}><option value="DRIVER">Driver / Operator</option><option value="SUPERVISOR">Supervisor</option></select><small>{editing.status === "INVITED" ? "Role can be changed until first login." : "Role is fixed after invitation acceptance."}</small></label><div className="owner-form-actions"><button className="secondary" onClick={() => setEditing(null)} type="button">Cancel</button><button disabled={mutation.busy} type="submit">Save person</button></div></form>}</DetailsDialog>
+      <ConfirmDialog busy={mutation.busy} confirmLabel="Deactivate" description={confirmPerson ? `Deactivate ${confirmPerson.display_name}? They will no longer be able to sign in or receive a new assignment.` : ""} onCancel={() => setConfirmPerson(null)} onConfirm={() => { if (!confirmPerson) return; void mutation.run("Person deactivated.", () => apiRequest(`/api/v1/owner/people/${confirmPerson.membership_id}/deactivate`, { method: "POST" })).then((ok) => { if (ok) setConfirmPerson(null); }); }} open={Boolean(confirmPerson)} title={`Deactivate ${confirmPerson?.display_name ?? "person"}`} />
+    </section>
+  );
 }
 
-export function AssignmentsPanel({ assets, apiRequest, reload, setError }: Common & { assets: OwnerAsset[] }) {
-  const selectable = assets.filter((asset) => asset.status === "ACTIVE" && asset.current_deployment); const [assetId, setAssetId] = useState(""); const [driverId, setDriverId] = useState(""); const [minutes, setMinutes] = useState("600"); const [eligible, setEligible] = useState<DriverCandidate[]>([]); const [history, setHistory] = useState<DriverAssetAssignment[]>([]); const selected = assets.find((asset) => asset.id === assetId);
-  useEffect(() => { if (!assetId) return; Promise.all([apiRequest<DriverCandidate[]>(`/api/v1/owner/assets/${assetId}/eligible-drivers`), apiRequest<DriverAssetAssignment[]>(`/api/v1/owner/assets/${assetId}/assignments`)]).then(([drivers, items]) => { setEligible(drivers); setHistory(items); }).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load assignment options.")); }, [apiRequest, assetId, setError]);
-  const candidates = useMemo(() => selected?.active_assignment ? [{ membership_id: selected.active_assignment.driver_membership_id, display_name: selected.active_assignment.driver_name }, ...eligible.filter((item) => item.membership_id !== selected.active_assignment?.driver_membership_id)] : eligible, [eligible, selected]);
-  return <section><h2>Driver / Operator assignments</h2><p className="muted">Assign any deployed Tipper or machine. Regular duty is snapshotted when duty begins.</p><form className="form-grid" onSubmit={(event) => { event.preventDefault(); const suffix = selected?.has_active_assignment ? "/assignment/reassign" : "/assignment"; void act(setError, reload, () => apiRequest(`/api/v1/owner/assets/${assetId}${suffix}`, { method: "POST", body: JSON.stringify({ driver_membership_id: driverId, regular_duty_minutes: Number(minutes) }) })); }}><Select label="Deployed asset" value={assetId} onChange={(value) => { setAssetId(value); setDriverId(""); setEligible([]); setHistory([]); }} options={selectable.map((asset) => [asset.id, `${assetLabel(asset)} · ${asset.current_deployment?.site_name}`])} /><Select label="Driver / Operator" value={driverId} onChange={setDriverId} options={candidates.map((person) => [person.membership_id, person.display_name])} /><label>Regular duty<select value={minutes} onChange={(event) => setMinutes(event.target.value)}><option value="480">8 hours</option><option value="600">10 hours</option><option value="720">12 hours</option></select></label><button type="submit">{selected?.has_active_assignment ? "Reassign" : "Assign"}</button></form>{selected && <article className="management-card"><h3>Current assignment</h3><p>{selected.active_assignment ? `${selected.active_assignment.driver_name} operates ${assetLabel(selected)} at ${selected.active_assignment.site_name}.` : `${assetLabel(selected)} is unassigned.`}</p>{selected.active_assignment && <button className="secondary" type="button" onClick={() => void act(setError, reload, () => apiRequest(`/api/v1/owner/assets/${assetId}/assignment`, { method: "DELETE" }))}>Unassign</button>}<h3>History</h3><div className="table-card">{history.length === 0 && <p className="empty-state">No assignment history.</p>}{history.map((item) => <div className="table-row" key={item.assignment_id}><strong>{item.driver_name}</strong><span>{item.site_name}</span><span>{item.regular_duty_minutes / 60}h duty</span><span>{item.ends_at ? "Closed" : "Current"}</span></div>)}</div></article>}</section>;
+type SiteDraft = { name: string; short_name: string; location_description: string };
+const blankSite: SiteDraft = { name: "", short_name: "", location_description: "" };
+
+export function SitesPanel({ sites, people, apiRequest, reload, setError }: Common & { sites: OwnerSite[]; people: OwnerPerson[] }) {
+  const mutation = useOwnerAction({ reload, setError });
+  const [draft, setDraft] = useState<SiteDraft>(blankSite); const [editing, setEditing] = useState<OwnerSite | null>(null); const [formOpen, setFormOpen] = useState(false); const [query, setQuery] = useState(""); const [statusFilter, setStatusFilter] = useState(""); const [details, setDetails] = useState<OwnerSite | null>(null); const [confirmSite, setConfirmSite] = useState<OwnerSite | null>(null); const [grant, setGrant] = useState("");
+  const supervisors = people.filter((person) => person.role === "SUPERVISOR" && person.status === "ACTIVE");
+  const shown = sites.filter((site) => `${site.short_name ?? ""} ${site.name} ${site.location_description ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()) && (!statusFilter || site.status === statusFilter)).sort((left, right) => compareText(siteLabel(left), siteLabel(right)));
+  const submit = async (event: FormEvent) => { event.preventDefault(); const ok = await mutation.run("Site added.", () => apiRequest("/api/v1/owner/sites", { method: "POST", body: JSON.stringify({ name: draft.name, short_name: draft.short_name, location_description: draft.location_description || null }) })); if (ok) { setDraft(blankSite); setFormOpen(false); } };
+  const save = async (event: FormEvent) => { event.preventDefault(); if (!editing) return; const ok = await mutation.run("Site updated.", () => apiRequest(`/api/v1/owner/sites/${editing.id}`, { method: "PATCH", body: JSON.stringify({ name: editing.name, short_name: editing.short_name, location_description: editing.location_description || null }) })); if (ok) setEditing(null); };
+  return (
+    <section className="owner-panel">
+      <PanelHeading action={<button onClick={() => setFormOpen(true)} type="button">Add site</button>} description="Use a clear operational short name. Fleet Manager creates and protects the internal site code." eyebrow="Organization" title="Sites" />
+      <InlineFeedback error={mutation.localError} success={mutation.success} />
+      {formOpen && <form className="owner-form-panel owner-form-panel--compact" onSubmit={(event) => void submit(event)}><div className="owner-form-heading"><div><h3>Add site</h3><p>Site name is descriptive; short name is what teams see in daily operations.</p></div></div><div className="owner-form-grid"><label>Site name<input aria-label="Site name" onChange={(event) => setDraft({ ...draft, name: event.target.value })} required value={draft.name} /></label><label>Short name<input aria-label="Site short name" onChange={(event) => setDraft({ ...draft, short_name: event.target.value })} placeholder="e.g. ABL Roadwork" required value={draft.short_name} /></label><label>Location description<input aria-label="Site location" onChange={(event) => setDraft({ ...draft, location_description: event.target.value })} value={draft.location_description} /></label></div><div className="owner-form-actions"><button className="secondary" onClick={() => setFormOpen(false)} type="button">Cancel</button><button disabled={mutation.busy} type="submit">Create site</button></div></form>}
+      <FilterToolbar><label className="owner-search-field"><span>Search sites</span><input aria-label="Search sites" onChange={(event) => setQuery(event.target.value)} placeholder="Short name, site name or location" type="search" value={query} /></label><label>Status<select aria-label="Filter site status" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label></FilterToolbar>
+      <OperationsTable label="Sites"><thead><tr><th scope="col">Short name</th><th scope="col">Site name / location</th><th scope="col">Supervisors</th><th scope="col">Deployed assets</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead><tbody>
+        {shown.length === 0 && <EmptyTableRow colSpan={6} detail="Adjust the filters or add the first site." title="No sites match" />}
+        {shown.map((site) => <tr key={site.id}><td data-label="Short name"><strong>{siteLabel(site)}</strong></td><td data-label="Site name / location"><strong>{site.name}</strong><small>{site.location_description || "Location not set"}</small></td><td data-label="Supervisors">{site.supervisors.length ? site.supervisors.map((person) => person.display_name).join(", ") : <span className="owner-dim">None</span>}</td><td data-label="Deployed assets">{site.asset_count}</td><td data-label="Status"><StatusChip status={site.status} /></td><td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => setEditing({ ...site })} type="button">Edit</button><button className="owner-text-button" onClick={() => { setDetails(site); setGrant(""); }} type="button">Details</button>{site.status === "ACTIVE" ? <button className="owner-text-button owner-text-button--danger" onClick={() => setConfirmSite(site)} type="button">Deactivate</button> : <button className="owner-text-button" onClick={() => void mutation.run("Site reactivated.", () => apiRequest(`/api/v1/owner/sites/${site.id}/reactivate`, { method: "POST" }))} type="button">Reactivate</button>}</div></td></tr>)}
+      </tbody></OperationsTable>
+      <DetailsDialog onClose={() => setEditing(null)} open={Boolean(editing)} title="Edit site">{editing && <form className="owner-dialog-form" onSubmit={(event) => void save(event)}><label>Site name<input aria-label="Edit site name" onChange={(event) => setEditing({ ...editing, name: event.target.value })} required value={editing.name} /></label><label>Short name<input aria-label="Edit site short name" onChange={(event) => setEditing({ ...editing, short_name: event.target.value })} required value={editing.short_name ?? ""} /></label><label>Location description<input aria-label="Edit location" onChange={(event) => setEditing({ ...editing, location_description: event.target.value || null })} value={editing.location_description ?? ""} /></label><div className="owner-form-actions"><button className="secondary" onClick={() => setEditing(null)} type="button">Cancel</button><button disabled={mutation.busy} type="submit">Save site</button></div></form>}</DetailsDialog>
+      <DetailsDialog onClose={() => setDetails(null)} open={Boolean(details)} title={details ? `${siteLabel(details)} details` : "Site details"}>{details && <div className="owner-dialog-form"><dl className="owner-detail-list"><div><dt>Full site name</dt><dd>{details.name}</dd></div><div><dt>Internal code</dt><dd><code>{details.code}</code></dd></div><div><dt>Location</dt><dd>{details.location_description || "Not set"}</dd></div></dl><h3>Supervisor access</h3><div className="owner-chip-list">{details.supervisors.map((supervisor) => <span className="owner-chip" key={supervisor.membership_id}>{supervisor.display_name}<button aria-label={`Revoke ${supervisor.display_name} from ${siteLabel(details)}`} onClick={() => void mutation.run("Supervisor access removed.", () => apiRequest(`/api/v1/owner/sites/${details.id}/supervisors/${supervisor.membership_id}`, { method: "DELETE" })).then((ok) => { if (ok) setDetails(null); })} type="button">×</button></span>)}</div>{details.status === "ACTIVE" && <form className="owner-inline-operation" onSubmit={(event) => { event.preventDefault(); if (!grant) return; void mutation.run("Supervisor access granted.", () => apiRequest(`/api/v1/owner/sites/${details.id}/supervisors`, { method: "POST", body: JSON.stringify({ supervisor_membership_id: grant }) })).then((ok) => { if (ok) setDetails(null); }); }}><label>Grant Supervisor<select aria-label={`Supervisor for ${siteLabel(details)}`} onChange={(event) => setGrant(event.target.value)} required value={grant}><option value="">Choose Supervisor…</option>{supervisors.filter((person) => !details.supervisors.some((item) => item.membership_id === person.membership_id)).map((person) => <option key={person.membership_id} value={person.membership_id}>{person.display_name}</option>)}</select></label><button disabled={mutation.busy} type="submit">Grant access</button></form>}</div>}</DetailsDialog>
+      <ConfirmDialog busy={mutation.busy} confirmLabel="Deactivate" description={confirmSite ? `Deactivate ${siteLabel(confirmSite)}? Existing history remains available.` : ""} onCancel={() => setConfirmSite(null)} onConfirm={() => { if (!confirmSite) return; void mutation.run("Site deactivated.", () => apiRequest(`/api/v1/owner/sites/${confirmSite.id}/deactivate`, { method: "POST" })).then((ok) => { if (ok) setConfirmSite(null); }); }} open={Boolean(confirmSite)} title={`Deactivate ${confirmSite ? siteLabel(confirmSite) : "site"}`} />
+    </section>
+  );
+}
+
+export function DeploymentsPanel({ assets, sites, people = [], apiRequest, reload, setError }: Common & { assets: OwnerAsset[]; sites: OwnerSite[]; people?: OwnerPerson[] }) {
+  const mutation = useOwnerAction({ reload, setError });
+  const selectable = assets.filter((asset) => asset.status === "ACTIVE" && !asset.current_deployment);
+  const deployed = assets.filter((asset) => asset.current_deployment);
+  const activeSites = sites.filter((site) => site.status === "ACTIVE");
+  const [assetId, setAssetId] = useState(""); const [siteId, setSiteId] = useState(""); const [query, setQuery] = useState(""); const [moveAsset, setMoveAsset] = useState<OwnerAsset | null>(null); const [moveSiteId, setMoveSiteId] = useState(""); const [removeAsset, setRemoveAsset] = useState<OwnerAsset | null>(null); const [historyAsset, setHistoryAsset] = useState<OwnerAsset | null>(null); const [history, setHistory] = useState<AssetSiteDeployment[]>([]); const [historyLoading, setHistoryLoading] = useState(false); const [historyError, setHistoryError] = useState("");
+  const selectedAsset = assets.find((asset) => asset.id === assetId); const destination = sites.find((site) => site.id === moveSiteId); const shown = deployed.filter((asset) => !query.trim() || assetSearchText(asset).includes(query.trim().toLowerCase()));
+  const deploy = async (event: FormEvent) => { event.preventDefault(); const ok = await mutation.run("Asset deployed.", () => apiRequest(`/api/v1/owner/assets/${assetId}/deployment`, { method: "POST", body: JSON.stringify({ site_id: siteId }) })); if (ok) { setAssetId(""); setSiteId(""); } };
+  const openHistory = async (asset: OwnerAsset) => { setHistoryAsset(asset); setHistory([]); setHistoryError(""); setHistoryLoading(true); try { setHistory(await apiRequest<AssetSiteDeployment[]>(`/api/v1/owner/assets/${asset.id}/deployments`)); } catch (caught) { setHistoryError(caught instanceof Error ? caught.message : "Could not load deployment history."); } finally { setHistoryLoading(false); } };
+  return (
+    <section className="owner-panel">
+      <PanelHeading description="Deploy available assets, then manage current site placement from the table." eyebrow="Fleet management" title="Deployments" />
+      <InlineFeedback error={mutation.localError} success={mutation.success} />
+      <form className="owner-operation-strip" onSubmit={(event) => void deploy(event)}><div><p className="owner-section-eyebrow">New deployment</p><h3>Deploy asset</h3><p>Only active, currently undeployed assets are available.</p></div><label>Asset<select aria-label="Asset" onChange={(event) => setAssetId(event.target.value)} required value={assetId}><option value="">Choose undeployed asset…</option>{selectable.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset)} · {title(asset.asset_type)}</option>)}</select></label><label>Destination site<select aria-label="Destination site" onChange={(event) => setSiteId(event.target.value)} required value={siteId}><option value="">Choose site…</option>{activeSites.map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label><button disabled={mutation.busy || !selectedAsset} type="submit">Deploy asset</button></form>
+      <FilterToolbar><label className="owner-search-field"><span>Search deployed assets</span><input aria-label="Search deployed assets" onChange={(event) => setQuery(event.target.value)} placeholder="Asset, registration, site or operator" type="search" value={query} /></label></FilterToolbar>
+      <OperationsTable label="Current deployments"><thead><tr><th scope="col">Asset</th><th scope="col">Registration</th><th scope="col">Type</th><th scope="col">Ownership</th><th scope="col">Current site</th><th scope="col">Driver / Operator</th><th scope="col">Duty</th><th scope="col">Deployment date</th><th scope="col">Actions</th></tr></thead><tbody>
+        {shown.length === 0 && <EmptyTableRow colSpan={9} detail="Use Deploy asset above when an active asset and site are ready." title="No current deployments" />}
+        {shown.map((asset) => { const person = personForAsset(asset, people); return <tr key={asset.id}><td data-label="Asset"><strong>{assetLabel(asset)}</strong></td><td data-label="Registration">{asset.registration_number || "—"}</td><td data-label="Type">{title(asset.asset_type)}</td><td data-label="Ownership"><StatusChip status={asset.ownership_type} /></td><td data-label="Current site"><strong>{asset.current_deployment?.site_name}</strong></td><td data-label="Driver / Operator">{asset.active_assignment?.driver_name || <span className="owner-dim">Unassigned</span>}</td><td data-label="Duty">{person?.has_active_duty ? <StatusChip label="On duty" status="ON_DUTY" /> : <StatusChip label={asset.has_active_assignment ? "Off duty" : "Not assigned"} status="AVAILABLE" />}</td><td data-label="Deployment date">{asset.current_deployment ? dateTime(asset.current_deployment.starts_at) : "—"}</td><td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => { setMoveAsset(asset); setMoveSiteId(""); }} type="button">Move</button><button className="owner-text-button owner-text-button--danger" onClick={() => setRemoveAsset(asset)} type="button">Remove deployment</button><button className="owner-text-button" onClick={() => void openHistory(asset)} type="button">View history</button></div></td></tr>; })}
+      </tbody></OperationsTable>
+      <ConfirmDialog busy={mutation.busy} confirmDisabled={!moveSiteId} confirmLabel="Move asset" description={moveAsset && destination ? `Move ${assetLabel(moveAsset)} from ${moveAsset.current_deployment?.site_name} to ${siteLabel(destination)}?` : `Choose a new destination for ${moveAsset ? assetLabel(moveAsset) : "this asset"}.`} onCancel={() => setMoveAsset(null)} onConfirm={() => { if (!moveAsset || !moveSiteId) return; void mutation.run("Asset moved.", () => apiRequest(`/api/v1/owner/assets/${moveAsset.id}/deployment`, { method: "POST", body: JSON.stringify({ site_id: moveSiteId }) })).then((ok) => { if (ok) setMoveAsset(null); }); }} open={Boolean(moveAsset)} title={`Move ${moveAsset ? assetLabel(moveAsset) : "asset"}`}><label>Destination site<select aria-label="Move destination site" onChange={(event) => setMoveSiteId(event.target.value)} required value={moveSiteId}><option value="">Choose destination…</option>{activeSites.filter((site) => site.id !== moveAsset?.current_deployment?.site_id).map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label></ConfirmDialog>
+      <ConfirmDialog busy={mutation.busy} confirmLabel="Remove deployment" description={removeAsset ? `Remove ${assetLabel(removeAsset)} from ${removeAsset.current_deployment?.site_name}? The deployment remains in history.` : ""} onCancel={() => setRemoveAsset(null)} onConfirm={() => { if (!removeAsset) return; void mutation.run("Deployment removed.", () => apiRequest(`/api/v1/owner/assets/${removeAsset.id}/deployment`, { method: "DELETE" })).then((ok) => { if (ok) setRemoveAsset(null); }); }} open={Boolean(removeAsset)} title="Remove deployment" />
+      <DetailsDialog onClose={() => setHistoryAsset(null)} open={Boolean(historyAsset)} title={`${historyAsset ? assetLabel(historyAsset) : "Asset"} deployment history`}><InlineFeedback error={historyError} />{historyLoading ? <div aria-busy="true" className="owner-skeleton-list"><span /><span /><span /></div> : <OperationsTable label="Deployment history"><thead><tr><th scope="col">Site</th><th scope="col">Started</th><th scope="col">Ended</th><th scope="col">Status</th></tr></thead><tbody>{history.length === 0 && <EmptyTableRow colSpan={4} title="No deployment history" />}{history.map((item) => <tr key={item.id}><td data-label="Site"><strong>{item.site_name}</strong></td><td data-label="Started">{dateTime(item.starts_at)}</td><td data-label="Ended">{item.ends_at ? dateTime(item.ends_at) : "—"}</td><td data-label="Status"><StatusChip label={item.ends_at ? "Completed" : "Current"} status={item.ends_at ? "INACTIVE" : "DEPLOYED"} /></td></tr>)}</tbody></OperationsTable>}</DetailsDialog>
+    </section>
+  );
+}
+
+function candidateLabel(candidate: DriverCandidate, people: OwnerPerson[]) {
+  const person = people.find((item) => item.membership_id === candidate.membership_id);
+  return [candidate.display_name, candidate.phone ?? person?.phone, candidate.status ?? person?.status ? title(candidate.status ?? person?.status ?? "") : null].filter(Boolean).join(" · ");
+}
+
+export function AssignmentsPanel({ assets, people = [], apiRequest, reload, setError }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[] }) {
+  const mutation = useOwnerAction({ reload, setError });
+  const selectable = assets.filter((asset) => asset.status === "ACTIVE" && asset.current_deployment && !asset.has_active_assignment);
+  const assigned = assets.filter((asset) => asset.active_assignment);
+  const [assetId, setAssetId] = useState(""); const [driverId, setDriverId] = useState(""); const [minutes, setMinutes] = useState("600"); const [eligible, setEligible] = useState<DriverCandidate[]>([]); const [eligibleLoading, setEligibleLoading] = useState(false); const [eligibleError, setEligibleError] = useState(""); const [query, setQuery] = useState(""); const [reassignAsset, setReassignAsset] = useState<OwnerAsset | null>(null); const [reassignDriverId, setReassignDriverId] = useState(""); const [unassignAsset, setUnassignAsset] = useState<OwnerAsset | null>(null); const [historyAsset, setHistoryAsset] = useState<OwnerAsset | null>(null); const [history, setHistory] = useState<DriverAssetAssignment[]>([]); const [historyLoading, setHistoryLoading] = useState(false); const [historyError, setHistoryError] = useState("");
+  const selected = assets.find((asset) => asset.id === assetId); const shown = assigned.filter((asset) => !query.trim() || assetSearchText(asset).includes(query.trim().toLowerCase()));
+  const loadEligible = async (nextAssetId: string) => { setEligible([]); setEligibleError(""); if (!nextAssetId) return [] as DriverCandidate[]; setEligibleLoading(true); try { const result = await apiRequest<DriverCandidate[]>(`/api/v1/owner/assets/${nextAssetId}/eligible-drivers`); setEligible(result); return result; } catch (caught) { const message = caught instanceof Error ? caught.message : "Could not load eligible Drivers / Operators."; setEligibleError(message); setError(message); return []; } finally { setEligibleLoading(false); } };
+  const assign = async (event: FormEvent) => { event.preventDefault(); const ok = await mutation.run("Driver / Operator assigned.", () => apiRequest(`/api/v1/owner/assets/${assetId}/assignment`, { method: "POST", body: JSON.stringify({ driver_membership_id: driverId, regular_duty_minutes: Number(minutes) }) })); if (ok) { setAssetId(""); setDriverId(""); setEligible([]); } };
+  const openReassign = async (asset: OwnerAsset) => { setReassignAsset(asset); setReassignDriverId(""); setMinutes(String(asset.active_assignment?.regular_duty_minutes ?? 600)); const result = await loadEligible(asset.id); setEligible(result.filter((candidate) => candidate.membership_id !== asset.active_assignment?.driver_membership_id)); };
+  const openHistory = async (asset: OwnerAsset) => { setHistoryAsset(asset); setHistory([]); setHistoryError(""); setHistoryLoading(true); try { setHistory(await apiRequest<DriverAssetAssignment[]>(`/api/v1/owner/assets/${asset.id}/assignments`)); } catch (caught) { setHistoryError(caught instanceof Error ? caught.message : "Could not load assignment history."); } finally { setHistoryLoading(false); } };
+  return (
+    <section className="owner-panel">
+      <PanelHeading description="Pre-assign invited or active Drivers / Operators to deployed assets. Ownership does not change eligibility." eyebrow="Fleet management" title="Assignments" />
+      <InlineFeedback error={mutation.localError || eligibleError} success={mutation.success} />
+      <form className="owner-operation-strip" onSubmit={(event) => void assign(event)}><div><p className="owner-section-eyebrow">New assignment</p><h3>Assign Driver / Operator</h3><p>Only active deployed assets that still need an assignment are shown.</p></div><label>Deployed asset<select aria-label="Deployed asset" onChange={(event) => { const value = event.target.value; setAssetId(value); setDriverId(""); void loadEligible(value); }} required value={assetId}><option value="">Choose unassigned asset…</option>{selectable.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset)} · {asset.current_deployment?.site_name}</option>)}</select></label><label>Driver / Operator<select aria-label="Driver / Operator" disabled={!assetId || eligibleLoading} onChange={(event) => setDriverId(event.target.value)} required value={driverId}><option value="">{eligibleLoading ? "Loading eligible people…" : "Choose eligible person…"}</option>{eligible.map((candidate) => <option key={candidate.membership_id} value={candidate.membership_id}>{candidateLabel(candidate, people)}</option>)}</select>{assetId && !eligibleLoading && eligible.length === 0 && !eligibleError && <small>No eligible people remain. Invited and active Drivers / Operators are supported.</small>}</label><label>Regular duty<select aria-label="Regular duty" onChange={(event) => setMinutes(event.target.value)} value={minutes}><option value="480">8 hours</option><option value="600">10 hours</option><option value="720">12 hours</option></select></label><button disabled={mutation.busy || !selected || !driverId} type="submit">Assign driver</button></form>
+      <FilterToolbar><label className="owner-search-field"><span>Search assignments</span><input aria-label="Search assignments" onChange={(event) => setQuery(event.target.value)} placeholder="Asset, registration, site or operator" type="search" value={query} /></label></FilterToolbar>
+      <OperationsTable label="Current assignments"><thead><tr><th scope="col">Asset</th><th scope="col">Registration</th><th scope="col">Type</th><th scope="col">Ownership</th><th scope="col">Site</th><th scope="col">Driver / Operator</th><th scope="col">Phone</th><th scope="col">Regular duty</th><th scope="col">Duty status</th><th scope="col">Assignment since</th><th scope="col">Actions</th></tr></thead><tbody>
+        {shown.length === 0 && <EmptyTableRow colSpan={11} detail="Assign an eligible Driver / Operator using the form above." title="No current assignments" />}
+        {shown.map((asset) => { const assignment = asset.active_assignment!; const person = personForAsset(asset, people); return <tr key={asset.id}><td data-label="Asset"><strong>{assetLabel(asset)}</strong></td><td data-label="Registration">{asset.registration_number || "—"}</td><td data-label="Type">{title(asset.asset_type)}</td><td data-label="Ownership"><StatusChip status={asset.ownership_type} /></td><td data-label="Site">{assignment.site_name}</td><td data-label="Driver / Operator"><strong>{assignment.driver_name}</strong>{person?.status === "INVITED" && <small>Invited · first login pending</small>}</td><td data-label="Phone">{person?.phone || "—"}</td><td data-label="Regular duty">{(assignment.regular_duty_minutes ?? 600) / 60} hours</td><td data-label="Duty status">{person?.has_active_duty ? <StatusChip label="On duty" status="ON_DUTY" /> : <StatusChip label="Off duty" status="AVAILABLE" />}</td><td data-label="Assignment since">{dateTime(assignment.starts_at)}</td><td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => void openReassign(asset)} type="button">Reassign driver</button><button className="owner-text-button owner-text-button--danger" onClick={() => setUnassignAsset(asset)} type="button">Unassign</button><button className="owner-text-button" onClick={() => void openHistory(asset)} type="button">View history</button></div></td></tr>; })}
+      </tbody></OperationsTable>
+      <ConfirmDialog busy={mutation.busy} confirmDisabled={!reassignDriverId} confirmLabel="Reassign driver" description={reassignAsset ? `Replace ${reassignAsset.active_assignment?.driver_name} on ${assetLabel(reassignAsset)}? Active-duty safety rules still apply.` : ""} onCancel={() => setReassignAsset(null)} onConfirm={() => { if (!reassignAsset || !reassignDriverId) return; void mutation.run("Driver / Operator reassigned.", () => apiRequest(`/api/v1/owner/assets/${reassignAsset.id}/assignment/reassign`, { method: "POST", body: JSON.stringify({ driver_membership_id: reassignDriverId, regular_duty_minutes: Number(minutes) }) })).then((ok) => { if (ok) setReassignAsset(null); }); }} open={Boolean(reassignAsset)} title={`Reassign ${reassignAsset ? assetLabel(reassignAsset) : "asset"}`}><label>New Driver / Operator<select aria-label="Reassign Driver / Operator" disabled={eligibleLoading} onChange={(event) => setReassignDriverId(event.target.value)} required value={reassignDriverId}><option value="">Choose eligible person…</option>{eligible.filter((candidate) => candidate.membership_id !== reassignAsset?.active_assignment?.driver_membership_id).map((candidate) => <option key={candidate.membership_id} value={candidate.membership_id}>{candidateLabel(candidate, people)}</option>)}</select></label></ConfirmDialog>
+      <ConfirmDialog busy={mutation.busy} confirmLabel="Unassign" description={unassignAsset ? `Unassign ${unassignAsset.active_assignment?.driver_name} from ${assetLabel(unassignAsset)}? Active-duty safety rules still apply.` : ""} onCancel={() => setUnassignAsset(null)} onConfirm={() => { if (!unassignAsset) return; void mutation.run("Driver / Operator unassigned.", () => apiRequest(`/api/v1/owner/assets/${unassignAsset.id}/assignment`, { method: "DELETE" })).then((ok) => { if (ok) setUnassignAsset(null); }); }} open={Boolean(unassignAsset)} title="Unassign Driver / Operator" />
+      <DetailsDialog onClose={() => setHistoryAsset(null)} open={Boolean(historyAsset)} title={`${historyAsset ? assetLabel(historyAsset) : "Asset"} assignment history`}><InlineFeedback error={historyError} />{historyLoading ? <div aria-busy="true" className="owner-skeleton-list"><span /><span /><span /></div> : <OperationsTable label="Assignment history"><thead><tr><th scope="col">Driver / Operator</th><th scope="col">Site</th><th scope="col">Regular duty</th><th scope="col">Started</th><th scope="col">Ended</th></tr></thead><tbody>{history.length === 0 && <EmptyTableRow colSpan={5} title="No assignment history" />}{history.map((item) => <tr key={item.assignment_id}><td data-label="Driver / Operator"><strong>{item.driver_name}</strong></td><td data-label="Site">{item.site_name}</td><td data-label="Regular duty">{item.regular_duty_minutes / 60} hours</td><td data-label="Started">{dateTime(item.starts_at)}</td><td data-label="Ended">{item.ends_at ? dateTime(item.ends_at) : <StatusChip label="Current" status="ACTIVE" />}</td></tr>)}</tbody></OperationsTable>}</DetailsDialog>
+    </section>
+  );
 }

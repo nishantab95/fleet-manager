@@ -16,10 +16,10 @@ test.describe(
     await expect(page).toHaveURL(/\/owner$/);
 
     await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
-    await page.getByRole("button", { name: "Operations" }).click();
+    await expect(page.getByLabel("Live fleet readiness")).toBeVisible();
+    await page.getByRole("button", { name: "Reports", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Owner operations" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Fleet overview" })).toBeVisible();
-    for (const name of ["Fleet", "People", "Sites", "Deployments", "Assignments", "Report templates"]) {
+    for (const name of ["Operations", "Fleet", "People", "Sites", "Deployments", "Assignments", "Reports", "Report templates"]) {
       await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
     }
 
@@ -199,7 +199,7 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     await expect(emergency.getByRole("button", { name: "RESOLVE" })).toBeVisible();
     await emergency.getByRole("button", { name: "RESOLVE" }).click();
 
-    await ownerPage.getByRole("button", { name: "Operations" }).click();
+    await ownerPage.getByRole("button", { name: "Reports", exact: true }).click();
     await expect(ownerPage.getByRole("heading", { name: "Owner operations" })).toBeVisible();
     await ownerPage.getByRole("button", { name: "Refresh" }).click();
     await expect(ownerPage.getByText("Approved trips").locator(".." ).getByText("4")).toBeVisible();

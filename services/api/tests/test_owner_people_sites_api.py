@@ -187,6 +187,7 @@ def test_owner_site_crud_access_rules_and_audit(
         assert created.status_code == 201, created.text
         site_id = created.json()["id"]
         assert created.json()["code"] == "QE-1"
+        assert created.json()["short_name"] == "Quarry East"
         duplicate = client.post(
             "/api/v1/owner/sites", json={"name": "quarry east", "code": "X"}
         )
@@ -227,6 +228,53 @@ def test_owner_site_crud_access_rules_and_audit(
         assert "OWNER_SITE_CREATED" in actions
         assert "OWNER_SUPERVISOR_SITE_GRANTED" in actions
         assert "OWNER_SUPERVISOR_SITE_REVOKED" in actions
+    finally:
+        client.close()
+
+
+def test_owner_site_short_name_and_generated_code_are_compatible_and_stable(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    client = owner_client(
+        db_session, value(tenant_records, "owner_a", CompanyMembership)
+    )
+    try:
+        created = client.post(
+            "/api/v1/owner/sites",
+            json={"name": "Quarry West Legal Name", "short_name": "Quarry West"},
+        )
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["name"] == "Quarry West Legal Name"
+        assert body["short_name"] == "Quarry West"
+        code = body["code"]
+        assert code.startswith("SITE-")
+        assert len(code.removeprefix("SITE-")) == 32
+        int(code.removeprefix("SITE-"), 16)
+
+        updated = client.patch(
+            f"/api/v1/owner/sites/{body['id']}",
+            json={"short_name": "West Quarry", "code": code.lower()},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["name"] == "Quarry West Legal Name"
+        assert updated.json()["short_name"] == "West Quarry"
+        assert updated.json()["code"] == code
+
+        changed_code = client.patch(
+            f"/api/v1/owner/sites/{body['id']}",
+            json={"code": "REASSIGNED-SITE-CODE"},
+        )
+        assert changed_code.status_code == 422
+        assert "immutable" in changed_code.json()["detail"]["message"].lower()
+
+        short_name_only = client.post(
+            "/api/v1/owner/sites",
+            json={"short_name": "North Stockyard"},
+        )
+        assert short_name_only.status_code == 201, short_name_only.text
+        assert short_name_only.json()["name"] == "North Stockyard"
+        assert short_name_only.json()["short_name"] == "North Stockyard"
     finally:
         client.close()
 
@@ -286,6 +334,7 @@ def test_owner_lists_operational_volume_and_non_owner_is_forbidden(
         Site(
             company_id=company_id,
             name=f"Volume Site {index:02d}",
+            short_name=f"Volume Site {index:02d}",
             code=f"VS-{index:02d}",
             status=SiteStatus.ACTIVE,
         )

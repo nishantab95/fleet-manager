@@ -68,6 +68,7 @@ def _site_response(view: SiteView) -> OwnerSiteResponse:
     return OwnerSiteResponse(
         id=view.site.id,
         name=view.site.name,
+        short_name=view.site.short_name,
         code=view.site.code,
         location_description=view.site.location_description,
         latitude=view.site.latitude,
@@ -202,6 +203,7 @@ def create_site(
     try:
         view = service.create_site(
             name=payload.name,
+            short_name=payload.short_name,
             code=payload.code,
             location_description=payload.location_description,
             latitude=payload.latitude,
@@ -224,6 +226,7 @@ def update_site(
         view = service.update_site(
             site_id,
             name=payload.name,
+            short_name=payload.short_name,
             code=payload.code,
             location_description=payload.location_description,
             latitude=payload.latitude,

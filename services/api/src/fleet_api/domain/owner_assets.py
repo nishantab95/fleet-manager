@@ -42,6 +42,7 @@ class ActiveAssetAssignment:
     driver_membership_id: UUID
     driver_name: str
     starts_at: datetime
+    regular_duty_minutes: int
 
 
 @dataclass(frozen=True)
@@ -204,7 +205,7 @@ class OwnerAssetService:
             current_deployment = ActiveAssetDeployment(
                 deployment_id=deployment.id,
                 site_id=deployment_site.id,
-                site_name=deployment_site.name,
+                site_name=deployment_site.short_name,
                 starts_at=deployment.starts_at,
             )
         active_assignment = None
@@ -215,10 +216,11 @@ class OwnerAssetService:
             active_assignment = ActiveAssetAssignment(
                 assignment_id=assignment.id,
                 site_id=assignment_site.id,
-                site_name=assignment_site.name,
+                site_name=assignment_site.short_name,
                 driver_membership_id=membership.id,
                 driver_name=membership.display_name or user.display_name,
                 starts_at=assignment.starts_at,
+                regular_duty_minutes=assignment.regular_duty_minutes,
             )
         return OwnerAssetView(
             asset=asset,
@@ -263,18 +265,19 @@ class OwnerAssetService:
     def _ensure_unique(
         self,
         *,
-        asset_code: str,
+        asset_code: str | None,
         registration_number: str | None,
         exclude_asset_id: UUID | None = None,
     ) -> None:
-        code_query = select(FleetAsset.id).where(
-            FleetAsset.company_id == self.company_id,
-            FleetAsset.asset_code == asset_code,
-        )
-        if exclude_asset_id is not None:
-            code_query = code_query.where(FleetAsset.id != exclude_asset_id)
-        if self.session.scalar(code_query) is not None:
-            raise ConflictError("asset code is already used by this company")
+        if asset_code is not None:
+            code_query = select(FleetAsset.id).where(
+                FleetAsset.company_id == self.company_id,
+                FleetAsset.asset_code == asset_code,
+            )
+            if exclude_asset_id is not None:
+                code_query = code_query.where(FleetAsset.id != exclude_asset_id)
+            if self.session.scalar(code_query) is not None:
+                raise ConflictError("asset code is already used by this company")
         if registration_number is not None:
             registration_query = select(FleetAsset.id).where(
                 FleetAsset.company_id == self.company_id,
@@ -314,7 +317,7 @@ class OwnerAssetService:
         *,
         asset_type: FleetAssetType,
         ownership_type: AssetOwnershipType,
-        asset_code: str,
+        asset_code: str | None,
         registration_number: str | None,
         short_name: str | None,
         manufacturer: str | None,
@@ -323,7 +326,7 @@ class OwnerAssetService:
         rental_start_date: date | None,
         rental_end_date: date | None,
     ) -> OwnerAssetView:
-        normalized_code = normalize_asset_code(asset_code)
+        normalized_code = normalize_asset_code(asset_code) if asset_code is not None else None
         if asset_type == FleetAssetType.TIPPER and registration_number is None:
             raise DomainError("Registration number is required for a tipper.")
         normalized_registration = (
@@ -395,8 +398,9 @@ class OwnerAssetService:
 
         if "asset_code" in fields_set:
             if asset_code is None:
-                raise DomainError("Asset code is required.")
-            asset.asset_code = normalize_asset_code(asset_code)
+                raise DomainError("Asset code is immutable.")
+            if normalize_asset_code(asset_code) != asset.asset_code:
+                raise DomainError("Asset code is immutable.")
         if "registration_number" in fields_set:
             if registration_number is None and asset.asset_type == FleetAssetType.TIPPER:
                 raise DomainError("Registration number is required for a tipper.")

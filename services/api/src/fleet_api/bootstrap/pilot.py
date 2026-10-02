@@ -148,7 +148,9 @@ def _site(session: Session, *, company_id: UUID) -> Site:
     if site is None:
         site = create_site(session, company_id=company_id, name=SITE_NAME, code=SITE_CODE)
     else:
-        site.code = SITE_CODE
+        if site.code != SITE_CODE:
+            raise RuntimeError(f"existing pilot Site has immutable code {site.code}")
+        site.short_name = SITE_NAME
         site.status = SiteStatus.ACTIVE
     return site
 

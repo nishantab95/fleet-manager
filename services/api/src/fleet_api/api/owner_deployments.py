@@ -42,7 +42,7 @@ def _deployment_response(view: DeploymentView) -> AssetSiteDeploymentResponse:
         id=view.deployment.id,
         asset_id=view.deployment.asset_id,
         site_id=view.site.id,
-        site_name=view.site.name,
+        site_name=view.site.short_name,
         starts_at=view.deployment.starts_at,
         ends_at=view.deployment.ends_at,
     )

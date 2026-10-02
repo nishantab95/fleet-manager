@@ -21,7 +21,12 @@ from fleet_api.db.models import (
     SupervisorSiteAccess,
     User,
 )
-from fleet_api.domain.assets import create_site, create_tipper, normalize_registration_number
+from fleet_api.domain.assets import (
+    create_site,
+    create_tipper,
+    normalize_registration_number,
+    normalize_site_code,
+)
 from fleet_api.domain.assignments import (
     close_assignment,
     create_assignment,
@@ -157,20 +162,23 @@ class AdminService:
             self.session.scalars(
                 select(Site)
                 .where(Site.company_id == self.company_id)
-                .order_by(Site.status, Site.name, Site.id)
+                .order_by(Site.status, Site.short_name, Site.id)
             ).all()
         )
 
     def get_site(self, site_id: UUID) -> Site:
         return self._site(site_id)
 
-    def create_site(self, *, name: str, code: str | None) -> Site:
+    def create_site(
+        self, *, name: str, code: str | None, short_name: str | None = None
+    ) -> Site:
         try:
             site = create_site(
                 self.session,
                 company_id=self.company_id,
                 name=name,
                 code=code,
+                short_name=short_name,
             )
         except IntegrityError as exc:
             raise ConflictError("site name or code is already used") from exc
@@ -178,7 +186,12 @@ class AdminService:
             action="ADMIN_SITE_CREATED",
             entity_type="SITE",
             entity_id=site.id,
-            new_values={"name": site.name, "code": site.code, "status": site.status.value},
+            new_values={
+                "name": site.name,
+                "short_name": site.short_name,
+                "code": site.code,
+                "status": site.status.value,
+            },
         )
         return site
 
@@ -187,18 +200,33 @@ class AdminService:
         site_id: UUID,
         *,
         name: str | None,
+        short_name: str | None,
         code: str | None,
         status: SiteStatus | None,
+        short_name_was_sent: bool,
         code_was_sent: bool,
     ) -> Site:
         site = self._site(site_id)
-        old_values = {"name": site.name, "code": site.code, "status": site.status.value}
+        old_values = {
+            "name": site.name,
+            "short_name": site.short_name,
+            "code": site.code,
+            "status": site.status.value,
+        }
         if name is not None:
             if not name.strip():
                 raise DomainError("site name must contain a value")
+            old_name = site.name
             site.name = name.strip()
+            if not short_name_was_sent and site.short_name == old_name:
+                site.short_name = site.name
+        if short_name_was_sent:
+            if short_name is None or not short_name.strip():
+                raise DomainError("site short_name must contain a value")
+            site.short_name = short_name.strip()
         if code_was_sent:
-            site.code = code.strip() if code else None
+            if code is None or normalize_site_code(code) != normalize_site_code(site.code):
+                raise DomainError("Site code is immutable.")
         if status is not None:
             site.status = status
         try:
@@ -210,7 +238,12 @@ class AdminService:
             entity_type="SITE",
             entity_id=site.id,
             old_values=old_values,
-            new_values={"name": site.name, "code": site.code, "status": site.status.value},
+            new_values={
+                "name": site.name,
+                "short_name": site.short_name,
+                "code": site.code,
+                "status": site.status.value,
+            },
         )
         return site
 

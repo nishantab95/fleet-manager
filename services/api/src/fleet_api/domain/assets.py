@@ -3,9 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -90,19 +89,50 @@ def normalize_asset_code(value: str) -> str:
     return normalized
 
 
+def generated_asset_code(asset_type: FleetAssetType, asset_id: UUID) -> str:
+    """Return a stable internal asset code that does not depend on editable labels."""
+
+    return f"{asset_type.value}-{asset_id.hex.upper()}"
+
+
+def normalize_site_code(value: str) -> str:
+    normalized = value.strip().upper()
+    if not normalized:
+        raise DomainError("site code must contain a value")
+    if len(normalized) > 64:
+        raise DomainError("site code must be at most 64 characters")
+    return normalized
+
+
+def generated_site_code(site_id: UUID) -> str:
+    """Return a stable internal Site code independent of its editable names."""
+
+    return f"SITE-{site_id.hex.upper()}"
+
+
 def create_site(
     session: Session,
     *,
     company_id: UUID,
     name: str,
     code: str | None = None,
+    short_name: str | None = None,
 ) -> Site:
     if session.get(Company, company_id) is None:
         raise TenantConsistencyError("company does not exist")
+    clean_name = name.strip()
+    if not clean_name:
+        raise DomainError("site name must contain a value")
+    clean_short_name = short_name.strip() if short_name else clean_name
+    if not clean_short_name:
+        raise DomainError("site short_name must contain a value")
+    site_id = uuid4()
     site = Site(
+        id=site_id,
         company_id=company_id,
-        name=name.strip(),
-        code=code.strip() if code else None,
+        name=clean_name,
+        short_name=clean_short_name,
+        code=normalize_site_code(code) if code is not None else generated_site_code(site_id),
         status=SiteStatus.ACTIVE,
     )
     session.add(site)
@@ -116,7 +146,7 @@ def create_fleet_asset(
     company_id: UUID,
     asset_type: FleetAssetType,
     ownership_type: AssetOwnershipType,
-    asset_code: str,
+    asset_code: str | None,
     registration_number: str | None,
     short_name: str | None,
     manufacturer: str | None = None,
@@ -133,11 +163,17 @@ def create_fleet_asset(
     clean_short_name = short_name.strip() if short_name else None
     if short_name is not None and clean_short_name is None:
         raise DomainError("short_name must contain a value when provided")
+    asset_id = uuid4()
     asset = FleetAsset(
+        id=asset_id,
         company_id=company_id,
         asset_type=asset_type,
         ownership_type=ownership_type,
-        asset_code=normalize_asset_code(asset_code),
+        asset_code=(
+            normalize_asset_code(asset_code)
+            if asset_code is not None
+            else generated_asset_code(asset_type, asset_id)
+        ),
         registration_number=(
             normalize_registration_number(registration_number)
             if registration_number is not None
@@ -161,42 +197,6 @@ def create_fleet_asset(
     return asset
 
 
-def _tipper_asset_code(
-    session: Session,
-    *,
-    company_id: UUID,
-    registration_number: str,
-    short_name: str | None,
-) -> str:
-    registration = normalize_registration_number(registration_number)
-    candidates = [
-        normalize_asset_code(short_name) if short_name and short_name.strip() else registration,
-        registration,
-        f"TIPPER-{registration}",
-    ]
-    for candidate in candidates:
-        exists = session.scalar(
-            select(FleetAsset.id).where(
-                FleetAsset.company_id == company_id,
-                FleetAsset.asset_code == candidate,
-            )
-        )
-        if exists is None:
-            return candidate
-    suffix = 2
-    while True:
-        candidate = f"TIPPER-{registration}-{suffix}"
-        exists = session.scalar(
-            select(FleetAsset.id).where(
-                FleetAsset.company_id == company_id,
-                FleetAsset.asset_code == candidate,
-            )
-        )
-        if exists is None:
-            return candidate
-        suffix += 1
-
-
 def create_tipper(
     session: Session,
     *,
@@ -211,12 +211,7 @@ def create_tipper(
         company_id=company_id,
         asset_type=FleetAssetType.TIPPER,
         ownership_type=AssetOwnershipType.OWNED,
-        asset_code=_tipper_asset_code(
-            session,
-            company_id=company_id,
-            registration_number=registration_number,
-            short_name=short_name,
-        ),
+        asset_code=None,
         registration_number=registration_number,
         short_name=short_name,
     )
