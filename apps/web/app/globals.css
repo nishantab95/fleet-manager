@@ -116,5 +116,33 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .evidence-route { min-height: 100vh; background: #17202a; }
 .badge { justify-self: start; padding: 4px 8px; border-radius: 999px; background: #fff0ef; color: #9d3227; font-size: 0.72rem; font-weight: 800; }
 .badge.active { background: #e0f4e9; color: #1e704e; }
-@media (max-width: 800px) { .auth-card { padding: 28px; } .admin-layout { display: block; } .sidebar { display: flex; overflow-x: auto; } .nav-item { min-width: max-content; } .metric-grid, .form-grid, .lab-status, .lab-role-grid, .evidence-details { grid-template-columns: repeat(2, minmax(0, 1fr)); } .table-row { grid-template-columns: 1fr 1fr; } .lab-header, .lab-section-heading { align-items: flex-start; flex-direction: column; } .lab-section-heading .muted { text-align: left; } }
-@media (max-width: 520px) { .topbar { align-items: flex-start; gap: 16px; } .metric-grid, .form-grid, .lab-status, .lab-role-grid { grid-template-columns: 1fr; } .table-row { grid-template-columns: 1fr; } .lab-panel { padding: 24px; } .lab-actions { align-items: stretch; flex-direction: column; } .lab-action-link { justify-content: center; } }
+.section-heading, .card-title, .row-actions, .filter-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-heading { align-items: end; margin-bottom: 18px; }
+.section-heading h2, .card-title h3, .card-title p { margin: 0; }
+.section-heading > input { width: min(100%, 320px); }
+.management-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
+.management-card, .template-editor { padding: 20px; border: 1px solid #dce5e2; border-radius: 14px; background: #fff; }
+.management-card h3 { margin-top: 18px; }
+.management-card .card-title h3 { margin-top: 0; }
+.stack { display: grid; gap: 12px; }
+.row-actions { justify-content: flex-start; flex-wrap: wrap; }
+.chip-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; background: #e8f4ef; color: #1b6b5a; font-size: 0.78rem; font-weight: 800; }
+.chip button { min-height: auto; padding: 0 2px; background: transparent; color: #1b6b5a; font-size: 1rem; }
+.compact { margin: 14px 0 0; }
+.filter-bar { justify-content: flex-start; flex-wrap: wrap; margin: 20px 0; }
+.filter-bar > * { width: auto; min-width: 180px; }
+.asset-form { padding: 18px; border: 1px solid #dce5e2; border-radius: 14px; background: #f9fbfa; }
+.fleet-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.empty-state { padding: 18px; color: #68777d; }
+.table-row small { display: block; margin-top: 4px; color: #68777d; }
+.template-layout { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 18px; margin: 22px 0; }
+.template-editor { display: grid; gap: 18px; }
+.template-editor fieldset { border: 1px solid #dce5e2; border-radius: 12px; }
+.template-editor legend { padding: 0 7px; color: #35504a; font-weight: 800; }
+.checkbox-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 12px; }
+.check-option { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+.check-option input { width: auto; min-height: auto; }
+@media (max-width: 1000px) { .fleet-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .template-layout { grid-template-columns: 1fr; } }
+@media (max-width: 800px) { .auth-card { padding: 28px; } .admin-layout { display: block; } .sidebar { display: flex; overflow-x: auto; } .nav-item { min-width: max-content; } .metric-grid, .form-grid, .lab-status, .lab-role-grid, .evidence-details, .management-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .table-row { grid-template-columns: 1fr 1fr; } .lab-header, .lab-section-heading, .section-heading, .content-heading { align-items: flex-start; flex-direction: column; } .lab-section-heading .muted { text-align: left; } .checkbox-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .topbar { align-items: flex-start; gap: 16px; } .metric-grid, .form-grid, .lab-status, .lab-role-grid, .management-grid, .checkbox-grid, .fleet-metrics { grid-template-columns: 1fr; } .table-row { grid-template-columns: 1fr; } .lab-panel { padding: 24px; } .lab-actions { align-items: stretch; flex-direction: column; } .lab-action-link { justify-content: center; } .section-heading > input { width: 100%; } }

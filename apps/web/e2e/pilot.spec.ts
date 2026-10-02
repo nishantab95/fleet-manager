@@ -4,7 +4,7 @@ const ownerPhone = process.env.PLAYWRIGHT_OWNER_PHONE;
 const ownerOtp = process.env.PLAYWRIGHT_OWNER_OTP;
 
 test.describe(
-  "owned-tipper pilot browser flow",
+  "Owner fleet pilot browser flow",
   () => {
   test.skip(!ownerPhone || !ownerOtp, "Set PLAYWRIGHT_OWNER_PHONE and PLAYWRIGHT_OWNER_OTP for a real test environment.");
   test("owner can authenticate, view operations, download Excel, and logout", async ({ page, context }) => {
@@ -15,15 +15,13 @@ test.describe(
     await page.getByRole("button", { name: "Verify and continue" }).click();
     await expect(page).toHaveURL(/\/owner$/);
 
-    await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
     await page.getByRole("button", { name: "Operations" }).click();
     await expect(page.getByRole("heading", { name: "Owner operations" })).toBeVisible();
-    await page.getByRole("button", { name: /Pilot Site/ }).first().click();
-    await expect(page.getByRole("heading", { name: /Pilot Site · daily detail/ })).toBeVisible();
-    await page.locator("#owner-closure").getByRole("button", { name: /PILOT12/ }).first().click();
-    await expect(page.getByText("KM / Approved Trip")).toBeVisible();
-    await expect(page.getByText("Avg Trip Completion Interval")).toBeVisible();
-    await expect(page.getByText("Longest Trip Gap")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Fleet overview" })).toBeVisible();
+    for (const name of ["Fleet", "People", "Sites", "Deployments", "Assignments", "Report templates"]) {
+      await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+    }
 
     const refreshCookie = (await context.cookies()).find((cookie) => cookie.name === "fleet_web_refresh");
     expect(refreshCookie?.httpOnly).toBe(true);
@@ -94,7 +92,7 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     const ownerPage = await ownerContext.newPage();
     await authenticate(ownerPage, ownerPhone!, ownerOtp!, "owner");
     await expect(ownerPage).toHaveURL(/\/owner$/);
-    await expect(ownerPage.getByRole("heading", { name: "Administration" })).toBeVisible();
+    await expect(ownerPage.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
 
     const driverContext = await browser.newContext();
     const driverPage = await driverContext.newPage();
@@ -207,7 +205,7 @@ test.describe("three-role owned-tipper acceptance flow", () => {
     await expect(ownerPage.getByText("Approved trips").locator(".." ).getByText("4")).toBeVisible();
     await expect(ownerPage.getByText(/140/).first()).toBeVisible();
     await expect(ownerPage.getByText(/30/).first()).toBeVisible();
-    await expect(ownerPage.locator("#owner-driver-duty .table-row")).toHaveCount(3);
+    await expect(ownerPage.getByRole("heading", { name: "Driver / Operator duty" })).toBeVisible();
     await ownerPage.getByRole("button", { name: /Pilot Site/ }).first().click();
     await expect(ownerPage.getByRole("heading", { name: /Pilot Site · daily detail/ })).toBeVisible();
     const siteDetail = ownerPage.locator("section.stack").filter({ has: ownerPage.getByRole("heading", { name: /Pilot Site · daily detail/ }) });

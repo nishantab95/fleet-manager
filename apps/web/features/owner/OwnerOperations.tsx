@@ -1,36 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { API_BASE, ApiError, fetchPrivateEvidence, request, type WebRequest } from "../../lib/api/client";
-import type { Closure, CompanySettings, DashboardReport, DriverDutyReport, SiteDailyReport, TipperDailyReport } from "../../lib/types";
+import type { Closure, CompanySettings, DashboardReport, DriverDutyReport, ReportTemplate, SiteDailyReport, TipperDailyReport } from "../../lib/types";
 import { Metric } from "../shared/Ui";
 import { EvidenceModal, type EvidenceDetails } from "../shared/EvidenceViewer";
+import { title } from "./catalogs";
 
-type OwnerOperationsProps = { accessToken: string; setError: (value: string) => void; apiRequest?: WebRequest };
+type Props = { accessToken: string; setError: (value: string) => void; apiRequest?: WebRequest };
+const number = (value: number | null | undefined, suffix = "") => value == null ? "Unavailable" : `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
 
-export function OwnerOperations(props: OwnerOperationsProps) {
-  const { accessToken, setError } = props;
-  const { apiRequest } = props;
+export function OwnerOperations({ accessToken, setError, apiRequest }: Props) {
   const call = useCallback(<T,>(path: string, options: RequestInit = {}) => apiRequest ? apiRequest<T>(path, options) : request<T>(path, options, accessToken), [accessToken, apiRequest]);
-  const [report, setReport] = useState<DashboardReport | null>(null);
-  const [dutyReports, setDutyReports] = useState<DriverDutyReport[]>([]);
-  const [operationalDate, setOperationalDate] = useState("");
-  const [selectedSiteId, setSelectedSiteId] = useState("");
-  const [siteReport, setSiteReport] = useState<SiteDailyReport | null>(null);
-  const [tipperReports, setTipperReports] = useState<TipperDailyReport[]>([]);
-  const [selectedTipperId, setSelectedTipperId] = useState("");
-  const [reopenReason, setReopenReason] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null);
-  const [evidenceDetails, setEvidenceDetails] = useState<EvidenceDetails | null>(null);
-  const [settings, setSettings] = useState<CompanySettings | null>(null);
-  const [reportingTimezone, setReportingTimezone] = useState("");
-  const [workdayStartMinutes, setWorkdayStartMinutes] = useState("0");
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [emergencyNotice, setEmergencyNotice] = useState("");
-  const seenOpenEmergencyIds = useRef<Set<string> | null>(null);
+  const [report, setReport] = useState<DashboardReport | null>(null); const [duties, setDuties] = useState<DriverDutyReport[]>([]); const [settings, setSettings] = useState<CompanySettings | null>(null); const [templates, setTemplates] = useState<ReportTemplate[]>([]);
+  const [operationalDate, setOperationalDate] = useState(""); const [selectedSiteId, setSelectedSiteId] = useState(""); const [siteReport, setSiteReport] = useState<SiteDailyReport | null>(null); const [selectedAsset, setSelectedAsset] = useState<TipperDailyReport | null>(null); const [templateId, setTemplateId] = useState("");
+  const [timezone, setTimezone] = useState(""); const [dayStart, setDayStart] = useState("0"); const [reopenReason, setReopenReason] = useState(""); const [loading, setLoading] = useState(false); const [refresh, setRefresh] = useState(0); const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null); const [evidenceDetails, setEvidenceDetails] = useState<EvidenceDetails | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -38,147 +22,85 @@ export function OwnerOperations(props: OwnerOperationsProps) {
       setLoading(true);
       try {
         const query = operationalDate ? `?operational_date=${operationalDate}` : "";
-        const [next, nextSettings] = await Promise.all([
-          call<DashboardReport>(`/api/v1/reports/dashboard${query}`),
-          call<CompanySettings>("/api/v1/admin/company"),
+        const [dashboard, company, dutyResult, templateResult] = await Promise.all([
+          call<DashboardReport>(`/api/v1/reports/dashboard${query}`), call<CompanySettings>("/api/v1/admin/company"),
+          call<DriverDutyReport[]>(`/api/v1/reports/duty${query}`).catch(() => []), call<ReportTemplate[]>("/api/v1/owner/report-templates").catch(() => []),
         ]);
-        let nextDuty: DriverDutyReport[] = [];
-        try {
-          const dutyResponse = await call<DriverDutyReport[]>(`/api/v1/reports/duty${query}`);
-          nextDuty = Array.isArray(dutyResponse) ? dutyResponse : [];
-        } catch {
-          // Dashboard reporting remains usable if the optional duty detail endpoint is unavailable.
-        }
-        if (active) {
-          const nextOpenEmergencyIds = new Set(next.sites.flatMap((site) => site.tippers.flatMap((tipper) => tipper.events.filter((event) => event.emergency_status === "OPEN").map((event) => event.event_id))));
-          const previousOpenEmergencyIds = seenOpenEmergencyIds.current;
-          if (previousOpenEmergencyIds && [...nextOpenEmergencyIds].some((id) => !previousOpenEmergencyIds.has(id))) setEmergencyNotice("New OPEN emergency received. Contact the driver now.");
-          else setEmergencyNotice("");
-          seenOpenEmergencyIds.current = nextOpenEmergencyIds;
-          setReport(next);
-          setDutyReports(nextDuty);
-          setSettings(nextSettings);
-          setReportingTimezone(nextSettings.reporting_timezone);
-          setWorkdayStartMinutes(String(nextSettings.operational_day_start_minutes));
-          if (!operationalDate) setOperationalDate(next.operational_date);
-        }
-      } catch (caught) {
-        if (active) setError(caught instanceof Error ? caught.message : "Could not load the owner dashboard.");
-      } finally {
-        if (active) setLoading(false);
-      }
+        if (!active) return;
+        const templateItems = Array.isArray(templateResult) ? templateResult : [];
+        setReport(dashboard); setDuties(Array.isArray(dutyResult) ? dutyResult : []); setSettings(company); setTimezone(company.reporting_timezone); setDayStart(String(company.operational_day_start_minutes)); setTemplates(templateItems); setTemplateId((value) => value || templateItems.find((item) => item.is_default)?.id || templateItems[0]?.id || "");
+        if (!operationalDate) setOperationalDate(dashboard.operational_date);
+      } catch (caught) { if (active) setError(caught instanceof Error ? caught.message : "Could not load the owner dashboard."); }
+      finally { if (active) setLoading(false); }
     }
-    void load();
-    return () => { active = false; };
-  }, [accessToken, call, operationalDate, refreshKey, setError]);
-
-  useEffect(() => {
-    seenOpenEmergencyIds.current = null;
-  }, [operationalDate]);
+    void load(); return () => { active = false; };
+  }, [call, operationalDate, refresh, setError]);
 
   useEffect(() => {
     let active = true;
-    async function load() {
-      if (!selectedSiteId || !operationalDate) { if (active) setSiteReport(null); return; }
-      setDetailLoading(true);
-      try {
-        const next = await call<SiteDailyReport>(`/api/v1/reports/sites/${selectedSiteId}/daily?operational_date=${operationalDate}`);
-        if (active) setSiteReport(next);
-      } catch (caught) {
-        if (active) setError(caught instanceof Error ? caught.message : "Could not load the site report.");
-      } finally {
-        if (active) setDetailLoading(false);
-      }
-    }
-    void load();
+    if (!selectedSiteId || !operationalDate) return;
+    void call<SiteDailyReport>(`/api/v1/reports/sites/${selectedSiteId}/daily?operational_date=${operationalDate}`).then((value) => { if (active) setSiteReport(value); }).catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load the site report."); });
     return () => { active = false; };
-  }, [accessToken, call, operationalDate, refreshKey, selectedSiteId, setError]);
+  }, [call, operationalDate, refresh, selectedSiteId, setError]);
 
   useEffect(() => () => { if (evidenceUrl) URL.revokeObjectURL(evidenceUrl); }, [evidenceUrl]);
-
   const selectedSite = report?.sites.find((site) => site.site_id === selectedSiteId) ?? null;
-  const selectedTipper = tipperReports.find((tipper) => tipper.tipper_id === selectedTipperId) ?? null;
-  const openEmergencies = report?.sites.flatMap((site) => site.tippers.flatMap((tipper) => tipper.events.filter((event) => event.emergency_status === "OPEN" || event.emergency_status === "ACKNOWLEDGED"))) ?? [];
-  const displayNumber = (value: number | null | undefined, suffix = "") => value === null || value === undefined ? "Unavailable" : `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
-  const displayInterval = (seconds: number | null) => {
-    if (seconds === null || seconds === undefined) return "Unavailable";
-    const totalMinutes = Math.round(seconds / 60);
-    if (totalMinutes < 60) return `${totalMinutes} min`;
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    return minutes ? `${hours}h ${minutes.toString().padStart(2, "0")}m` : `${hours}h`;
-  };
-  const displayDate = (value: string, timezone?: string) => new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short", timeZone: timezone }).format(new Date(value));
-  const selectSite = (siteId: string) => { setSelectedSiteId(siteId); setSelectedTipperId(""); setTipperReports([]); setReopenReason(""); };
+  const zone = selectedSite?.reporting_timezone ?? report?.reporting_timezone;
+  const date = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short", timeZone: zone }).format(new Date(value));
 
-  const loadTipper = async (tipper: TipperDailyReport) => {
-    setDetailLoading(true); props.setError("");
-    try {
-      setTipperReports(await call<TipperDailyReport[]>(`/api/v1/reports/tippers/${tipper.tipper_id}/daily?operational_date=${operationalDate}`));
-      setSelectedTipperId(tipper.tipper_id);
-    } catch (caught) { props.setError(caught instanceof Error ? caught.message : "Could not load the tipper report."); }
-    finally { setDetailLoading(false); }
+  const selectAsset = async (asset: TipperDailyReport) => {
+    setError("");
+    try { const items = await call<TipperDailyReport[]>(`/api/v1/reports/tippers/${asset.tipper_id}/daily?operational_date=${operationalDate}`); setSelectedAsset(items[0] ?? asset); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load the asset report."); }
   };
-
-  const closeSelectedSite = async () => {
+  const changeClosure = async (action: "close" | "reopen") => {
     if (!selectedSite) return;
-    props.setError("");
-    try { await call<Closure>(`/api/v1/reports/sites/${selectedSite.site_id}/closure/close?operational_date=${operationalDate}`, { method: "POST", body: JSON.stringify({ reason: null }) }); setRefreshKey((value) => value + 1); }
-    catch (caught) { props.setError(caught instanceof Error ? caught.message : "The site could not be closed."); }
+    if (action === "reopen" && !reopenReason.trim()) { setError("A reason is required to reopen a closed site day."); return; }
+    try { await call<Closure>(`/api/v1/reports/sites/${selectedSite.site_id}/closure/${action}?operational_date=${operationalDate}`, { method: "POST", body: JSON.stringify({ reason: action === "reopen" ? reopenReason.trim() : null }) }); setReopenReason(""); setRefresh((value) => value + 1); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : `The site could not be ${action}d.`); }
   };
-
-  const reopenSelectedSite = async () => {
-    if (!selectedSite || !reopenReason.trim()) { props.setError("A reason is required to reopen a closed site day."); return; }
-    props.setError("");
-    try { await call<Closure>(`/api/v1/reports/sites/${selectedSite.site_id}/closure/reopen?operational_date=${operationalDate}`, { method: "POST", body: JSON.stringify({ reason: reopenReason.trim() }) }); setReopenReason(""); setRefreshKey((value) => value + 1); }
-    catch (caught) { props.setError(caught instanceof Error ? caught.message : "The site could not be reopened."); }
-  };
-
   const saveSettings = async () => {
-    const minutes = Number(workdayStartMinutes);
-    if (!reportingTimezone.trim() || !Number.isInteger(minutes) || minutes < 0 || minutes > 1439) { props.setError("Use a valid IANA timezone and a day-start minute between 0 and 1439."); return; }
-    setSettingsSaving(true); props.setError("");
-    try {
-      const next = await call<CompanySettings>("/api/v1/admin/company", { method: "PATCH", body: JSON.stringify({ reporting_timezone: reportingTimezone.trim(), operational_day_start_minutes: minutes }) });
-      setSettings(next); setReportingTimezone(next.reporting_timezone); setWorkdayStartMinutes(String(next.operational_day_start_minutes)); setRefreshKey((value) => value + 1);
-    } catch (caught) { props.setError(caught instanceof Error ? caught.message : "Company reporting settings could not be saved."); }
-    finally { setSettingsSaving(false); }
+    const minutes = Number(dayStart);
+    if (!timezone.trim() || !Number.isInteger(minutes) || minutes < 0 || minutes > 1439) { setError("Use a valid IANA timezone and a day-start minute between 0 and 1439."); return; }
+    try { const value = await call<CompanySettings>("/api/v1/admin/company", { method: "PATCH", body: JSON.stringify({ reporting_timezone: timezone.trim(), operational_day_start_minutes: minutes }) }); setSettings(value); setRefresh((item) => item + 1); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Company reporting settings could not be saved."); }
   };
-
-  const downloadExcel = async () => {
-    props.setError("");
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/reports/daily.xlsx?operational_date=${operationalDate}`, { credentials: "include", headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!response.ok) throw new ApiError(response.status, "The Excel report could not be downloaded.");
-      const url = URL.createObjectURL(await response.blob()); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `fleet-report-${operationalDate}.xlsx`; anchor.click(); URL.revokeObjectURL(url);
-    } catch (caught) { props.setError(caught instanceof Error ? caught.message : "The Excel report could not be downloaded."); }
+  const download = async () => {
+    try { const suffix = templateId ? `&template_id=${encodeURIComponent(templateId)}` : ""; const response = await fetch(`${API_BASE}/api/v1/reports/daily.xlsx?operational_date=${operationalDate}${suffix}`, { credentials: "include", headers: { Authorization: `Bearer ${accessToken}` } }); if (!response.ok) throw new ApiError(response.status, "The Excel report could not be downloaded."); const url = URL.createObjectURL(await response.blob()); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `fleet-report-${operationalDate}.xlsx`; anchor.click(); URL.revokeObjectURL(url); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "The Excel report could not be downloaded."); }
   };
-
   const viewEvidence = async (eventId: string) => {
-    props.setError("");
-    try {
-      const result = await fetchPrivateEvidence(`/api/v1/reports/events/${eventId}/evidence`, accessToken);
-      if (evidenceUrl) URL.revokeObjectURL(evidenceUrl);
-      setEvidenceUrl(result.url);
-      setEvidenceDetails({ ...result.metadata, eventId });
-    } catch (caught) { props.setError(caught instanceof Error ? caught.message : "Evidence could not be loaded."); }
+    try { const result = await fetchPrivateEvidence(`/api/v1/reports/events/${eventId}/evidence`, accessToken); if (evidenceUrl) URL.revokeObjectURL(evidenceUrl); setEvidenceUrl(result.url); setEvidenceDetails({ ...result.metadata, eventId }); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Evidence could not be loaded."); }
   };
 
-  const closeEvidence = () => {
-    if (evidenceUrl) URL.revokeObjectURL(evidenceUrl);
-    setEvidenceUrl(null);
-    setEvidenceDetails(null);
-  };
-
-  return <>
-    <div className="content-heading" id="owner-operations"><div><h2>Owner operations</h2><p className="muted">Official totals use approved events only. Reporting day: {report?.reporting_timezone ?? "company timezone"}, starting at {report ? `${Math.floor(report.workday_start_minutes / 60).toString().padStart(2, "0")}:${(report.workday_start_minutes % 60).toString().padStart(2, "0")}` : "configured time"}.</p></div><div className="inline-form"><label>Operational date<input type="date" value={operationalDate} onChange={(event) => { setOperationalDate(event.target.value); setSelectedSiteId(""); setTipperReports([]); }} /></label><button className="secondary" disabled={loading} onClick={() => setRefreshKey((value) => value + 1)} type="button">{loading ? "Loading…" : "Refresh"}</button><button disabled={!report} onClick={downloadExcel} type="button">Download Excel</button></div></div>
-    {emergencyNotice && <div className="notice error emergency-toast" role="status"><strong>{emergencyNotice}</strong></div>}
-    {openEmergencies.length > 0 && <section className="emergency-panel" aria-labelledby="owner-emergency-heading"><div className="content-heading"><div><h2 id="owner-emergency-heading">OPEN EMERGENCIES <span className="badge">{openEmergencies.length}</span></h2><p className="muted">Immediate driver contact alerts. Emergencies are separate from normal verification and reporting totals.</p></div></div>{openEmergencies.map((event) => <article className="emergency-alert" key={event.event_id} role="alert"><div className="emergency-alert-details"><strong>{event.driver_name}</strong><span>Tipper {event.tipper_registration_number}</span><span>{event.site_name}</span><span>{event.emergency_status} · {displayDate(event.device_created_at, report?.reporting_timezone)}</span></div>{event.driver_phone && <a className="call-driver" href={`tel:${event.driver_phone}`}>CALL DRIVER</a>}</article>)}</section>}
-    {settings && <div className="table-card settings-card"><div className="content-heading"><div><h3>Company reporting settings</h3><p className="muted">The operational day is stored and calculated in this IANA timezone. Times are persisted in UTC.</p></div><button disabled={settingsSaving} onClick={saveSettings} type="button">{settingsSaving ? "Saving…" : "Save settings"}</button></div><div className="inline-form"><label>IANA timezone<input value={reportingTimezone} onChange={(event) => setReportingTimezone(event.target.value)} /></label><label>Day start minute (0–1439)<input type="number" min="0" max="1439" value={workdayStartMinutes} onChange={(event) => setWorkdayStartMinutes(event.target.value)} /></label></div></div>}
-    {report && <><div className="metric-grid" id="owner-reports"><Metric label="Assigned tippers" value={report.assigned_tippers_count} /><Metric label="Approved trips" value={report.approved_trip_count} /><Metric label="Total KM" value={report.total_km === null ? "Unavailable" : displayNumber(report.total_km, " km")} /><Metric label="Diesel issued" value={displayNumber(report.verified_diesel_issued, " L")} /><Metric label="Drivers on duty" value={report.drivers_on_duty ?? dutyReports.filter((item) => item.status === "ACTIVE").length} /><Metric label="Past regular duty" value={report.drivers_past_regular_duty ?? dutyReports.filter((item) => item.status === "ACTIVE" && item.overtime_minutes > 0).length} /><Metric label="Pending verification" value={report.pending_verification_count} /><Metric label="Missing readings" value={report.missing_reading_count} /><Metric label="Open Emergencies" value={report.unresolved_emergency_count} /><Metric label="Sites not closed" value={report.sites_not_closed_count} /></div><section className="stack" id="owner-driver-duty" aria-labelledby="driver-duty-heading"><div className="content-heading"><div><h2 id="driver-duty-heading">Driver Duty</h2><p className="muted">Server-tracked duty sessions for this operational day. Overtime is visible only here to Owner/Admin.</p></div></div><div className="table-card"><div className="table-row"><strong>Driver</strong><span>Tipper</span><span>Site</span><span>Duty start</span><span>Regular end</span><span>Actual end</span><span>Overtime</span><span>Status</span></div>{dutyReports.length ? dutyReports.map((duty) => <div className="table-row" key={duty.session_id}><strong>{duty.driver_name}</strong><span>{duty.tipper_registration_number}</span><span>{duty.site_name}</span><span>{displayDate(duty.duty_start, report.reporting_timezone)}</span><span>{displayDate(duty.regular_duty_ends_at, report.reporting_timezone)}</span><span>{duty.actual_duty_end ? displayDate(duty.actual_duty_end, report.reporting_timezone) : "Open"}</span><span>{duty.overtime_minutes} min</span><span>{duty.status}</span></div>) : <div className="table-row"><span>No duty sessions for this operational day.</span></div>}</div></section><div className="content-heading"><div><h2>Sites</h2><p className="muted">{report.complete_tippers_count} tipper{report.complete_tippers_count === 1 ? "" : "s"} have complete approved readings for this operational day.</p></div></div><div className="table-card"><div className="table-row"><strong>Site</strong><span>Assigned</span><span>Trips</span><span>KM</span><span>Diesel</span><span>Closure</span></div>{report.sites.length ? report.sites.map((site) => <button className={selectedSiteId === site.site_id ? "table-row selected-row" : "table-row"} key={site.site_id} onClick={() => selectSite(site.site_id)} type="button"><strong>{site.site_name}</strong><span>{site.assigned_tippers_count}</span><span>{site.approved_trip_count} approved / {site.pending_trip_count} pending</span><span>{displayNumber(site.total_km, " km")}</span><span>{displayNumber(site.verified_diesel_issued, " L")}</span><span>{site.closure.status}</span></button>) : <div className="table-row"><span>No assigned tippers were found for this operational day.</span></div>}</div><div className="content-heading" id="owner-exceptions"><div><h2>Exceptions</h2><p className="muted">Operational blockers remain visible until resolved or explicitly reviewed.</p></div></div><div className="table-card">{report.exceptions.length ? report.exceptions.map((item, index) => <button className="table-row" key={`${item.code}-${item.assignment_id}-${index}`} onClick={() => selectSite(item.site_id)}><strong>{item.code}</strong><span>{item.tipper_registration_number}</span><span>{item.description}</span><span>Open site detail</span></button>) : <div className="table-row"><span>No exceptions for this operational day.</span></div>}</div></>}
-    {selectedSite && <section className="stack" id="owner-closure"><div className="content-heading"><div><h2>{selectedSite.site_name} · daily detail</h2><p className="muted">{selectedSite.assigned_tippers_count} assigned tipper{selectedSite.assigned_tippers_count === 1 ? "" : "s"} · {selectedSite.closure.status} · {selectedSite.reporting_timezone}</p></div><div className="inline-form">{selectedSite.closure.status === "CLOSED" ? <><input aria-label="Reopening reason" placeholder="Reason to reopen" value={reopenReason} onChange={(event) => setReopenReason(event.target.value)} /><button className="secondary" onClick={reopenSelectedSite} type="button">Reopen day</button></> : <button disabled={selectedSite.closure.blockers.length > 0} onClick={closeSelectedSite} type="button">Close day</button>}</div></div>{selectedSite.closure.blockers.length > 0 && <div className="notice error"><strong>Closure blockers:</strong> {selectedSite.closure.blockers.map((item) => `${item.code}: ${item.description}`).join(" · ")}</div>}<div className="table-card"><div className="table-row"><strong>Tipper</strong><span>Driver</span><span>Trips</span><span>Start / End KM</span><span>Distance</span><span>Completeness</span></div>{(siteReport?.tippers ?? []).map((tipper) => <button className={selectedTipperId === tipper.tipper_id ? "table-row selected-row" : "table-row"} key={tipper.assignment_id} onClick={() => void loadTipper(tipper)}><strong>{tipper.registration_number}</strong><span>{tipper.driver_name}</span><span>{tipper.approved_trip_count} approved / {tipper.pending_trip_count} pending</span><span>{displayNumber(tipper.start_km)} / {displayNumber(tipper.end_km)}</span><span>{displayNumber(tipper.distance_km, " km")}</span><span>{tipper.completeness_status}</span></button>)}</div>{detailLoading && <div className="notice">Loading detail…</div>}</section>}
-    {selectedTipper && <section className="stack"><div className="content-heading"><div><h2>{selectedTipper.registration_number} · event trace</h2><p className="muted">Daily detail · {selectedTipper.driver_name} · assignment {selectedTipper.assignment_id} · {selectedTipper.site_name} · {selectedSite?.reporting_timezone ?? report?.reporting_timezone}</p></div></div><div className="content-heading"><div><h3>Daily performance</h3><p className="muted">Approved operational records only. Timing metrics describe trip completion records, not trip duration or engine time.</p></div></div><div className="metric-grid owner-detail-metrics"><Metric label="Approved Trips" value={selectedTipper.approved_trip_count} /><Metric label="Distance KM" value={displayNumber(selectedTipper.distance_km, " km")} /><Metric label="KM / Approved Trip" value={displayNumber(selectedTipper.km_per_approved_trip)} /><Metric label="Diesel Issued" value={displayNumber(selectedTipper.verified_diesel_issued, " L")} /><Metric label="Diesel Issued / Approved Trip" value={displayNumber(selectedTipper.diesel_issued_per_approved_trip, " L")} /><Metric label="First Trip" value={selectedTipper.first_trip_completed_at ? displayDate(selectedTipper.first_trip_completed_at, selectedSite?.reporting_timezone ?? report?.reporting_timezone) : "Unavailable"} /><Metric label="Last Trip" value={selectedTipper.last_trip_completed_at ? displayDate(selectedTipper.last_trip_completed_at, selectedSite?.reporting_timezone ?? report?.reporting_timezone) : "Unavailable"} /><Metric label="Recorded Activity Span" value={displayInterval(selectedTipper.recorded_activity_span_seconds)} /><Metric label="Avg Trip Completion Interval" value={displayInterval(selectedTipper.avg_trip_completion_interval_seconds)} /><Metric label="Median Trip Completion Interval" value={displayInterval(selectedTipper.median_trip_completion_interval_seconds)} /><Metric label="Longest Trip Gap" value={displayInterval(selectedTipper.longest_trip_gap_seconds)} /></div><div className="content-heading"><div><h3>Verification and attention</h3></div></div><div className="metric-grid owner-detail-metrics"><Metric label="Pending Trips" value={selectedTipper.pending_trip_count} /><Metric label="Rejected Trips" value={selectedTipper.rejected_trip_count} /><Metric label="Disputed Trips" value={selectedTipper.disputed_trip_count} /><Metric label="Pending Diesel" value={selectedTipper.pending_diesel_count} /><Metric label="Disputed Diesel" value={selectedTipper.disputed_diesel_count} /><Metric label="Unresolved Emergencies" value={selectedTipper.unresolved_emergency_count} /><Metric label="Completeness" value={selectedTipper.completeness_status} /><Metric label="Closure" value={selectedTipper.closure_status} /><Metric label="Exceptions" value={selectedTipper.exceptions.length} /></div>{selectedTipper.exceptions.length > 0 && <div className="notice error">{selectedTipper.exceptions.map((item) => `${item.code}: ${item.description}`).join(" · ")}</div>}<div className="content-heading"><div><h3>Event trace</h3></div></div><div className="stack">{selectedTipper.events.map((event) => <article className="table-card" key={event.event_id}><div className="table-row"><strong>{event.event_type.replaceAll("_", " ")}</strong><span>{event.verification_status}</span><span>{displayDate(event.device_created_at, selectedSite?.reporting_timezone ?? report?.reporting_timezone)}</span>{event.evidence_available && <button className="secondary" onClick={() => void viewEvidence(event.event_id)} type="button">View evidence</button>}</div><div className="table-row"><span>{event.reading_type ? `${event.reading_type}: ${event.reading_value ?? ""}` : ""}</span><span>{event.litres === null ? "" : `${event.litres} L`}</span><span>{event.emergency_category ?? ""} {event.emergency_description ?? ""}</span><span>{event.duty_session_id ? `Session ${event.duty_session_id.slice(0, 8)}` : "Outside duty session"}</span><span>Received {displayDate(event.server_received_at, selectedSite?.reporting_timezone ?? report?.reporting_timezone)}</span></div><details><summary>Verification history ({event.verification_history.length})</summary>{event.verification_history.map((history, index) => <div className="table-row" key={`${event.event_id}-${index}`}><span>{history.status}</span><span>{history.actor_name ?? "System"}</span><span>{history.reason ?? "No reason"}</span><span>{displayDate(history.created_at, selectedSite?.reporting_timezone ?? report?.reporting_timezone)}</span></div>)}</details></article>)}</div></section>}
-    {evidenceUrl && evidenceDetails && <EvidenceModal details={evidenceDetails} onClose={closeEvidence} url={evidenceUrl} />}
+  return <section id="owner-operations">
+    <div className="content-heading"><div><h2>Owner operations</h2><p className="muted">Approved records drive official totals. Tippers use trips and odometer readings; machinery uses hour-meter readings.</p></div><div className="inline-form"><label>Operational date<input type="date" value={operationalDate} onChange={(event) => { setOperationalDate(event.target.value); setSelectedSiteId(""); setSelectedAsset(null); }} /></label><label>Excel template<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="">Server default</option>{templates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.is_default ? " · Default" : ""}</option>)}</select></label><button className="secondary" disabled={loading} onClick={() => setRefresh((value) => value + 1)} type="button">{loading ? "Loading…" : "Refresh"}</button><button disabled={!report} onClick={() => void download()} type="button">Download Excel</button></div></div>
+    {settings && <article className="table-card settings-card"><div className="content-heading"><div><h3>Company reporting settings</h3><p className="muted">Times are persisted in UTC and grouped using this reporting timezone.</p></div><button onClick={() => void saveSettings()} type="button">Save settings</button></div><div className="inline-form"><label>IANA timezone<input value={timezone} onChange={(event) => setTimezone(event.target.value)} /></label><label>Day start minute (0–1439)<input type="number" min="0" max="1439" value={dayStart} onChange={(event) => setDayStart(event.target.value)} /></label></div></article>}
+    {report && <Dashboard report={report} duties={duties} number={number} date={date} selectedSiteId={selectedSiteId} onSelectSite={(id) => { setSelectedSiteId(id); setSelectedAsset(null); }} />}
+    {selectedSite && <SiteDetail site={selectedSite} details={siteReport} selectedAsset={selectedAsset} number={number} onSelectAsset={selectAsset} reopenReason={reopenReason} setReopenReason={setReopenReason} changeClosure={changeClosure} />}
+    {selectedAsset && <AssetDetail asset={selectedAsset} number={number} date={date} onEvidence={viewEvidence} />}
+    {evidenceUrl && evidenceDetails && <EvidenceModal details={evidenceDetails} onClose={() => { URL.revokeObjectURL(evidenceUrl); setEvidenceUrl(null); setEvidenceDetails(null); }} url={evidenceUrl} />}
     {!report && !loading && <div className="notice">No dashboard data is available for this operational day.</div>}
+  </section>;
+}
+
+function Dashboard({ report, duties, number: display, date, selectedSiteId, onSelectSite }: { report: DashboardReport; duties: DriverDutyReport[]; number: typeof number; date: (value: string) => string; selectedSiteId: string; onSelectSite: (id: string) => void }) {
+  const emergencies = report.sites.flatMap((site) => site.tippers.flatMap((asset) => asset.events.filter((event) => event.emergency_status === "OPEN" || event.emergency_status === "ACKNOWLEDGED")));
+  return <>
+    {emergencies.length > 0 && <section className="emergency-panel"><h2>OPEN EMERGENCIES <span className="badge">{emergencies.length}</span></h2>{emergencies.map((event) => <article className="emergency-alert" key={event.event_id} role="alert"><div className="emergency-alert-details"><strong>{event.driver_name}</strong><span>{event.asset_code || event.tipper_registration_number} · {event.site_name}</span><span>{event.emergency_status} · {date(event.device_created_at)}</span></div>{event.driver_phone && <a className="call-driver" href={`tel:${event.driver_phone}`}>CALL DRIVER</a>}</article>)}</section>}
+    <div className="metric-grid" id="owner-reports"><Metric label="Assigned assets" value={report.assigned_tippers_count} /><Metric label="Approved trips" value={report.approved_trip_count} /><Metric label="Total KM" value={display(report.total_km, " km")} /><Metric label="Diesel issued" value={display(report.verified_diesel_issued, " L")} /><Metric label="Drivers on duty" value={report.drivers_on_duty ?? duties.filter((item) => item.status === "ACTIVE").length} /><Metric label="Past regular duty" value={report.drivers_past_regular_duty ?? duties.filter((item) => item.status === "ACTIVE" && item.overtime_minutes > 0).length} /><Metric label="Pending verification" value={report.pending_verification_count} /><Metric label="Missing readings" value={report.missing_reading_count} /><Metric label="Open Emergencies" value={report.unresolved_emergency_count} /><Metric label="Sites not closed" value={report.sites_not_closed_count} /></div>
+    <section className="stack" aria-labelledby="driver-duty-heading"><h2 id="driver-duty-heading">Driver / Operator duty</h2><div className="table-card"><div className="table-row"><strong>Driver / Operator</strong><span>Asset</span><span>Site</span><span>Meter</span><span>Diesel</span><span>Duty</span><span>Overtime</span><span>Status</span></div>{duties.length ? duties.map((duty) => <div className="table-row" key={duty.session_id}><strong>{duty.driver_name}</strong><span>{duty.tipper_registration_number || duty.asset_code} · {title(duty.asset_type)}</span><span>{duty.site_name}</span><span>{duty.asset_type === "TIPPER" ? `${display(duty.start_km)} / ${display(duty.end_km)} km` : `${display(duty.start_hmr)} / ${display(duty.end_hmr)} HMR · ${display(duty.machine_hours, " h")}`}</span><span>{display(duty.verified_diesel_issued, " L")}{duty.pending_diesel_issued ? ` · ${display(duty.pending_diesel_issued, " L")} pending` : ""}</span><span>{date(duty.duty_start)} – {duty.actual_duty_end ? date(duty.actual_duty_end) : "Open"}</span><span>{duty.overtime_minutes} min</span><span>{duty.status}</span></div>) : <p className="empty-state">No duty sessions for this operational day.</p>}</div></section>
+    <section><h2>Sites</h2><p className="muted">{report.complete_tippers_count} asset{report.complete_tippers_count === 1 ? "" : "s"} have complete approved readings.</p><div className="table-card"><div className="table-row"><strong>Site</strong><span>Assigned</span><span>Trips</span><span>KM</span><span>Diesel</span><span>Closure</span></div>{report.sites.length ? report.sites.map((site) => <button className={`table-row ${selectedSiteId === site.site_id ? "selected-row" : ""}`} key={site.site_id} onClick={() => onSelectSite(site.site_id)} type="button"><strong>{site.site_name}</strong><span>{site.assigned_tippers_count}</span><span>{site.approved_trip_count} approved / {site.pending_trip_count} pending</span><span>{display(site.total_km, " km")}</span><span>{display(site.verified_diesel_issued, " L")}</span><span>{site.closure.status}</span></button>) : <p className="empty-state">No assigned tippers were found for this operational day.</p>}</div></section>
+    <section id="owner-exceptions"><h2>Exceptions</h2><div className="table-card">{report.exceptions.length ? report.exceptions.map((item, index) => <button className="table-row" key={`${item.code}-${index}`} onClick={() => onSelectSite(item.site_id)} type="button"><strong>{item.code}</strong><span>{item.tipper_registration_number}</span><span>{item.description}</span><span>Open site detail</span></button>) : <p className="empty-state">No exceptions for this operational day.</p>}</div></section>
   </>;
+}
+
+function SiteDetail({ site, details, selectedAsset, number: display, onSelectAsset, reopenReason, setReopenReason, changeClosure }: { site: SiteDailyReport; details: SiteDailyReport | null; selectedAsset: TipperDailyReport | null; number: typeof number; onSelectAsset: (asset: TipperDailyReport) => Promise<void>; reopenReason: string; setReopenReason: (value: string) => void; changeClosure: (action: "close" | "reopen") => Promise<void> }) {
+  return <section className="stack" id="owner-closure"><div className="content-heading"><div><h2>{site.site_name} · daily detail</h2><p className="muted">{site.assigned_tippers_count} assigned asset{site.assigned_tippers_count === 1 ? "" : "s"} · {site.closure.status}</p></div><div className="inline-form">{site.closure.status === "CLOSED" ? <><input aria-label="Reopening reason" placeholder="Reason to reopen" value={reopenReason} onChange={(event) => setReopenReason(event.target.value)} /><button className="secondary" onClick={() => void changeClosure("reopen")} type="button">Reopen day</button></> : <button disabled={site.closure.blockers.length > 0} onClick={() => void changeClosure("close")} type="button">Close day</button>}</div></div>{site.closure.blockers.length > 0 && <div className="notice error"><strong>Closure blockers:</strong> {site.closure.blockers.map((item) => `${item.code}: ${item.description}`).join(" · ")}</div>}<div className="table-card"><div className="table-row"><strong>Asset</strong><span>Operator</span><span>Activity</span><span>Meter</span><span>Diesel</span><span>Completeness</span></div>{(details?.tippers ?? []).map((asset) => { const machinery = asset.asset_type !== "TIPPER"; return <button className={`table-row ${selectedAsset?.tipper_id === asset.tipper_id ? "selected-row" : ""}`} key={asset.assignment_id} onClick={() => void onSelectAsset(asset)} type="button"><strong>{asset.registration_number || asset.short_name || asset.tipper_id} · {title(asset.asset_type)}</strong><span>{asset.driver_name}</span><span>{machinery ? "Trips not applicable" : `${asset.approved_trip_count ?? 0} approved / ${asset.pending_trip_count ?? 0} pending`}</span><span>{machinery ? `${display(asset.start_hmr)} / ${display(asset.end_hmr)} HMR · ${display(asset.machine_hours, " h")}` : `${display(asset.start_km)} / ${display(asset.end_km)} km · ${display(asset.distance_km, " km")}`}</span><span>{display(asset.verified_diesel_issued, " L")}{asset.pending_diesel_issued ? ` · ${display(asset.pending_diesel_issued, " L")} pending` : ""}</span><span>{asset.completeness_status}</span></button>; })}</div></section>;
+}
+
+function AssetDetail({ asset, number: display, date, onEvidence }: { asset: TipperDailyReport; number: typeof number; date: (value: string) => string; onEvidence: (eventId: string) => Promise<void> }) {
+  const assetType = asset.asset_type ?? "TIPPER"; const machinery = assetType !== "TIPPER"; const label = asset.registration_number || asset.short_name || asset.tipper_id;
+  return <section className="stack"><div><h2>{label} · event trace</h2><p className="muted">{title(assetType)} · {asset.driver_name} · {asset.site_name}</p></div><div className="metric-grid owner-detail-metrics">{machinery ? <><Metric label="Start HMR" value={display(asset.start_hmr)} /><Metric label="End HMR" value={display(asset.end_hmr)} /><Metric label="Machine hours" value={display(asset.machine_hours, " h")} /></> : <><Metric label="Approved Trips" value={asset.approved_trip_count ?? "Not applicable"} /><Metric label="Start KM" value={display(asset.start_km)} /><Metric label="End KM" value={display(asset.end_km)} /><Metric label="Distance KM" value={display(asset.distance_km, " km")} /><Metric label="KM / Approved Trip" value={display(asset.km_per_approved_trip)} /></>}<Metric label="Diesel Issued" value={display(asset.verified_diesel_issued, " L")} /><Metric label="Pending Diesel" value={display(asset.pending_diesel_issued, " L")} /><Metric label="Unresolved Emergencies" value={asset.unresolved_emergency_count} /><Metric label="Completeness" value={asset.completeness_status} /><Metric label="Closure" value={asset.closure_status} /></div>{asset.exceptions.length > 0 && <div className="notice error">{asset.exceptions.map((item) => `${item.code}: ${item.description}`).join(" · ")}</div>}<h3>Event trace</h3><div className="stack">{asset.events.map((event) => <article className="table-card" key={event.event_id}><div className="table-row"><strong>{title(event.event_type)}</strong><span>{event.verification_status}</span><span>{date(event.device_created_at)}</span><span>{event.reading_type ? `${title(event.reading_type)}: ${event.reading_value ?? "Unavailable"}${event.event_type === "HMR_READING" ? " HMR" : ""}` : event.litres != null ? `${event.litres} L` : ""}</span>{event.evidence_available && <button className="secondary" onClick={() => void onEvidence(event.event_id)} type="button">View evidence</button>}</div><details><summary>Verification history ({event.verification_history.length})</summary>{event.verification_history.map((history, index) => <div className="table-row" key={`${event.event_id}-${index}`}><span>{history.status}</span><span>{history.actor_name ?? "System"}</span><span>{history.reason ?? "No reason"}</span><span>{date(history.created_at)}</span></div>)}</details></article>)}</div></section>;
 }

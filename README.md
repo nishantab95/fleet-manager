@@ -1,5 +1,15 @@
 # Fleet Manager
 
+## Owner web workstation
+
+On an Owner laptop connected to the private Tailscale network, set the server-side-only upstream in `apps/web/.env.local`:
+
+```dotenv
+FLEET_API_UPSTREAM_URL=https://your-private-fleet-api-host
+```
+
+Then double-click `Start Fleet Manager Owner.bat`. The launcher checks the remote `/health` and `/ready` gates, starts only the local Next.js web app, waits for its same-origin API proxy, and opens the Owner workspace. It does not start a local API or database.
+
 Production foundation for a construction company's company-owned tipper operations.
 
 V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell; Phase 4 adds the offline-first driver event client and reliable event/evidence sync; Phase 5 adds supervisor site-scoped verification and operational completeness review.
