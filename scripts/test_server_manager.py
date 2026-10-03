@@ -76,14 +76,18 @@ def test_server_start_requests_only_postgres(monkeypatch: pytest.MonkeyPatch) ->
         commands.append(args)
 
     monkeypatch.setattr(server_manager, "checked", record)
-    monkeypatch.setattr(server_manager, "compose_health", lambda *_: {"postgres": "healthy"})
+    monkeypatch.setattr(
+        server_manager, "compose_health", lambda *_: {"postgres": "healthy"}
+    )
 
     server_manager.ensure_infrastructure("docker", {})
 
     assert commands == [["docker", "compose", "up", "-d", "postgres"]]
 
 
-def test_stop_targets_only_owned_api_and_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stop_targets_only_owned_api_and_postgres(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[object] = []
     monkeypatch.setattr(server_manager, "require_runtime", lambda: ("docker", {}))
     monkeypatch.setattr(server_manager, "stop_api", lambda: calls.append("api") or 0)
@@ -364,6 +368,30 @@ def test_pilot_apk_absence_is_not_a_server_failure(
     assert status["pilot_directory"] == "OK"
     assert status["pilot_apk"] == "NOT PUBLISHED"
     assert status["apk_url"] == ""
+
+
+def test_pilot_publisher_status_is_independent_of_api_health(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    status_file = tmp_path / "publisher-status.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "state": "READY",
+                "updatedAt": server_manager.datetime.now(
+                    server_manager.UTC
+                ).isoformat(),
+                "detail": "Waiting for a complete pilot release pair.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_manager, "PILOT_PUBLISHER_STATUS_FILE", status_file)
+
+    status = server_manager.pilot_publisher_status()
+
+    assert status["pilot_publisher"] == "READY"
+    assert "pilot_publisher" not in server_manager.LOCAL_STATUS_KEYS
 
 
 def test_pilot_apk_status_creates_and_verifies_sha256(
@@ -666,7 +694,9 @@ def configure_current_repair(
         lambda _: database_revisions,
     )
 
-    def checked(args: list[str], *, label: str, **_: object) -> subprocess.CompletedProcess[str]:
+    def checked(
+        args: list[str], *, label: str, **_: object
+    ) -> subprocess.CompletedProcess[str]:
         del args
         events.append("start" if label == "Fleet Manager restart" else "migrate")
         return subprocess.CompletedProcess([], 0, "", "")
@@ -691,7 +721,9 @@ def test_update_already_current_exits_before_backup(
         return values[args]
 
     monkeypatch.setattr(server_manager, "git_output", git_output)
-    monkeypatch.setattr(server_manager, "_deployment_state", lambda _: deployment_state())
+    monkeypatch.setattr(
+        server_manager, "_deployment_state", lambda _: deployment_state()
+    )
     monkeypatch.setattr(
         server_manager,
         "backup_server",
@@ -861,7 +893,9 @@ def test_api_staleness_uses_recorded_commit_and_legacy_start_time(
 ) -> None:
     current = "b" * 40
     assert server_manager._api_process_is_stale({"repository_head": "a" * 40}, current)
-    assert not server_manager._api_process_is_stale({"repository_head": current}, current)
+    assert not server_manager._api_process_is_stale(
+        {"repository_head": current}, current
+    )
 
     monkeypatch.setattr(server_manager, "_latest_deployment_source_mtime", lambda: 20.0)
     assert server_manager._api_process_is_stale(
@@ -941,7 +975,9 @@ def test_update_git_behind_runs_backup_pull_migrate_and_restart(
         )
     )
 
-    def checked(args: list[str], *, label: str, **_: object) -> subprocess.CompletedProcess[str]:
+    def checked(
+        args: list[str], *, label: str, **_: object
+    ) -> subprocess.CompletedProcess[str]:
         del args
         events.append("start" if label == "Fleet Manager restart" else "migrate")
         return subprocess.CompletedProcess([], 0, "", "")
@@ -957,6 +993,7 @@ def test_update_git_behind_runs_backup_pull_migrate_and_restart(
         "_deployment_state",
         lambda _: next(states),
     )
+
     def create_backup() -> Path:
         events.append("backup")
         return backup
@@ -1012,7 +1049,9 @@ def test_update_migration_failure_reports_and_keeps_backup(
         }
         return values[args]
 
-    def checked(args: list[str], *, label: str, **_: object) -> subprocess.CompletedProcess[str]:
+    def checked(
+        args: list[str], *, label: str, **_: object
+    ) -> subprocess.CompletedProcess[str]:
         del args
         if label == "Alembic upgrade":
             raise server_manager.ServerError("migration failed safely")
@@ -1080,6 +1119,9 @@ def test_publish_batch_wrapper_only_delegates_verified_apk_publish() -> None:
     )
 
     assert 'set "REPO_ROOT=%~dp0"' in wrapper
-    assert '"%PYTHON_EXE%" "%REPO_ROOT%\\scripts\\server_manager.py" publish-apk' in wrapper
+    assert (
+        '"%PYTHON_EXE%" "%REPO_ROOT%\\scripts\\server_manager.py" publish-apk'
+        in wrapper
+    )
     assert "flutter" not in wrapper.casefold()
     assert "sign" not in wrapper.casefold()

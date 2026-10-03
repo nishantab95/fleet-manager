@@ -74,6 +74,9 @@ PILOT_RELEASE_DIR = Path(r"F:\FleetManagerData\releases\pilot")
 PILOT_APK_NAME = "FleetManager-Pilot-latest.apk"
 PILOT_SHA256_NAME = "sha256.txt"
 PILOT_VERSION_NAME = "version.txt"
+PILOT_PUBLISHER_STATUS_FILE = Path(
+    r"F:\FleetManagerData\releases\incoming\publisher-status.json"
+)
 LOCAL_STATUS_KEYS = ("docker", "postgres", "evidence", "api", "health", "ready")
 DEPLOYMENT_SOURCE_PATHS = (
     API_PROJECT / "src",
@@ -104,10 +107,7 @@ class DeploymentState:
     @property
     def api_current(self) -> bool:
         return (
-            self.api_running
-            and not self.api_stale
-            and self.health_ok
-            and self.ready_ok
+            self.api_running and not self.api_stale and self.health_ok and self.ready_ok
         )
 
     @property
@@ -154,7 +154,9 @@ def checked(
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip().splitlines()
         safe_tail = "\n".join(detail[-12:])
-        raise ServerError(f"{label} failed.\n{safe_tail}" if safe_tail else f"{label} failed.")
+        raise ServerError(
+            f"{label} failed.\n{safe_tail}" if safe_tail else f"{label} failed."
+        )
     return result
 
 
@@ -199,9 +201,13 @@ def load_server_environment() -> dict[str, str]:
     if missing:
         raise ServerError("Server configuration is incomplete: " + ", ".join(missing))
     if values.get("FLEET_ENVIRONMENT", "").lower() in {"production", "prod"}:
-        raise ServerError("This local server controller refuses production configuration.")
+        raise ServerError(
+            "This local server controller refuses production configuration."
+        )
     if values.get("FLEET_OBJECT_STORAGE_PROVIDER", "").lower() != "filesystem":
-        raise ServerError("Evidence storage must be configured as filesystem for this server.")
+        raise ServerError(
+            "Evidence storage must be configured as filesystem for this server."
+        )
     effective = dict(os.environ)
     for key, value in values.items():
         effective.setdefault(key, value)
@@ -379,7 +385,10 @@ def is_owned_api(info: ProcessInfo | None, state: Mapping[str, Any]) -> bool:
     if info is None or not state.get("owned") or info.pid != state.get("pid"):
         return False
     normalized = " ".join(
-        (info.command_line or info.executable_path).casefold().replace("/", "\\").split()
+        (info.command_line or info.executable_path)
+        .casefold()
+        .replace("/", "\\")
+        .split()
     )
     root = str(ROOT).casefold().replace("/", "\\")
     project_python = str(PROJECT_PYTHON).casefold().replace("/", "\\")
@@ -403,7 +412,7 @@ def process_parent_pid(pid: int) -> int | None:
             "-NoLogo",
             "-NoProfile",
             "-Command",
-            f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\").ParentProcessId",
+            f'(Get-CimInstance Win32_Process -Filter "ProcessId = {pid}").ParentProcessId',
         ],
         timeout=5,
     )
@@ -601,9 +610,7 @@ def remote_access_status(*, ensure_serve: bool = False) -> dict[str, str]:
     root_ok = _private_serve_target(serve_payload, dns_name) == TAILSCALE_PROXY_TARGET
     result["serve_root"] = "OK" if root_ok else "MISSING"
     pilot_path = _private_serve_path(serve_payload, dns_name)
-    pilot_ok = bool(
-        pilot_path and _same_local_path(pilot_path, PILOT_RELEASE_DIR)
-    )
+    pilot_ok = bool(pilot_path and _same_local_path(pilot_path, PILOT_RELEASE_DIR))
     if ensure_serve and root_ok and not pilot_ok and PILOT_RELEASE_DIR.is_dir():
         configured, reason = _configure_pilot_serve(executable)
         if configured:
@@ -740,11 +747,16 @@ def component_status(
     }
     status.update(remote_access_status(ensure_serve=ensure_remote))
     status.update(pilot_release_status(status.get("remote_url", "")))
+    status.update(pilot_publisher_status())
     return status
 
 
-def print_start_status(status: Mapping[str, str], start_result: str | None = None) -> None:
-    online = all(status[key] == "OK" for key in ("postgres", "evidence", "api", "ready"))
+def print_start_status(
+    status: Mapping[str, str], start_result: str | None = None
+) -> None:
+    online = all(
+        status[key] == "OK" for key in ("postgres", "evidence", "api", "ready")
+    )
     print("\nFLEET MANAGER SERVER\n")
     print(f"Docker          {status['docker']}")
     print(f"PostgreSQL      {status['postgres']}")
@@ -795,6 +807,7 @@ def print_check_status(status: Mapping[str, str]) -> None:
     print(f"Remote /health  {status.get('remote_health', 'OFFLINE')}")
     print(f"Remote /ready   {status.get('remote_ready', 'OFFLINE')}")
     print(f"Pilot APK       {status.get('pilot_apk', 'NOT PUBLISHED')}")
+    print(f"Pilot Publisher {status.get('pilot_publisher', 'ERROR')}")
     if status.get("remote_url"):
         print(f"Remote URL      {status['remote_url']}")
     if status.get("apk_url") and status.get("serve_pilot") == "OK":
@@ -847,7 +860,9 @@ def stop_api() -> int:
             STATE_FILE.unlink(missing_ok=True)
             print("Removed stale Fleet Manager API state; no process was stopped.")
             return 0
-        raise ServerError("Refusing to stop API: recorded process ownership could not be verified.")
+        raise ServerError(
+            "Refusing to stop API: recorded process ownership could not be verified."
+        )
     assert info is not None
     result = run_capture(["taskkill", "/PID", str(info.pid), "/T"], timeout=20)
     taskkill_detail = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
@@ -868,7 +883,9 @@ def stop_api() -> int:
         current = safe_process_info(info.pid)
         if not is_owned_api(current, state):
             raise ServerError("Refusing forced stop: process identity changed.")
-        forced = run_capture(["taskkill", "/PID", str(info.pid), "/T", "/F"], timeout=20)
+        forced = run_capture(
+            ["taskkill", "/PID", str(info.pid), "/T", "/F"], timeout=20
+        )
         if forced.returncode != 0:
             raise ServerError("Fleet Manager API did not stop.")
     STATE_FILE.unlink(missing_ok=True)
@@ -910,7 +927,9 @@ def stable_sha256(path: Path) -> tuple[str, int]:
 
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, raw_temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    descriptor, raw_temporary = tempfile.mkstemp(
+        prefix=f".{path.name}-", dir=path.parent
+    )
     temporary = Path(raw_temporary)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
@@ -927,6 +946,38 @@ def ensure_pilot_release_directory() -> None:
     if PILOT_RELEASE_DIR.exists() and not PILOT_RELEASE_DIR.is_dir():
         raise ServerError(f"Pilot release path is not a directory: {PILOT_RELEASE_DIR}")
     PILOT_RELEASE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def pilot_publisher_status() -> dict[str, str]:
+    result = {
+        "pilot_publisher": "ERROR",
+        "pilot_publisher_detail": "Status unavailable.",
+    }
+    try:
+        payload = json.loads(PILOT_PUBLISHER_STATUS_FILE.read_text(encoding="utf-8"))
+        state = payload.get("state")
+        updated = datetime.fromisoformat(str(payload.get("updatedAt", "")))
+        if updated.tzinfo is None:
+            raise ValueError("publisher timestamp has no timezone")
+        age = (datetime.now(UTC) - updated.astimezone(UTC)).total_seconds()
+        if state not in ("READY", "PROCESSING", "ERROR"):
+            raise ValueError("publisher state is invalid")
+        if age > 300:
+            return {
+                "pilot_publisher": "ERROR",
+                "pilot_publisher_detail": "Publisher status is stale.",
+            }
+        result["pilot_publisher"] = state
+        result["pilot_publisher_detail"] = str(payload.get("detail", ""))[:1000]
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ) as error:
+        result["pilot_publisher_detail"] = f"Publisher status unavailable: {error}"
+    return result
 
 
 def pilot_release_status(remote_url: str = "") -> dict[str, str]:
@@ -1000,7 +1051,9 @@ def publish_pilot_apk(source: Path, version_file: Path | None = None) -> int:
         shutil.copyfile(source, temporary)
         copied_digest, copied_size = stable_sha256(temporary)
         if copied_size != source_size or copied_digest != source_digest:
-            raise ServerError("Pilot APK copy verification failed; nothing was published.")
+            raise ServerError(
+                "Pilot APK copy verification failed; nothing was published."
+            )
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
@@ -1039,7 +1092,9 @@ def publish_pilot_apk(source: Path, version_file: Path | None = None) -> int:
 
 def atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, raw_temporary = tempfile.mkstemp(prefix=".fleet-manifest-", dir=path.parent)
+    descriptor, raw_temporary = tempfile.mkstemp(
+        prefix=".fleet-manifest-", dir=path.parent
+    )
     temporary = Path(raw_temporary)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
@@ -1059,8 +1114,7 @@ def safe_snapshot_path(snapshot: Path, relative_text: str) -> Path:
         or "\\" in relative_text
         or relative_text.startswith("/")
         or any(
-            part in {"", ".", ".."} or ":" in part
-            for part in relative_text.split("/")
+            part in {"", ".", ".."} or ":" in part for part in relative_text.split("/")
         )
     ):
         raise ServerError("Evidence backup manifest contains an unsafe path.")
@@ -1079,7 +1133,11 @@ def verify_evidence_snapshot(snapshot: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         raise ServerError("Evidence backup manifest is missing or invalid.") from exc
     files = manifest.get("files") if isinstance(manifest, dict) else None
-    if not isinstance(manifest, dict) or manifest.get("format_version") != 1 or not isinstance(files, list):
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("format_version") != 1
+        or not isinstance(files, list)
+    ):
         raise ServerError("Evidence backup manifest format is invalid.")
     expected_paths: set[str] = set()
     for entry in files:
@@ -1097,7 +1155,10 @@ def verify_evidence_snapshot(snapshot: Path) -> dict[str, Any]:
         candidate = safe_snapshot_path(snapshot, relative)
         if candidate.is_symlink() or not candidate.is_file():
             raise ServerError(f"Evidence backup file is unavailable: {relative}")
-        if candidate.stat().st_size != expected_size or sha256(candidate) != expected_hash:
+        if (
+            candidate.stat().st_size != expected_size
+            or sha256(candidate) != expected_hash
+        ):
             raise ServerError(f"Evidence backup hash verification failed: {relative}")
         expected_paths.add(relative)
     actual_paths = {
@@ -1110,7 +1171,9 @@ def verify_evidence_snapshot(snapshot: Path) -> dict[str, Any]:
     return manifest
 
 
-def create_evidence_snapshot(source_root: Path, timestamp: str) -> tuple[Path, Path, dict[str, Any]]:
+def create_evidence_snapshot(
+    source_root: Path, timestamp: str
+) -> tuple[Path, Path, dict[str, Any]]:
     try:
         canonical_source = source_root.resolve(strict=True)
     except OSError as exc:
@@ -1125,26 +1188,39 @@ def create_evidence_snapshot(source_root: Path, timestamp: str) -> tuple[Path, P
     staging.mkdir(parents=False, exist_ok=False)
     try:
         entries: list[dict[str, Any]] = []
-        for source in sorted(canonical_source.rglob("*"), key=lambda item: item.as_posix()):
+        for source in sorted(
+            canonical_source.rglob("*"), key=lambda item: item.as_posix()
+        ):
             if source.is_symlink():
-                raise ServerError("Evidence backup refuses symbolic links or junction files.")
+                raise ServerError(
+                    "Evidence backup refuses symbolic links or junction files."
+                )
             if not source.is_file():
                 continue
             resolved_source = source.resolve(strict=True)
             try:
                 relative = resolved_source.relative_to(canonical_source)
             except ValueError as exc:
-                raise ServerError("Evidence file escapes the configured storage root.") from exc
+                raise ServerError(
+                    "Evidence file escapes the configured storage root."
+                ) from exc
             relative_text = relative.as_posix()
             if relative_text == EVIDENCE_MANIFEST_NAME:
-                raise ServerError("Evidence root contains the reserved backup manifest name.")
+                raise ServerError(
+                    "Evidence root contains the reserved backup manifest name."
+                )
             destination = staging / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(resolved_source, destination)
             source_size = resolved_source.stat().st_size
             source_hash = sha256(resolved_source)
-            if destination.stat().st_size != source_size or sha256(destination) != source_hash:
-                raise ServerError(f"Evidence backup copy verification failed: {relative_text}")
+            if (
+                destination.stat().st_size != source_size
+                or sha256(destination) != source_hash
+            ):
+                raise ServerError(
+                    f"Evidence backup copy verification failed: {relative_text}"
+                )
             entries.append(
                 {"path": relative_text, "size": source_size, "sha256": source_hash}
             )
@@ -1178,7 +1254,9 @@ def safe_backup_manifest(
     docker: str,
     env: Mapping[str, str],
 ) -> dict[str, Any]:
-    head = checked(["git", "rev-parse", "HEAD"], label="Git revision check").stdout.strip()
+    head = checked(
+        ["git", "rev-parse", "HEAD"], label="Git revision check"
+    ).stdout.strip()
     current = ", ".join(_database_alembic_revisions(env))
     containers: dict[str, str] = {}
     for service in ("postgres",):
@@ -1264,7 +1342,11 @@ def backup_server() -> int:
             stderr=subprocess.PIPE,
         )
         process.communicate(timeout=180)
-    if process.returncode != 0 or not dump_file.is_file() or dump_file.stat().st_size == 0:
+    if (
+        process.returncode != 0
+        or not dump_file.is_file()
+        or dump_file.stat().st_size == 0
+    ):
         raise ServerError("PostgreSQL logical dump failed or was empty.")
     with dump_file.open("rb") as source:
         verify = subprocess.run(
@@ -1308,7 +1390,9 @@ def backup_server() -> int:
     print(f"Evidence: {evidence_snapshot}")
     print(f"Evidence manifest: {evidence_manifest}")
     print(f"Manifest: {manifest_file}")
-    print("Restore was not performed; use an isolated restore target in the next phase.")
+    print(
+        "Restore was not performed; use an isolated restore target in the next phase."
+    )
     return 0
 
 
@@ -1373,7 +1457,9 @@ def _database_revision_timed_out(error: BaseException) -> bool:
     original = error.orig if isinstance(error, DBAPIError) else error
     sqlstate = getattr(original, "sqlstate", None)
     detail = str(original).casefold()
-    return sqlstate in {"55P03", "57014"} or "timed out" in detail or "timeout" in detail
+    return (
+        sqlstate in {"55P03", "57014"} or "timed out" in detail or "timeout" in detail
+    )
 
 
 def _database_alembic_revisions(env: Mapping[str, str]) -> tuple[str, ...]:
@@ -1394,9 +1480,11 @@ def _database_alembic_revisions(env: Mapping[str, str]) -> tuple[str, ...]:
             },
         )
         with engine.connect() as connection:
-            revisions = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalars().all()
+            revisions = (
+                connection.execute(text("SELECT version_num FROM alembic_version"))
+                .scalars()
+                .all()
+            )
     except OperationalError as error:
         if _database_revision_timed_out(error):
             if error.statement:
@@ -1421,10 +1509,14 @@ def _database_alembic_revisions(env: Mapping[str, str]) -> tuple[str, ...]:
         if engine is not None:
             engine.dispose()
     if len(revisions) != 1:
-        raise ServerError("Database alembic_version must contain exactly one revision row.")
+        raise ServerError(
+            "Database alembic_version must contain exactly one revision row."
+        )
     revision = revisions[0]
     if not isinstance(revision, str) or not revision.strip():
-        raise ServerError("Database alembic_version contains an invalid revision value.")
+        raise ServerError(
+            "Database alembic_version contains an invalid revision value."
+        )
     return (revision.strip(),)
 
 
@@ -1507,7 +1599,9 @@ def _print_deployment_state(source_current: bool, state: DeploymentState) -> Non
         print("API             UNHEALTHY - RESTART REQUIRED")
     print(f"/health         {'CURRENT' if state.health_ok else 'FAILED'}")
     print(f"/ready          {'CURRENT' if state.ready_ok else 'FAILED'}")
-    print(f"REMOTE STATUS   {'CURRENT' if state.remote_current else 'REVALIDATION REQUIRED'}")
+    print(
+        f"REMOTE STATUS   {'CURRENT' if state.remote_current else 'REVALIDATION REQUIRED'}"
+    )
 
 
 def _require_verified_backup() -> Path:
@@ -1515,7 +1609,9 @@ def _require_verified_backup() -> Path:
     backup_server()
     created_backups = _backup_manifests() - before_backups
     if len(created_backups) != 1:
-        raise ServerError("Update refused: the pre-update backup location was not unambiguous.")
+        raise ServerError(
+            "Update refused: the pre-update backup location was not unambiguous."
+        )
     return created_backups.pop()
 
 
@@ -1536,7 +1632,9 @@ def update_server() -> int:
         raise ServerError("Update refused: the Git working tree is not clean.")
     branch = git_output("branch", "--show-current")
     if branch != "main":
-        raise ServerError(f"Update refused: expected branch main, found {branch or 'detached HEAD'}.")
+        raise ServerError(
+            f"Update refused: expected branch main, found {branch or 'detached HEAD'}."
+        )
     if not git_output("remote", "get-url", "origin"):
         raise ServerError("Update refused: origin is not configured.")
     old_commit = git_output("rev-parse", "HEAD")
@@ -1614,7 +1712,9 @@ def update_server() -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Control the local Fleet Manager server.")
+    parser = argparse.ArgumentParser(
+        description="Control the local Fleet Manager server."
+    )
     parser.add_argument(
         "command",
         choices=("start", "check", "stop", "backup", "update", "publish-apk"),
