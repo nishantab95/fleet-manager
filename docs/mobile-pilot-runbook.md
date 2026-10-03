@@ -1,28 +1,53 @@
 # Fleet Manager Mobile Pilot Runbook
 
-## APK
+## Private Pilot APK releases
 
-The overnight build is copied to:
+Fleet Manager Pilot updates are private sideloaded APKs. They are not Play
+Store releases, are never installed silently, and must never be exposed with
+Tailscale Funnel or another public download URL.
 
-`D:\Git\fleet maneger\fleet manager\dist\FleetManager-Pilot.apk`
+Publish a signed, already-built Pilot APK on the server PC with:
 
-Final verified artifact: 59,828,779 bytes, SHA-256 `48d0472d2af8bc1030fa4af424e4a5a7a68bd699975abe25515d3ff357b34337`.
+`Publish Pilot APK.bat <path-to-pilot.apk>`
 
-Install it with Android Studio/ADB or copy the APK to the phone and open it. The APK is a sideloadable Pilot build and is intentionally debug-signed; it is not a Play Store release.
+Use `--mandatory` after the APK argument only for a release that must block
+older Pilot clients. The publisher verifies the Pilot package, versionCode,
+SHA-256, and expected signing certificate before changing the active release.
+It retains a versioned APK and atomically activates the latest APK,
+`version.txt`, `sha256.txt`, and `release.json`. A failed activation or private
+URL verification restores the preceding active release.
+
+The non-secret manifest is served at `<private-server>/pilot/release.json` and
+the APK at the HTTPS URL in that manifest. Do not place signing keys,
+credentials, OTPs, or private configuration in either file.
 
 ## Start the PC backend
 
 1. On the PC, double-click `Start Fleet Manager.bat`.
 2. Confirm the API is healthy at `http://127.0.0.1:8000/health` on the PC.
-3. Put the phone and PC on the same Wi-Fi network, or use USB ADB reverse.
+3. Confirm Tailscale is online and `server_manager.py check` reports the
+   private `/pilot` Serve path as ready. Funnel must remain disabled.
 
 ## Connect the phone
 
-The phone must not use `localhost` for the PC. In the Pilot login screen, open the settings icon and enter the PC LAN URL, for example:
+In the Pilot login screen, open the settings icon and enter the PC's private
+Tailscale HTTPS URL. Tap `TEST CONNECTION`, confirm `Connected`, then save.
+The same host serves `/pilot/release.json`; updater APK URLs are required to
+use HTTPS and that same host.
 
-`http://192.168.1.20:8000`
+On cold start the Pilot app checks for a higher Android versionCode. An
+optional update offers `LATER` and `UPDATE NOW`; a mandatory update cannot be
+dismissed. A server outage during an ordinary check is nonintrusive. Downloads
+stay in app-private cache, show progress, and are checked for SHA-256, Pilot
+package name, higher versionCode, and the established signing certificate
+before Android's normal package installer opens.
 
-Tap `TEST CONNECTION`, confirm `Connected`, then save. The URL is stored on the phone. With a USB-connected device, `Install Fleet Manager Pilot.bat` can configure `adb reverse tcp:8000 tcp:8000`; use `http://127.0.0.1:8000` after that.
+On Android 8 or newer, the first update may ask the operator to allow
+“Install unknown apps” for Fleet Manager Pilot. Open the displayed Android
+settings, enable the permission, and return to the app; the validated APK is
+then handed to the normal installer through a temporary content URI. Never
+use a browser download, USB/ADB installation, `file://` URI, or silent install
+as the Pilot update workflow.
 
 ## Local Pilot credentials
 
@@ -73,6 +98,7 @@ These fixed OTPs are local Pilot provider behavior only. Production authenticati
 ## Known Pilot limitations
 
 - Camera/gallery flows require Android permission and a real device/emulator image source.
-- Local HTTP is enabled only in the `pilot` Android flavor. Use an HTTPS URL for production builds.
+- Local HTTP remains available only for explicit Pilot API testing, but the
+  in-app updater accepts only the private Tailscale HTTPS origin.
 - The final APK was built with `flutter build apk --flavor pilot --release --build-name=1.0.0 --build-number=1 --dart-define=FLEET_PILOT=true`.
 - The app uses the existing backend authorization and report calculations; it does not calculate OT, distance, verification, or tenant access independently.

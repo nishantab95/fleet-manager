@@ -442,6 +442,16 @@ def test_publish_pilot_apk_uses_verified_atomic_destination(
     )
     release = tmp_path / "release" / "pilot"
     monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+    identity = server_manager.ApkIdentity(
+        package="com.fleetmanager.fleet_manager_mobile.pilot",
+        version_name="1.2.3-pilot",
+        version_code=45,
+        signer_sha256=(
+            "45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196"
+        ),
+        apk_sha256=server_manager.sha256(source),
+    )
+    monkeypatch.setattr(server_manager, "inspect_apk", lambda _: identity)
     monkeypatch.setattr(
         server_manager,
         "remote_access_status",
@@ -461,10 +471,31 @@ def test_publish_pilot_apk_uses_verified_atomic_destination(
 
     published = release / server_manager.PILOT_APK_NAME
     assert published.read_bytes() == source.read_bytes()
-    assert (release / server_manager.PILOT_VERSION_NAME).read_text(
-        encoding="utf-8"
-    ) == "1.2.3+45\n"
-    assert not list(release.glob("*.tmp"))
+    versioned = release / "FleetManager-Pilot-1.2.3-pilot-45.apk"
+    assert versioned.read_bytes() == source.read_bytes()
+    manifest = json.loads(
+        (release / server_manager.PILOT_RELEASE_MANIFEST_NAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["version_name"] == "1.2.3-pilot"
+    assert manifest["version_code"] == 45
+    assert manifest["apk_url"] == (
+        "https://fleet.example.ts.net/pilot/FleetManager-Pilot-1.2.3-pilot-45.apk"
+    )
+    assert manifest["sha256"] == identity.apk_sha256
+    assert manifest["mandatory"] is False
+    assert set(manifest) <= {
+        "version_name",
+        "version_code",
+        "apk_url",
+        "sha256",
+        "mandatory",
+        "published_at",
+        "source_commit",
+    }
+    assert not list(release.glob("*.staged"))
+    assert not list(release.glob("*.backup"))
 
 
 def test_publish_rejects_missing_version_metadata_before_copy(
@@ -477,6 +508,96 @@ def test_publish_rejects_missing_version_metadata_before_copy(
 
     with pytest.raises(server_manager.ServerError, match="version metadata"):
         server_manager.publish_pilot_apk(source, tmp_path / "missing-version.txt")
+
+    assert not (release / server_manager.PILOT_APK_NAME).exists()
+
+
+def test_publish_rolls_back_every_active_file_on_atomic_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "new.apk"
+    source.write_bytes(b"new signed pilot")
+    release = tmp_path / "pilot"
+    release.mkdir()
+    old_files = {
+        server_manager.PILOT_APK_NAME: b"old apk",
+        server_manager.PILOT_SHA256_NAME: b"old checksum\n",
+        server_manager.PILOT_VERSION_NAME: b"old version\n",
+        server_manager.PILOT_RELEASE_MANIFEST_NAME: b'{"old": true}\n',
+    }
+    for name, content in old_files.items():
+        (release / name).write_bytes(content)
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+    identity = server_manager.ApkIdentity(
+        package="com.fleetmanager.fleet_manager_mobile.pilot",
+        version_name="2.0.0-pilot",
+        version_code=50,
+        signer_sha256=(
+            "45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196"
+        ),
+        apk_sha256=server_manager.sha256(source),
+    )
+    monkeypatch.setattr(server_manager, "inspect_apk", lambda _: identity)
+    monkeypatch.setattr(
+        server_manager,
+        "remote_access_status",
+        lambda **_: {
+            "remote": "ONLINE",
+            "remote_url": "https://fleet.example.ts.net",
+            "serve_pilot": "OK",
+        },
+    )
+    real_replace = server_manager.os.replace
+    failed = False
+
+    def fail_manifest_once(source_path: Path, target_path: Path) -> None:
+        nonlocal failed
+        target = Path(target_path)
+        source_value = Path(source_path)
+        if (
+            not failed
+            and target.name == server_manager.PILOT_RELEASE_MANIFEST_NAME
+            and source_value.suffix == ".staged"
+        ):
+            failed = True
+            raise OSError("simulated manifest activation failure")
+        real_replace(source_path, target_path)
+
+    monkeypatch.setattr(server_manager.os, "replace", fail_manifest_once)
+
+    with pytest.raises(OSError, match="simulated manifest"):
+        server_manager.publish_pilot_apk(source)
+
+    for name, content in old_files.items():
+        assert (release / name).read_bytes() == content
+    assert not (release / "FleetManager-Pilot-2.0.0-pilot-50.apk").exists()
+    assert not list(release.glob("*.staged"))
+    assert not list(release.glob("*.backup"))
+
+
+def test_publish_rejects_wrong_pilot_identity_before_publication(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "wrong.apk"
+    source.write_bytes(b"wrong package")
+    release = tmp_path / "pilot"
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+    monkeypatch.setattr(
+        server_manager,
+        "inspect_apk",
+        lambda _: server_manager.ApkIdentity(
+            package="com.example.wrong",
+            version_name="2.0.0",
+            version_code=50,
+            signer_sha256=(
+                "45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196"
+            ),
+            apk_sha256=server_manager.sha256(source),
+        ),
+    )
+
+    with pytest.raises(server_manager.ServerError, match="Wrong package"):
+        server_manager.publish_pilot_apk(source)
 
     assert not (release / server_manager.PILOT_APK_NAME).exists()
 
@@ -1102,6 +1223,14 @@ def test_parser_accepts_pilot_publish_source() -> None:
     assert args.apk == Path("built.apk")
 
 
+def test_parser_accepts_mandatory_pilot_release() -> None:
+    args = server_manager.build_parser().parse_args(
+        ["publish-apk", "built.apk", "--mandatory"]
+    )
+
+    assert args.mandatory is True
+
+
 def test_update_batch_wrapper_uses_repository_relative_paths() -> None:
     wrapper = (server_manager.ROOT / "Update Fleet Manager Server.bat").read_text(
         encoding="utf-8"
@@ -1125,3 +1254,4 @@ def test_publish_batch_wrapper_only_delegates_verified_apk_publish() -> None:
     )
     assert "flutter" not in wrapper.casefold()
     assert "sign" not in wrapper.casefold()
+    assert "--mandatory" in wrapper

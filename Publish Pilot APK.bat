@@ -10,17 +10,24 @@ if errorlevel 1 goto :missing
 if not exist "%PYTHON_EXE%" goto :missing_python
 if "%~1"=="" goto :usage
 
-if "%~2"=="" (
+if /I "%~2"=="--mandatory" (
+    if not "%~3"=="" goto :usage
+    "%PYTHON_EXE%" "%REPO_ROOT%\scripts\server_manager.py" publish-apk "%~1" --mandatory
+) else if "%~2"=="" (
     "%PYTHON_EXE%" "%REPO_ROOT%\scripts\server_manager.py" publish-apk "%~1"
-) else (
+) else if /I "%~3"=="--mandatory" (
+    "%PYTHON_EXE%" "%REPO_ROOT%\scripts\server_manager.py" publish-apk "%~1" --version-file "%~2" --mandatory
+) else if "%~3"=="" (
     "%PYTHON_EXE%" "%REPO_ROOT%\scripts\server_manager.py" publish-apk "%~1" --version-file "%~2"
+) else (
+    goto :usage
 )
 set "FLEET_EXIT_CODE=%ERRORLEVEL%"
 popd
 goto :done
 
 :usage
-echo Usage: Publish Pilot APK.bat ^<verified-apk^> [version.txt]
+echo Usage: Publish Pilot APK.bat ^<verified-apk^> [version.txt] [--mandatory]
 popd
 set "FLEET_EXIT_CODE=2"
 goto :done

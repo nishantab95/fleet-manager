@@ -6,6 +6,7 @@ import 'data/local_database.dart';
 import 'data/secure_session_store.dart';
 import 'data/sync_engine.dart';
 import 'domain/role_models.dart';
+import 'pilot_update.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +31,14 @@ Future<void> main() async {
     remote: api,
     installationIdentifier: installationIdentifier,
   );
+  final pilotUpdater = isPilotBuild
+      ? PilotUpdateController(
+          service: PilotUpdateService(
+            baseUrl: () => api.baseUrl,
+            platform: const AndroidPilotUpdatePlatform(),
+          ),
+        )
+      : null;
   runApp(
     FleetManagerApp(
       dependencies: DriverAppDependencies(
@@ -37,6 +46,7 @@ Future<void> main() async {
         sessionStore: sessionStore,
         sync: sync,
         installationIdentifier: installationIdentifier,
+        pilotUpdater: pilotUpdater,
       ),
     ),
   );

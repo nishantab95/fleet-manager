@@ -46,6 +46,13 @@ from launch import (  # noqa: E402
     parse_dotenv,
     port_is_open,
 )
+from scripts.pilot_release_common import (  # noqa: E402
+    ApkIdentity,
+    ReleaseValidationError,
+    inspect_apk,
+    validate_expected_identity,
+    version_text,
+)
 
 
 API_PORT = 8000
@@ -74,6 +81,7 @@ PILOT_RELEASE_DIR = Path(r"F:\FleetManagerData\releases\pilot")
 PILOT_APK_NAME = "FleetManager-Pilot-latest.apk"
 PILOT_SHA256_NAME = "sha256.txt"
 PILOT_VERSION_NAME = "version.txt"
+PILOT_RELEASE_MANIFEST_NAME = "release.json"
 PILOT_PUBLISHER_STATUS_FILE = Path(
     r"F:\FleetManagerData\releases\incoming\publisher-status.json"
 )
@@ -1024,7 +1032,124 @@ def pilot_release_status(remote_url: str = "") -> dict[str, str]:
     return result
 
 
-def publish_pilot_apk(source: Path, version_file: Path | None = None) -> int:
+def _pilot_versioned_apk_name(identity: ApkIdentity) -> str:
+    safe_version = "".join(
+        character if character.isalnum() or character in ".-_" else "-"
+        for character in identity.version_name
+    ).strip(".-_")
+    if not safe_version:
+        raise ServerError("Pilot APK version name cannot form a safe filename.")
+    return f"FleetManager-Pilot-{safe_version}-{identity.version_code}.apk"
+
+
+def _stage_pilot_file(target: Path, content: bytes) -> Path:
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".staged", dir=PILOT_RELEASE_DIR
+    )
+    staged = Path(raw_path)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return staged
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def _stage_pilot_copy(target: Path, source: Path) -> Path:
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".staged", dir=PILOT_RELEASE_DIR
+    )
+    os.close(descriptor)
+    staged = Path(raw_path)
+    try:
+        shutil.copyfile(source, staged)
+        copied_digest, copied_size = stable_sha256(staged)
+        if copied_digest != sha256(source) or copied_size != source.stat().st_size:
+            raise ServerError("Pilot APK staging verification failed.")
+        return staged
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def _publish_pilot_transaction(staged_files: Mapping[Path, Path], verify: Any) -> None:
+    """Replace the active release as one rollback-capable filesystem transaction."""
+    backups: dict[Path, Path] = {}
+    published: list[Path] = []
+    committed = False
+    try:
+        for target, staged in staged_files.items():
+            if target.exists():
+                backup = PILOT_RELEASE_DIR / f".{target.name}.{uuid4().hex}.backup"
+                try:
+                    # A same-volume hard link is a cheap immutable rollback
+                    # snapshot. Copying is the safe fallback where unsupported.
+                    os.link(target, backup)
+                except OSError:
+                    shutil.copyfile(target, backup)
+                backups[target] = backup
+            os.replace(staged, target)
+            published.append(target)
+        verify()
+        committed = True
+    except Exception:
+        rollback_errors: list[str] = []
+        for target in reversed(published):
+            try:
+                target.unlink(missing_ok=True)
+            except OSError as error:
+                rollback_errors.append(f"remove {target.name}: {error}")
+        for target, backup in backups.items():
+            try:
+                os.replace(backup, target)
+            except OSError as error:
+                rollback_errors.append(f"{target.name}: {error}")
+        if rollback_errors:
+            raise ServerError(
+                "Pilot publication failed and rollback was incomplete: "
+                + "; ".join(rollback_errors)
+            )
+        raise
+    finally:
+        for staged in staged_files.values():
+            staged.unlink(missing_ok=True)
+        if committed:
+            for backup in backups.values():
+                backup.unlink(missing_ok=True)
+
+
+def _pilot_release_manifest(
+    identity: ApkIdentity,
+    apk_url: str,
+    *,
+    mandatory: bool,
+) -> dict[str, Any]:
+    manifest: dict[str, Any] = {
+        "version_name": identity.version_name,
+        "version_code": identity.version_code,
+        "apk_url": apk_url,
+        "sha256": identity.apk_sha256,
+        "mandatory": mandatory,
+        "published_at": datetime.now(UTC).isoformat(),
+    }
+    try:
+        source_commit = git_output("rev-parse", "HEAD")
+        if len(source_commit) == 40:
+            manifest["source_commit"] = source_commit
+    except ServerError:
+        pass
+    return manifest
+
+
+def publish_pilot_apk(
+    source: Path,
+    version_file: Path | None = None,
+    *,
+    mandatory: bool = False,
+) -> int:
     if not source.is_file():
         raise ServerError(f"Pilot APK source was not found: {source}")
     if source.suffix.casefold() != ".apk":
@@ -1034,58 +1159,94 @@ def publish_pilot_apk(source: Path, version_file: Path | None = None) -> int:
     destination = PILOT_RELEASE_DIR / PILOT_APK_NAME
     if source == destination.resolve(strict=False):
         raise ServerError("Pilot APK is already at the publish destination.")
-    candidate = version_file
-    if candidate is None:
-        adjacent = source.parent / PILOT_VERSION_NAME
-        candidate = adjacent if adjacent.is_file() else None
-    version_text: str | None = None
-    if candidate is not None:
-        if not candidate.is_file():
-            raise ServerError(f"Pilot version metadata was not found: {candidate}")
-        version_text = candidate.read_text(encoding="utf-8")
-        if len(version_text.encode("utf-8")) > 4096:
-            raise ServerError("Pilot version metadata is unexpectedly large.")
-    source_digest, source_size = stable_sha256(source)
-    temporary = PILOT_RELEASE_DIR / f".{PILOT_APK_NAME}.{uuid4().hex}.tmp"
+    if version_file is not None and not version_file.is_file():
+        raise ServerError(f"Pilot version metadata was not found: {version_file}")
     try:
-        shutil.copyfile(source, temporary)
-        copied_digest, copied_size = stable_sha256(temporary)
-        if copied_size != source_size or copied_digest != source_digest:
-            raise ServerError(
-                "Pilot APK copy verification failed; nothing was published."
-            )
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    atomic_write_text(
-        PILOT_RELEASE_DIR / PILOT_SHA256_NAME,
-        f"{source_digest}  {PILOT_APK_NAME}\n",
-    )
-    if version_text is not None:
-        atomic_write_text(PILOT_RELEASE_DIR / PILOT_VERSION_NAME, version_text)
+        identity = inspect_apk(source)
+        validate_expected_identity(identity)
+    except ReleaseValidationError as error:
+        raise ServerError(f"Pilot APK validation failed: {error}") from error
 
     remote = remote_access_status(ensure_serve=True)
-    release = pilot_release_status(remote.get("remote_url", ""))
-    if release["pilot_apk"] != "PUBLISHED":
-        raise ServerError(release["pilot_warning"] or "Pilot APK verification failed.")
-    download_url = release["apk_url"]
+    remote_url = remote.get("remote_url", "").rstrip("/")
     if (
         remote.get("remote") != "ONLINE"
         or remote.get("serve_pilot") != "OK"
-        or not download_url
+        or not remote_url.startswith("https://")
     ):
         raise ServerError(
-            "Pilot APK was published locally, but its private Tailscale URL is not ready."
+            "Pilot APK was not published because its private HTTPS Tailscale URL is not ready."
         )
-    probe = default_http_probe(download_url, timeout=10)
-    if probe is None or probe.status != 200:
+
+    versioned = PILOT_RELEASE_DIR / _pilot_versioned_apk_name(identity)
+    if versioned.exists() and sha256(versioned) != identity.apk_sha256:
         raise ServerError(
-            "Pilot APK was published locally, but its private download URL is unreachable."
+            "Pilot versioned APK already exists with different contents; "
+            "increase the Android versionCode before publishing."
         )
+    download_url = f"{remote_url}{TAILSCALE_PILOT_PATH}/{versioned.name}"
+    latest_url = f"{remote_url}{TAILSCALE_PILOT_PATH}/{PILOT_APK_NAME}"
+    manifest = _pilot_release_manifest(identity, download_url, mandatory=mandatory)
+    staged: dict[Path, Path] = {}
+    try:
+        staged[versioned] = _stage_pilot_copy(versioned, source)
+        staged[destination] = _stage_pilot_copy(destination, source)
+        staged[PILOT_RELEASE_DIR / PILOT_SHA256_NAME] = _stage_pilot_file(
+            PILOT_RELEASE_DIR / PILOT_SHA256_NAME,
+            f"{identity.apk_sha256}  {PILOT_APK_NAME}\n".encode(),
+        )
+        staged[PILOT_RELEASE_DIR / PILOT_VERSION_NAME] = _stage_pilot_file(
+            PILOT_RELEASE_DIR / PILOT_VERSION_NAME,
+            version_text(identity, versioned.name).encode(),
+        )
+        staged[PILOT_RELEASE_DIR / PILOT_RELEASE_MANIFEST_NAME] = _stage_pilot_file(
+            PILOT_RELEASE_DIR / PILOT_RELEASE_MANIFEST_NAME,
+            (json.dumps(manifest, indent=2) + "\n").encode(),
+        )
+    except Exception:
+        for staged_file in staged.values():
+            staged_file.unlink(missing_ok=True)
+        raise
+
+    def verify_publication() -> None:
+        release = pilot_release_status(remote_url)
+        if release["pilot_apk"] != "PUBLISHED":
+            raise ServerError(
+                release["pilot_warning"] or "Pilot APK verification failed."
+            )
+        published_manifest = json.loads(
+            (PILOT_RELEASE_DIR / PILOT_RELEASE_MANIFEST_NAME).read_text(
+                encoding="utf-8"
+            )
+        )
+        if published_manifest != manifest:
+            raise ServerError("Pilot release manifest verification failed.")
+        probe = default_http_probe(download_url, timeout=10)
+        if probe is None or probe.status != 200:
+            raise ServerError(
+                "Pilot private download URL is unreachable; previous release restored."
+            )
+        latest_probe = default_http_probe(latest_url, timeout=10)
+        if latest_probe is None or latest_probe.status != 200:
+            raise ServerError(
+                "Pilot latest APK URL is unreachable; previous release restored."
+            )
+        manifest_url = (
+            f"{remote_url}{TAILSCALE_PILOT_PATH}/{PILOT_RELEASE_MANIFEST_NAME}"
+        )
+        manifest_probe = default_http_probe(manifest_url, timeout=10)
+        if manifest_probe is None or manifest_probe.status != 200:
+            raise ServerError(
+                "Pilot release manifest URL is unreachable; previous release restored."
+            )
+
+    _publish_pilot_transaction(staged, verify_publication)
     print("\nFLEET MANAGER PILOT APK\n")
     print("PUBLISHED       YES")
     print(f"APK             {destination}")
-    print(f"SHA-256         {source_digest}")
+    print(f"VERSIONED APK   {versioned}")
+    print(f"RELEASE JSON    {PILOT_RELEASE_DIR / PILOT_RELEASE_MANIFEST_NAME}")
+    print(f"SHA-256         {identity.apk_sha256}")
     print(f"PRIVATE URL     {download_url}")
     return 0
 
@@ -1721,6 +1882,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("apk", nargs="?", type=Path)
     parser.add_argument("--version-file", type=Path)
+    parser.add_argument("--mandatory", action="store_true")
     return parser
 
 
@@ -1739,7 +1901,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command == "publish-apk":
             if args.apk is None:
                 raise ServerError("Publish Pilot APK requires a source APK path.")
-            return publish_pilot_apk(args.apk, args.version_file)
+            return publish_pilot_apk(
+                args.apk, args.version_file, mandatory=args.mandatory
+            )
         return update_server()
     except ServerError as error:
         print(f"\n[FAILED] {error}")

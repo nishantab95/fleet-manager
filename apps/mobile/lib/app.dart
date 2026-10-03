@@ -10,6 +10,7 @@ import 'data/sync_engine.dart';
 import 'domain/driver_models.dart';
 import 'domain/role_models.dart';
 import 'fleet_theme.dart';
+import 'pilot_update.dart';
 import 'role_screens.dart';
 
 const appVersion = String.fromEnvironment(
@@ -36,12 +37,14 @@ class DriverAppDependencies {
     required this.sessionStore,
     required this.sync,
     required this.installationIdentifier,
+    this.pilotUpdater,
   });
 
   final ApiClient api;
   final SecureSessionStore sessionStore;
   final SyncEngine sync;
   final String installationIdentifier;
+  final PilotUpdateController? pilotUpdater;
 
   Future<void> registerDriverAccount(
     SessionTokens tokens, {
@@ -99,12 +102,18 @@ class FleetManagerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final home = dependencies == null
+        ? const _UnavailableScreen()
+        : DriverSessionScreen(dependencies: dependencies!);
     return MaterialApp(
-      title: 'Fleet Manager',
+      title: isPilotBuild ? 'Fleet Manager Pilot' : 'Fleet Manager',
       theme: fleetTheme(),
-      home: dependencies == null
-          ? const _UnavailableScreen()
-          : DriverSessionScreen(dependencies: dependencies!),
+      home: dependencies?.pilotUpdater == null
+          ? home
+          : PilotUpdateGate(
+              controller: dependencies!.pilotUpdater!,
+              child: home,
+            ),
     );
   }
 }
@@ -545,7 +554,7 @@ class _LoginScreenState extends State<LoginScreen> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Pilot server'),
+          title: const Text('Pilot settings'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -557,6 +566,28 @@ class _LoginScreenState extends State<LoginScreen> {
                   hintText: 'http://192.168.1.20:8000',
                 ),
               ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('Fleet Manager Pilot'),
+                subtitle: Text('Version $appVersion · Build $appBuild'),
+              ),
+              if (widget.dependencies.pilotUpdater != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: testing
+                        ? null
+                        : () async {
+                            Navigator.pop(dialogContext);
+                            await widget.dependencies.pilotUpdater!
+                                .checkAndPresent(this.context, manual: true);
+                          },
+                    icon: const Icon(Icons.system_update_alt),
+                    label: const Text('CHECK FOR UPDATES'),
+                  ),
+                ),
               if (message.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(message),
@@ -1295,6 +1326,17 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
               subtitle: Text(_lastSyncFailureStage!),
             ),
           if (isPilotBuild) ...[
+            ListTile(
+              title: const Text('Fleet Manager Pilot'),
+              subtitle: const Text('Version $appVersion · Build $appBuild'),
+              trailing: widget.dependencies.pilotUpdater == null
+                  ? null
+                  : OutlinedButton(
+                      onPressed: () => widget.dependencies.pilotUpdater!
+                          .checkAndPresent(context, manual: true),
+                      child: const Text('CHECK FOR UPDATES'),
+                    ),
+            ),
             const Divider(height: 32),
             _DiagnosticRows(
               title: 'Local event queue (safe)',
