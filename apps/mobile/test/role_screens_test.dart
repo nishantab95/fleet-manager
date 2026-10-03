@@ -6,52 +6,62 @@ import 'package:fleet_manager_mobile/domain/role_models.dart';
 import 'package:fleet_manager_mobile/role_screens.dart';
 
 void main() {
-  testWidgets(
-    'supervisor home puts emergencies first and shows asset-centric cards',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1080, 2400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final api = _FakeRoleApi();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
-        ),
-      );
-      await tester.pumpAndSettle();
+  testWidgets('supervisor home is a compact four-category attention inbox', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _FakeRoleApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(find.text('Nagaraj'), findsOneWidget);
-      expect(find.text('ABL Railway · Supervisor'), findsOneWidget);
-      expect(find.text('EMERGENCIES'), findsOneWidget);
-      expect(find.text('DIESEL APPROVALS'), findsOneWidget);
-      expect(find.text('TRIP APPROVALS'), findsOneWidget);
-      expect(find.text('METER READINGS'), findsOneWidget);
-      expect(
-        find.byKey(const Key('supervisor-count-emergency')),
-        findsOneWidget,
-      );
-      expect(find.byKey(const Key('supervisor-count-diesel')), findsOneWidget);
-      expect(find.byKey(const Key('supervisor-count-trips')), findsOneWidget);
-      expect(find.byKey(const Key('supervisor-count-meter')), findsOneWidget);
-      expect(find.text('PILOT-12'), findsWidgets);
-      expect(find.text('EXC-07'), findsOneWidget);
-      expect(find.text('UNASSIGNED'), findsWidgets);
-      expect(find.text('NEED REVIEW'), findsOneWidget);
-      expect(find.text('Review queue'), findsOneWidget);
-      expect(find.text('Site fleet'), findsOneWidget);
-      expect(find.text('Recent activity'), findsOneWidget);
-      expect(find.byKey(const Key('supervisor-site-selector')), findsNothing);
-      expect(find.text('Pilot Site'), findsNothing);
-      expect(find.text('ACKNOWLEDGE'), findsNothing);
-      await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
-      await tester.pumpAndSettle();
-      expect(find.text('ACKNOWLEDGE'), findsOneWidget);
-    },
-  );
+    expect(find.text('Nagaraj'), findsOneWidget);
+    expect(find.text('ABL Railway'), findsOneWidget);
+    expect(find.text('EMERGENCIES'), findsOneWidget);
+    expect(find.text('DIESEL APPROVALS'), findsOneWidget);
+    expect(find.text('TRIP APPROVALS'), findsOneWidget);
+    expect(find.text('METER READINGS'), findsOneWidget);
+    expect(find.byKey(const Key('supervisor-attention-grid')), findsOneWidget);
+    expect(
+      find.byKey(const Key('supervisor-pending-notifications')),
+      findsOneWidget,
+    );
+    expect(find.text('Pending notifications'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('supervisor-pending-total')))
+          .data,
+      '2',
+    );
+    expect(find.byKey(const Key('supervisor-site-selector')), findsNothing);
+    for (final removed in const [
+      'Review queue',
+      'ON DUTY',
+      'UNASSIGNED',
+      'PENDING REVIEW',
+      'Search assets or drivers',
+      'NEED REVIEW',
+      'Site fleet',
+      'Recent activity',
+    ]) {
+      expect(find.text(removed), findsNothing);
+    }
+    await tester.tap(
+      find.byKey(const Key('supervisor-notification-emergency')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Emergencies'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'approved START disappears from review count while emergency stays separate',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1080, 4000));
+      await tester.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final api = _FakeRoleApi();
       await tester.pumpWidget(
@@ -69,11 +79,21 @@ void main() {
       );
       await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
       await tester.pumpAndSettle();
+      expect(find.text('Meter readings'), findsOneWidget);
+      expect(find.text('START ODOMETER · 10000 KM'), findsOneWidget);
       expect(find.text('APPROVE'), findsOneWidget);
       await tester.tap(find.text('APPROVE'));
       await tester.pumpAndSettle();
 
       expect(api.approvedEventId, _FakeRoleApi.startEventId);
+      expect(find.text('Nothing pending.'), findsOneWidget);
+      expect(find.text('PENDING 0'), findsOneWidget);
+      await tester.tap(find.text('HISTORY'));
+      await tester.pumpAndSettle();
+      expect(find.text('START ODOMETER · 10000 KM'), findsOneWidget);
+      expect(find.text('APPROVED'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       expect(
         tester
             .widget<Text>(find.byKey(const Key('supervisor-count-meter')))
@@ -86,232 +106,287 @@ void main() {
             .data,
         '1',
       );
-      expect(find.text('APPROVE'), findsNothing);
-      expect(find.text('Record approved.'), findsOneWidget);
-    },
-  );
-
-  testWidgets('supervisor changes driver from an authorized site asset', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeRoleApi();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(
-      find.byKey(const Key('supervisor-assign-driver-pilot-asset')),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('CHANGE DRIVER / OPERATOR · PILOT-12'), findsOneWidget);
-    expect(find.byKey(const Key('assignment-site')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('confirm-driver-assignment')));
-    await tester.pumpAndSettle();
-
-    expect(api.assignedDriverId, 'driver-2');
-    expect(api.assignmentSiteId, 'site-1');
-  });
-
-  testWidgets('supervisor assigns an operator to unassigned machinery', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeRoleApi();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const Key('supervisor-assign-driver-excavator-7')),
-      findsOneWidget,
-    );
-    await tester.tap(
-      find.byKey(const Key('supervisor-assign-driver-excavator-7')),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('ASSIGN DRIVER / OPERATOR · EXC-07'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('confirm-driver-assignment')));
-    await tester.pumpAndSettle();
-
-    expect(api.assignedAssetId, 'excavator-7');
-    expect(api.assignedDriverId, 'driver-2');
-  });
-
-  testWidgets('supervisor search and bounded filters reduce the asset list', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeRoleApi();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.enterText(
-      find.byKey(const Key('supervisor-asset-search')),
-      'EXC-07',
-    );
-    await tester.pump();
-    expect(
-      find.byKey(const Key('supervisor-site-asset-excavator-7')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('supervisor-site-asset-pilot-asset')),
-      findsNothing,
-    );
-
-    await tester.enterText(
-      find.byKey(const Key('supervisor-asset-search')),
-      '',
-    );
-    await tester.tap(find.byKey(const Key('supervisor-filter-unassigned')));
-    await tester.pump();
-    expect(
-      find.byKey(const Key('supervisor-site-asset-pilot-asset')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const Key('supervisor-site-asset-rent-t03')),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets(
-    'supervisor machinery card shows HMR hours without trip metrics',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1080, 2400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SupervisorHomeScreen(
-            api: _MachineryRoleApi(),
-            onSignOut: () async {},
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final card = find.byKey(const Key('supervisor-site-asset-exc-01'));
-      expect(card, findsOneWidget);
-      expect(
-        find.descendant(of: card, matching: find.text('START HMR 3240.50')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: card, matching: find.text('END HMR 3248')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: card, matching: find.text('MACHINE HOURS 7.50')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: card, matching: find.text('Diesel 25 L')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: card, matching: find.textContaining('Trips')),
-        findsNothing,
-      );
       expect(
         tester
-            .widget<Text>(find.byKey(const Key('supervisor-count-meter')))
-            .data,
-        '2',
-      );
-      expect(
-        tester
-            .widget<Text>(find.byKey(const Key('supervisor-count-diesel')))
-            .data,
-        '0',
-      );
-      expect(find.text('Review queue'), findsOneWidget);
-      expect(find.text('Recent activity'), findsOneWidget);
-    },
-  );
-
-  for (final assetCount in [1, 10, 50]) {
-    testWidgets('supervisor fleet list handles $assetCount assets', (
-      tester,
-    ) async {
-      await tester.binding.setSurfaceSize(const Size(390, 844));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final api = _ScaleRoleApi(assetCount: assetCount);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        find.byKey(const Key('supervisor-site-asset-scale-0')),
-        findsOneWidget,
-      );
-      await tester.scrollUntilVisible(
-        find.byKey(Key('supervisor-site-asset-scale-${assetCount - 1}')),
-        800,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(tester.takeException(), isNull);
-    });
-  }
-
-  testWidgets(
-    'multi-site supervisor uses one selector and keeps emergencies global',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(390, 2400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final api = _MultiSiteRoleApi();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byKey(const Key('supervisor-site-selector')), findsOneWidget);
-      expect(find.text('NORTH · Supervisor'), findsOneWidget);
-      expect(find.text('NORTH'), findsWidgets);
-      expect(
-        tester
-            .widget<Text>(find.byKey(const Key('supervisor-count-emergency')))
+            .widget<Text>(find.byKey(const Key('supervisor-pending-total')))
             .data,
         '1',
       );
-      expect(find.text('South emergency'), findsNothing);
-      await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
-      await tester.pumpAndSettle();
-      expect(find.text('South emergency'), findsOneWidget);
-      expect(
-        find.text('A deliberately very long asset name that must not overflow'),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('supervisor-site-selector')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('SOUTH').last);
-      await tester.pumpAndSettle();
-      expect(find.text('SOUTH · Supervisor'), findsOneWidget);
-      expect(
-        find.byKey(const Key('supervisor-site-asset-south-asset')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('resolved emergency moves from Pending to Emergency History', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _FakeRoleApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ACKNOWLEDGE'));
+    await tester.pumpAndSettle();
+    expect(find.text('RESOLVE'), findsOneWidget);
+    await tester.tap(find.text('RESOLVE'));
+    await tester.pumpAndSettle();
+    expect(find.text('PENDING 0'), findsOneWidget);
+    expect(find.text('No open emergencies.'), findsOneWidget);
+    await tester.tap(find.text('HISTORY'));
+    await tester.pumpAndSettle();
+    expect(find.text('BREAKDOWN · RESOLVED'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('supervisor-count-emergency')))
+          .data,
+      '0',
+    );
+  });
+
+  testWidgets('Emergency opens a separate category page', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(
+          api: _AttentionRoleApi(),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
+    await tester.pumpAndSettle();
+    expect(find.text('Emergencies'), findsOneWidget);
+    expect(find.text('Attention fixture emergency'), findsOneWidget);
+    expect(find.text('21 LITRES'), findsNothing);
+    expect(find.text('Trip Complete'), findsNothing);
+    expect(find.text('START ODOMETER · 777 KM'), findsNothing);
+  });
+
+  testWidgets('zero-count category keeps Pending and History available', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(
+          api: _ScaleRoleApi(assetCount: 1),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-diesel')));
+    await tester.pumpAndSettle();
+    expect(find.text('PENDING 0'), findsOneWidget);
+    expect(find.text('Nothing pending.'), findsOneWidget);
+    await tester.tap(find.text('HISTORY'));
+    await tester.pumpAndSettle();
+    expect(find.text('No diesel history.'), findsOneWidget);
+  });
+
+  testWidgets('Diesel opens a separate category page', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(
+          api: _AttentionRoleApi(),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('supervisor-count-emergency')))
+          .data,
+      '1',
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('supervisor-count-diesel')))
+          .data,
+      '2',
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const Key('supervisor-count-trips'))).data,
+      '1',
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const Key('supervisor-count-meter'))).data,
+      '1',
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('supervisor-pending-total')))
+          .data,
+      '5',
+    );
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-diesel')));
+    await tester.pumpAndSettle();
+    expect(find.text('Diesel'), findsOneWidget);
+    expect(find.text('21 LITRES'), findsOneWidget);
+    expect(find.text('42 LITRES'), findsOneWidget);
+    expect(find.text('Attention fixture emergency'), findsNothing);
+    expect(find.text('Trip Complete'), findsNothing);
+    expect(find.text('START ODOMETER · 777 KM'), findsNothing);
+  });
+
+  testWidgets('Trips opens a separate category page', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(
+          api: _AttentionRoleApi(),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-trips')));
+    await tester.pumpAndSettle();
+    expect(find.text('Trips'), findsOneWidget);
+    expect(find.text('Trip Complete'), findsOneWidget);
+    expect(find.text('Attention fixture emergency'), findsNothing);
+    expect(find.text('21 LITRES'), findsNothing);
+    expect(find.text('START ODOMETER · 777 KM'), findsNothing);
+  });
+
+  testWidgets('Meter opens a separate page with capability-correct readings', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 2000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(
+          api: _CapabilityRoleApi(),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
+    await tester.pumpAndSettle();
+    expect(find.text('Meter readings'), findsOneWidget);
+    expect(find.text('START ODOMETER · 10000 KM'), findsOneWidget);
+    expect(find.text('END ODOMETER · 10120 KM'), findsOneWidget);
+    expect(find.text('START HMR · 3240.50 hours'), findsOneWidget);
+    expect(find.text('END HMR · 3248 hours'), findsOneWidget);
+    expect(find.textContaining('Trip Complete'), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('supervisor-tile-trips')));
+    await tester.pumpAndSettle();
+    expect(find.text('Tipper trip'), findsOneWidget);
+    expect(find.text('Machinery trip must stay hidden'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('each category exposes isolated history', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(
+          api: _HistoryRoleApi(),
+          onSignOut: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final scenario in const [
+      (
+        'supervisor-tile-emergency',
+        'Resolved emergency',
+        <String>['Approved diesel', 'Approved trip', 'Approved meter'],
+      ),
+      (
+        'supervisor-tile-diesel',
+        'Approved diesel',
+        <String>['Resolved emergency', 'Approved trip', 'Approved meter'],
+      ),
+      (
+        'supervisor-tile-trips',
+        'Approved trip',
+        <String>['Resolved emergency', 'Approved diesel', 'Approved meter'],
+      ),
+      (
+        'supervisor-tile-meter',
+        'Approved meter',
+        <String>['Resolved emergency', 'Approved diesel', 'Approved trip'],
+      ),
+    ]) {
+      await tester.tap(find.byKey(Key(scenario.$1)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('HISTORY'));
+      await tester.pumpAndSettle();
+      expect(find.text(scenario.$2), findsOneWidget);
+      for (final excluded in scenario.$3) {
+        expect(find.text(excluded), findsNothing);
+      }
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+    }
+  });
+
+  testWidgets('multi-site selector scopes Home counts and category content', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _MultiSiteRoleApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('supervisor-site-selector')), findsOneWidget);
+    expect(find.text('NORTH'), findsWidgets);
+    expect(find.text('NORTH'), findsWidgets);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('supervisor-count-emergency')))
+          .data,
+      '0',
+    );
+    expect(find.text('South emergency'), findsNothing);
+    await tester.tap(find.byKey(const Key('supervisor-site-selector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SOUTH').last);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('supervisor-count-emergency')))
+          .data,
+      '1',
+    );
+    await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
+    await tester.pumpAndSettle();
+    expect(find.text('SOUTH'), findsOneWidget);
+    expect(find.text('South emergency'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   for (final width in [360.0, 390.0, 412.0]) {
     testWidgets('supervisor action grid is stable at ${width.toInt()} px', (
@@ -348,6 +423,15 @@ void main() {
       ]) {
         expect(tester.widget<Text>(find.byKey(Key(key))).data, '0');
       }
+      expect(find.text('Nothing requires your attention.'), findsOneWidget);
+      expect(
+        tester
+            .getBottomRight(
+              find.byKey(const Key('supervisor-pending-notifications')),
+            )
+            .dy,
+        lessThanOrEqualTo(900),
+      );
       expect(tester.takeException(), isNull);
     });
   }
@@ -380,20 +464,26 @@ void main() {
     );
     expect(find.text('Trip Complete'), findsNothing);
 
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('supervisor-tile-trips')));
     await tester.pumpAndSettle();
     expect(find.text('Trip Complete'), findsOneWidget);
     expect(find.text('42 LITRES'), findsNothing);
 
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
     await tester.pumpAndSettle();
-    expect(find.text('START KM · 777'), findsOneWidget);
+    expect(find.text('START ODOMETER · 777 KM'), findsOneWidget);
     expect(find.text('Trip Complete'), findsNothing);
 
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('supervisor-tile-emergency')));
     await tester.pumpAndSettle();
     expect(find.text('Attention fixture emergency'), findsOneWidget);
-    expect(find.text('START KM · 777'), findsNothing);
+    expect(find.text('START ODOMETER · 777 KM'), findsNothing);
   });
 
   test(
@@ -672,6 +762,18 @@ class _FakeRoleApi extends ApiClient {
   String? updatedTemplateName;
   String? duplicatedTemplateName;
   String? deletedTemplateId;
+  late final List<SupervisorEvent> _supervisorEventStore = [
+    event(
+      id: emergencyEventId,
+      eventType: 'EMERGENCY',
+      verificationStatus: 'PENDING_VERIFICATION',
+    ),
+    event(
+      id: startEventId,
+      eventType: 'KM_READING',
+      verificationStatus: 'PENDING_VERIFICATION',
+    ),
+  ];
   final List<ReportTemplate> _reportTemplates = [
     ReportTemplate(
       id: 'management-summary',
@@ -819,18 +921,14 @@ class _FakeRoleApi extends ApiClient {
     String siteId, {
     String? verificationStatus,
     DateTime? reviewDate,
-  }) async => [
-    event(
-      id: emergencyEventId,
-      eventType: 'EMERGENCY',
-      verificationStatus: 'PENDING_VERIFICATION',
-    ),
-    event(
-      id: startEventId,
-      eventType: 'KM_READING',
-      verificationStatus: 'PENDING_VERIFICATION',
-    ),
-  ];
+  }) async => _supervisorEventStore
+      .where(
+        (event) =>
+            event.siteId == siteId &&
+            (verificationStatus == null ||
+                event.verificationStatus == verificationStatus),
+      )
+      .toList();
 
   @override
   Future<List<DriverCandidate>> eligibleDrivers(
@@ -872,11 +970,35 @@ class _FakeRoleApi extends ApiClient {
     String? reason,
   }) async {
     approvedEventId = eventId;
-    return event(
-      id: eventId,
-      eventType: 'KM_READING',
+    final index = _supervisorEventStore.indexWhere(
+      (event) => event.id == eventId,
+    );
+    final updated = _copySupervisorEvent(
+      _supervisorEventStore[index],
       verificationStatus: decision,
     );
+    _supervisorEventStore[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<SupervisorEvent> acknowledgeEmergency(String eventId) async =>
+      _updateEmergency(eventId, 'ACKNOWLEDGED');
+
+  @override
+  Future<SupervisorEvent> resolveEmergency(String eventId) async =>
+      _updateEmergency(eventId, 'RESOLVED');
+
+  SupervisorEvent _updateEmergency(String eventId, String status) {
+    final index = _supervisorEventStore.indexWhere(
+      (event) => event.id == eventId,
+    );
+    final updated = _copySupervisorEvent(
+      _supervisorEventStore[index],
+      emergencyStatus: status,
+    );
+    _supervisorEventStore[index] = updated;
+    return updated;
   }
 
   @override
@@ -1228,7 +1350,71 @@ SupervisorEvent _attentionEvent({
   'evidence_available': type == 'DIESEL',
 });
 
-class _MachineryRoleApi extends _FakeRoleApi {
+SupervisorEvent _copySupervisorEvent(
+  SupervisorEvent event, {
+  String? verificationStatus,
+  String? emergencyStatus,
+}) => SupervisorEvent(
+  id: event.id,
+  eventType: event.eventType,
+  assignmentId: event.assignmentId,
+  driverName: event.driverName,
+  tipperRegistration: event.tipperRegistration,
+  siteId: event.siteId,
+  siteName: event.siteName,
+  deviceCreatedAt: event.deviceCreatedAt,
+  verificationStatus: verificationStatus ?? event.verificationStatus,
+  evidenceAvailable: event.evidenceAvailable,
+  assetCode: event.assetCode,
+  assetType: event.assetType,
+  dutySessionId: event.dutySessionId,
+  driverPhone: event.driverPhone,
+  readingType: event.readingType,
+  readingValue: event.readingValue,
+  litres: event.litres,
+  emergencyCategory: event.emergencyCategory,
+  emergencyStatus: emergencyStatus ?? event.emergencyStatus,
+  emergencyDescription: event.emergencyDescription,
+  history: event.history,
+  assetShortName: event.assetShortName,
+);
+
+class _HistoryRoleApi extends _FakeRoleApi {
+  @override
+  Future<List<SupervisorEvent>> supervisorEvents(
+    String siteId, {
+    String? verificationStatus,
+    DateTime? reviewDate,
+  }) async => [
+    for (final item in const [
+      ('history-emergency', 'EMERGENCY', 'Resolved emergency'),
+      ('history-diesel', 'DIESEL', 'Approved diesel'),
+      ('history-trip', 'TRIP_COMPLETE', 'Approved trip'),
+      ('history-meter', 'KM_READING', 'Approved meter'),
+    ])
+      SupervisorEvent.fromJson({
+        'event_id': item.$1,
+        'event_type': item.$2,
+        'assignment_id': 'history-assignment',
+        'driver_name': 'History Driver',
+        'asset_code': 'TIPPER-HISTORY',
+        'asset_short_name': item.$3,
+        'asset_type': 'TIPPER',
+        'tipper_registration_number': 'HISTORY-01',
+        'site_id': siteId,
+        'site_name': 'Pilot Site',
+        'device_created_at': '2026-09-29T08:00:00Z',
+        'verification_status': 'APPROVED',
+        'emergency_status': item.$2 == 'EMERGENCY' ? 'RESOLVED' : null,
+        'reading_type': item.$2 == 'KM_READING' ? 'END_READING' : null,
+        'reading_value': item.$2 == 'KM_READING' ? 10120 : null,
+        'litres': item.$2 == 'DIESEL' ? 25 : null,
+        'evidence_available': false,
+      }),
+  ];
+}
+
+class _CapabilityRoleApi extends _FakeRoleApi {
   @override
   Future<List<SiteDeployedAsset>> supervisorSiteAssets(String siteId) async => [
     _siteAsset(
@@ -1249,6 +1435,27 @@ class _MachineryRoleApi extends _FakeRoleApi {
     String? verificationStatus,
     DateTime? reviewDate,
   }) async => [
+    for (final reading in const [
+      ('start-km', 'START_READING', 10000.0, '2026-09-30T07:30:00Z'),
+      ('end-km', 'END_READING', 10120.0, '2026-09-30T17:00:00Z'),
+    ])
+      SupervisorEvent.fromJson({
+        'event_id': reading.$1,
+        'event_type': 'KM_READING',
+        'assignment_id': 'tipper-assignment',
+        'driver_name': 'Tipper Driver',
+        'asset_code': 'TIPPER-01',
+        'asset_short_name': 'Tipper meter',
+        'asset_type': 'TIPPER',
+        'tipper_registration_number': 'TIPPER-01',
+        'site_id': siteId,
+        'site_name': 'Pilot Site',
+        'device_created_at': reading.$4,
+        'verification_status': 'PENDING_VERIFICATION',
+        'reading_type': reading.$2,
+        'reading_value': reading.$3,
+        'evidence_available': true,
+      }),
     for (final reading in const [
       ('start-hmr', 'START_READING', 3240.5, '2026-09-30T08:01:00Z'),
       ('end-hmr', 'END_READING', 3248.0, '2026-09-30T17:30:00Z'),
@@ -1285,6 +1492,36 @@ class _MachineryRoleApi extends _FakeRoleApi {
         'litres': diesel.$2,
         'evidence_available': false,
       }),
+    SupervisorEvent.fromJson({
+      'event_id': 'tipper-trip',
+      'event_type': 'TRIP_COMPLETE',
+      'assignment_id': 'tipper-assignment',
+      'driver_name': 'Tipper Driver',
+      'asset_code': 'TIPPER-01',
+      'asset_short_name': 'Tipper trip',
+      'asset_type': 'TIPPER',
+      'tipper_registration_number': 'TIPPER-01',
+      'site_id': siteId,
+      'site_name': 'Pilot Site',
+      'device_created_at': '2026-09-30T12:30:00Z',
+      'verification_status': 'PENDING_VERIFICATION',
+      'evidence_available': false,
+    }),
+    SupervisorEvent.fromJson({
+      'event_id': 'machinery-trip-invalid',
+      'event_type': 'TRIP_COMPLETE',
+      'assignment_id': 'exc-assignment',
+      'driver_name': 'Machinery Operator',
+      'asset_code': 'EXC-01',
+      'asset_short_name': 'Machinery trip must stay hidden',
+      'asset_type': 'EXCAVATOR',
+      'tipper_registration_number': 'EXC-01',
+      'site_id': siteId,
+      'site_name': 'Pilot Site',
+      'device_created_at': '2026-09-30T12:31:00Z',
+      'verification_status': 'PENDING_VERIFICATION',
+      'evidence_available': false,
+    }),
   ];
 }
 

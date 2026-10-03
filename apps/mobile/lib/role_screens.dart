@@ -31,18 +31,12 @@ class SupervisorHomeScreen extends StatefulWidget {
 
 class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
   List<SupervisorSite> _sites = const [];
-  List<SupervisorEvent> _events = const [];
-  Map<String, List<SiteDeployedAsset>> _assetsBySite = const {};
+  Map<String, List<SupervisorEvent>> _eventsBySite = const {};
   String? _selectedSiteId;
-  String _search = '';
   String _supervisorName = 'Supervisor';
-  _AssetFilter _filter = _AssetFilter.all;
-  _SupervisorReviewCategory? _reviewCategory;
   bool _loading = true;
   bool _offline = false;
-  DateTime? _lastSyncedAt;
   String? _error;
-  String? _message;
   Timer? _pollTimer;
 
   @override
@@ -68,7 +62,6 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
           (site) async => (
             siteId: site.id,
             events: await widget.api.supervisorEvents(site.id),
-            assets: await widget.api.supervisorSiteAssets(site.id),
           ),
         ),
       );
@@ -76,23 +69,12 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
       setState(() {
         _sites = sites;
         _supervisorName = supervisorName;
-        _events = siteData.expand((item) => item.events).toList()
-          ..sort((a, b) {
-            if (a.isOpenEmergency != b.isOpenEmergency) {
-              return a.isOpenEmergency ? -1 : 1;
-            }
-            return (b.deviceCreatedAt ?? DateTime(1970)).compareTo(
-              a.deviceCreatedAt ?? DateTime(1970),
-            );
-          });
-        _assetsBySite = {for (final item in siteData) item.siteId: item.assets};
-        if (sites.length > 1 &&
-            !sites.any((site) => site.id == _selectedSiteId)) {
-          _selectedSiteId = sites.first.id;
+        _eventsBySite = {for (final item in siteData) item.siteId: item.events};
+        if (!sites.any((site) => site.id == _selectedSiteId)) {
+          _selectedSiteId = sites.firstOrNull?.id;
         }
         _error = null;
         _offline = false;
-        _lastSyncedAt = DateTime.now();
       });
     } on ApiException catch (error) {
       if (error.isUnauthorized) {
@@ -109,6 +91,261 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
     }
   }
 
+  void _replaceSiteEvents(String siteId, List<SupervisorEvent> events) {
+    if (!mounted) return;
+    setState(() {
+      _eventsBySite = {..._eventsBySite, siteId: events};
+    });
+  }
+
+  Future<void> _openCategory(_SupervisorReviewCategory category) async {
+    final site = _sites.where((item) => item.id == _selectedSiteId).firstOrNull;
+    if (site == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => _SupervisorCategoryScreen(
+          api: widget.api,
+          onSignOut: widget.onSignOut,
+          site: site,
+          category: category,
+          initialEvents: _eventsBySite[site.id] ?? const [],
+          onEventsChanged: (events) => _replaceSiteEvents(site.id, events),
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedSite = _sites
+        .where((site) => site.id == _selectedSiteId)
+        .firstOrNull;
+    final selectedEvents = selectedSite == null
+        ? const <SupervisorEvent>[]
+        : _eventsBySite[selectedSite.id] ?? const <SupervisorEvent>[];
+    final counts = _SupervisorCategoryCounts.fromEvents(selectedEvents);
+    final siteLabel = selectedSite?.shortName?.trim().isNotEmpty == true
+        ? selectedSite!.shortName!
+        : selectedSite?.name ?? 'No assigned site';
+    return _RoleScaffold(
+      title: _supervisorName,
+      subtitle: siteLabel,
+      onRefresh: _load,
+      onSignOut: widget.onSignOut,
+      offline: _offline,
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          key: const Key('supervisor-scroll'),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: [
+            if (_error != null) _ErrorBanner(message: _error!, onRetry: _load),
+            if (_loading && _eventsBySite.isEmpty)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(28),
+                  child: CircularProgressIndicator(),
+                ),
+              ),
+            if (_sites.length > 1)
+              DropdownButtonFormField<String>(
+                key: const Key('supervisor-site-selector'),
+                initialValue: selectedSite?.id,
+                decoration: const InputDecoration(
+                  labelText: 'Current Site',
+                  prefixIcon: Icon(Icons.location_on_outlined),
+                ),
+                items: [
+                  for (final site in _sites)
+                    DropdownMenuItem(
+                      value: site.id,
+                      child: Text(site.shortName ?? site.name),
+                    ),
+                ],
+                onChanged: (value) => setState(() {
+                  _selectedSiteId = value;
+                }),
+              ),
+            if (_sites.length > 1) const SizedBox(height: 12),
+            _SupervisorAttentionGrid(counts: counts, onOpen: _openCategory),
+            const SizedBox(height: 12),
+            _SupervisorPendingNotifications(
+              counts: counts,
+              onOpen: _openCategory,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _SupervisorReviewCategory { emergency, diesel, trips, meter }
+
+extension on _SupervisorReviewCategory {
+  String get title => switch (this) {
+    _SupervisorReviewCategory.emergency => 'Emergencies',
+    _SupervisorReviewCategory.diesel => 'Diesel',
+    _SupervisorReviewCategory.trips => 'Trips',
+    _SupervisorReviewCategory.meter => 'Meter readings',
+  };
+
+  String get notificationLabel => switch (this) {
+    _SupervisorReviewCategory.emergency => 'Emergency',
+    _SupervisorReviewCategory.diesel => 'Diesel',
+    _SupervisorReviewCategory.trips => 'Trips',
+    _SupervisorReviewCategory.meter => 'Meter',
+  };
+
+  bool matches(SupervisorEvent event) => switch (this) {
+    _SupervisorReviewCategory.emergency => event.isEmergency,
+    _SupervisorReviewCategory.diesel => event.isDiesel,
+    _SupervisorReviewCategory.trips =>
+      event.isTrip && event.assetType == 'TIPPER',
+    _SupervisorReviewCategory.meter =>
+      (event.assetType == 'TIPPER' && event.isKm) ||
+          (event.assetType != 'TIPPER' && event.isHmr),
+  };
+
+  bool isPending(SupervisorEvent event) => switch (this) {
+    _SupervisorReviewCategory.emergency => event.isOpenEmergency,
+    _ => event.isPending,
+  };
+
+  String get emptyPending => switch (this) {
+    _SupervisorReviewCategory.emergency => 'No open emergencies.',
+    _ => 'Nothing pending.',
+  };
+}
+
+class _SupervisorCategoryCounts {
+  const _SupervisorCategoryCounts({
+    required this.emergency,
+    required this.diesel,
+    required this.trips,
+    required this.meter,
+  });
+
+  factory _SupervisorCategoryCounts.fromEvents(
+    Iterable<SupervisorEvent> events,
+  ) {
+    int count(_SupervisorReviewCategory category) => events
+        .where((event) => category.matches(event) && category.isPending(event))
+        .length;
+    return _SupervisorCategoryCounts(
+      emergency: count(_SupervisorReviewCategory.emergency),
+      diesel: count(_SupervisorReviewCategory.diesel),
+      trips: count(_SupervisorReviewCategory.trips),
+      meter: count(_SupervisorReviewCategory.meter),
+    );
+  }
+
+  final int emergency;
+  final int diesel;
+  final int trips;
+  final int meter;
+
+  int get total => emergency + diesel + trips + meter;
+
+  int forCategory(_SupervisorReviewCategory category) => switch (category) {
+    _SupervisorReviewCategory.emergency => emergency,
+    _SupervisorReviewCategory.diesel => diesel,
+    _SupervisorReviewCategory.trips => trips,
+    _SupervisorReviewCategory.meter => meter,
+  };
+}
+
+enum _SupervisorCategoryTab { pending, history }
+
+class _SupervisorCategoryScreen extends StatefulWidget {
+  const _SupervisorCategoryScreen({
+    required this.api,
+    required this.onSignOut,
+    required this.site,
+    required this.category,
+    required this.initialEvents,
+    required this.onEventsChanged,
+  });
+
+  final ApiClient api;
+  final SignOut onSignOut;
+  final SupervisorSite site;
+  final _SupervisorReviewCategory category;
+  final List<SupervisorEvent> initialEvents;
+  final ValueChanged<List<SupervisorEvent>> onEventsChanged;
+
+  @override
+  State<_SupervisorCategoryScreen> createState() =>
+      _SupervisorCategoryScreenState();
+}
+
+class _SupervisorCategoryScreenState extends State<_SupervisorCategoryScreen> {
+  late List<SupervisorEvent> _events = [...widget.initialEvents];
+  _SupervisorCategoryTab _tab = _SupervisorCategoryTab.pending;
+  bool _loading = false;
+  bool _offline = false;
+  String? _error;
+  String? _message;
+
+  List<SupervisorEvent> get _categoryEvents =>
+      _events.where(widget.category.matches).toList();
+
+  List<SupervisorEvent> get _pending =>
+      _categoryEvents.where(widget.category.isPending).toList()..sort(
+        (a, b) => (a.deviceCreatedAt ?? DateTime(1970)).compareTo(
+          b.deviceCreatedAt ?? DateTime(1970),
+        ),
+      );
+
+  List<SupervisorEvent> get _history =>
+      _categoryEvents
+          .where((event) => !widget.category.isPending(event))
+          .toList()
+        ..sort(
+          (a, b) => (b.deviceCreatedAt ?? DateTime(1970)).compareTo(
+            a.deviceCreatedAt ?? DateTime(1970),
+          ),
+        );
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final events = await widget.api.supervisorEvents(widget.site.id);
+      if (!mounted) return;
+      setState(() {
+        _events = events;
+        _error = null;
+        _offline = false;
+      });
+      widget.onEventsChanged(events);
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) {
+        await widget.onSignOut();
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _offline = error.isRetryable;
+          _error = _friendlyError(error);
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _replaceEvent(SupervisorEvent updated, String message) {
+    setState(() {
+      _events = _events
+          .map((event) => event.id == updated.id ? updated : event)
+          .toList();
+      _message = message;
+      _error = null;
+    });
+    widget.onEventsChanged(_events);
+  }
+
   Future<void> _verify(SupervisorEvent event, String decision) async {
     String? reason;
     if (decision != 'APPROVED') reason = await _askReason(decision);
@@ -120,14 +357,12 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
         reason: reason,
       );
       if (!mounted) return;
-      setState(() {
-        _events = _events
-            .map((item) => item.id == updated.id ? updated : item)
-            .toList();
-        _message = decision == 'APPROVED'
+      _replaceEvent(
+        updated,
+        decision == 'APPROVED'
             ? 'Record approved.'
-            : 'Record marked $decision.';
-      });
+            : 'Record marked $decision.',
+      );
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = _friendlyError(error));
     }
@@ -167,16 +402,13 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
       final updated = action == 'acknowledge'
           ? await widget.api.acknowledgeEmergency(event.id)
           : await widget.api.resolveEmergency(event.id);
-      if (mounted) {
-        setState(() {
-          _events = _events
-              .map((item) => item.id == updated.id ? updated : item)
-              .toList();
-          _message = action == 'acknowledge'
-              ? 'Emergency acknowledged.'
-              : 'Emergency resolved.';
-        });
-      }
+      if (!mounted) return;
+      _replaceEvent(
+        updated,
+        action == 'acknowledge'
+            ? 'Emergency acknowledged.'
+            : 'Emergency resolved.',
+      );
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = _friendlyError(error));
     }
@@ -191,268 +423,6 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
     }
   }
 
-  Future<void> _changeDriver(
-    SupervisorSite site,
-    SiteDeployedAsset asset,
-  ) async {
-    final changed = await showDriverAssignmentDialog(
-      context,
-      api: widget.api,
-      assetId: asset.assetId,
-      assetLabel: asset.registrationNumber ?? asset.assetCode,
-      siteLabel: site.name,
-      hasAssignment: asset.driverMembershipId != null,
-      supervisorSiteId: site.id,
-    );
-    if (changed == true) await _load();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final openEmergencies = _events
-        .where((item) => item.isOpenEmergency)
-        .toList();
-    final selectedSite = _sites.length > 1
-        ? _sites.where((site) => site.id == _selectedSiteId).firstOrNull
-        : _sites.firstOrNull;
-    final selectedEvents = selectedSite == null
-        ? const <SupervisorEvent>[]
-        : _events.where((event) => event.siteId == selectedSite.id).toList();
-    final selectedAssets = selectedSite == null
-        ? const <SiteDeployedAsset>[]
-        : _assetsBySite[selectedSite.id] ?? const <SiteDeployedAsset>[];
-    final query = _search.trim().toLowerCase();
-    final visibleAssets = selectedAssets.where((asset) {
-      final assetEvents = _eventsForAsset(asset, selectedEvents);
-      final matchesSearch =
-          query.isEmpty ||
-          asset.assetCode.toLowerCase().contains(query) ||
-          (asset.registrationNumber?.toLowerCase().contains(query) ?? false) ||
-          (asset.shortName?.toLowerCase().contains(query) ?? false) ||
-          (asset.driverName?.toLowerCase().contains(query) ?? false);
-      final matchesFilter = switch (_filter) {
-        _AssetFilter.all => true,
-        _AssetFilter.needReview =>
-          supervisorReviewPendingCount(assetEvents) > 0,
-        _AssetFilter.active => asset.dutyStatus == 'ACTIVE',
-        _AssetFilter.unassigned => asset.driverMembershipId == null,
-      };
-      return matchesSearch && matchesFilter;
-    }).toList();
-    final pendingEvents =
-        selectedEvents.where((event) => event.needsSupervisorReview).toList()
-          ..sort(
-            (a, b) => (a.deviceCreatedAt ?? DateTime(1970)).compareTo(
-              b.deviceCreatedAt ?? DateTime(1970),
-            ),
-          );
-    final dieselPending = pendingEvents
-        .where((event) => event.isDiesel)
-        .toList();
-    final tripPending = pendingEvents.where((event) => event.isTrip).toList();
-    final meterPending = pendingEvents
-        .where((event) => event.isKm || event.isHmr)
-        .toList();
-    final filteredReview = switch (_reviewCategory) {
-      _SupervisorReviewCategory.emergency => openEmergencies,
-      _SupervisorReviewCategory.diesel => dieselPending,
-      _SupervisorReviewCategory.trips => tripPending,
-      _SupervisorReviewCategory.meter => meterPending,
-      null => pendingEvents,
-    };
-    final timeline = [...selectedEvents]
-      ..sort(
-        (a, b) => (a.deviceCreatedAt ?? DateTime(1970)).compareTo(
-          b.deviceCreatedAt ?? DateTime(1970),
-        ),
-      );
-    final activeCount = selectedAssets
-        .where((asset) => asset.dutyStatus == 'ACTIVE')
-        .length;
-    final unassignedCount = selectedAssets
-        .where((asset) => asset.driverMembershipId == null)
-        .length;
-    final siteLabel = selectedSite?.shortName?.trim().isNotEmpty == true
-        ? selectedSite!.shortName!
-        : selectedSite?.name ?? 'No assigned site';
-    return _RoleScaffold(
-      title: _supervisorName,
-      subtitle: '$siteLabel · Supervisor',
-      onRefresh: _load,
-      onSignOut: widget.onSignOut,
-      offline: _offline,
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          key: const Key('supervisor-scroll'),
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-          children: [
-            if (_error != null) _ErrorBanner(message: _error!, onRetry: _load),
-            if (_message != null) _MessageBanner(message: _message!),
-            if (_loading && _events.isEmpty)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(28),
-                  child: CircularProgressIndicator(),
-                ),
-              ),
-            if (_sites.length > 1)
-              DropdownButtonFormField<String>(
-                key: const Key('supervisor-site-selector'),
-                initialValue: selectedSite?.id,
-                decoration: const InputDecoration(
-                  labelText: 'Current Site',
-                  prefixIcon: Icon(Icons.location_on_outlined),
-                ),
-                items: [
-                  for (final site in _sites)
-                    DropdownMenuItem(
-                      value: site.id,
-                      child: Text(site.shortName ?? site.name),
-                    ),
-                ],
-                onChanged: (value) => setState(() {
-                  _selectedSiteId = value;
-                  _reviewCategory = null;
-                }),
-              ),
-            if (_sites.length > 1) const SizedBox(height: 12),
-            _SupervisorAttentionGrid(
-              emergencyCount: openEmergencies.length,
-              dieselCount: dieselPending.length,
-              tripCount: tripPending.length,
-              meterCount: meterPending.length,
-              selected: _reviewCategory,
-              onSelected: (value) => setState(() => _reviewCategory = value),
-            ),
-            const SizedBox(height: 12),
-            _SupervisorReviewPanel(
-              category: _reviewCategory,
-              events: filteredReview,
-              showSite: _sites.length > 1,
-              onAllReview: () => setState(() => _reviewCategory = null),
-              onVerify: _verify,
-              onCall: _call,
-              onEvidence: _showEvidence,
-              onEmergencyAction: _emergencyAction,
-            ),
-            const SizedBox(height: 12),
-            _SummaryStrip(
-              items: [
-                _SummaryValue(
-                  'ON DUTY',
-                  '$activeCount',
-                  Icons.play_circle_outline,
-                ),
-                _SummaryValue(
-                  'UNASSIGNED',
-                  '$unassignedCount',
-                  Icons.person_off_outlined,
-                  danger: unassignedCount > 0,
-                ),
-                _SummaryValue(
-                  'PENDING REVIEW',
-                  '${pendingEvents.length}',
-                  Icons.fact_check_outlined,
-                  danger: pendingEvents.isNotEmpty,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              key: const Key('supervisor-asset-search'),
-              decoration: const InputDecoration(
-                labelText: 'Search assets or drivers',
-                prefixIcon: Icon(Icons.search),
-              ),
-              onChanged: (value) => setState(() => _search = value),
-            ),
-            const SizedBox(height: 10),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SegmentedButton<_AssetFilter>(
-                segments: const [
-                  ButtonSegment(value: _AssetFilter.all, label: Text('ALL')),
-                  ButtonSegment(
-                    value: _AssetFilter.needReview,
-                    label: Text('NEED REVIEW'),
-                  ),
-                  ButtonSegment(
-                    value: _AssetFilter.active,
-                    label: Text('ACTIVE'),
-                  ),
-                  ButtonSegment(
-                    value: _AssetFilter.unassigned,
-                    label: Text(
-                      'UNASSIGNED',
-                      key: Key('supervisor-filter-unassigned'),
-                    ),
-                  ),
-                ],
-                selected: {_filter},
-                onSelectionChanged: (value) =>
-                    setState(() => _filter = value.first),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Site fleet',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                ),
-                if (_lastSyncedAt != null)
-                  Text(
-                    'Synced ${_formatTime(_lastSyncedAt!)}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            if (!_loading && visibleAssets.isEmpty)
-              const _EmptyCard(
-                icon: Icons.search_off,
-                text: 'No assets match this view.',
-              ),
-            for (final asset in visibleAssets)
-              _SupervisorAssetCard(
-                asset: asset,
-                events: _eventsForAsset(asset, selectedEvents),
-                onChangeDriver: () => _changeDriver(selectedSite!, asset),
-              ),
-            const SizedBox(height: 18),
-            _EventSection(
-              key: const Key('supervisor-timeline-section'),
-              title: 'Recent activity',
-              subtitle: '${timeline.length} event(s)',
-              emptyText: 'No activity today.',
-              events: timeline,
-              onVerify: _verify,
-              onCall: _call,
-              onEvidence: _showEvidence,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  List<SupervisorEvent> _eventsForAsset(
-    SiteDeployedAsset asset,
-    List<SupervisorEvent> events,
-  ) {
-    return events
-        .where(
-          (event) =>
-              event.assetCode == asset.assetCode ||
-              event.tipperRegistration ==
-                  (asset.registrationNumber ?? asset.assetCode),
-        )
-        .toList();
-  }
-
   Future<void> _showEvidence(SupervisorEvent event) async {
     if (!event.evidenceAvailable) return;
     showDialog<void>(
@@ -463,28 +433,105 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
       ),
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = _pending;
+    final history = _history;
+    final visible = _tab == _SupervisorCategoryTab.pending ? pending : history;
+    final siteLabel = widget.site.shortName?.trim().isNotEmpty == true
+        ? widget.site.shortName!
+        : widget.site.name;
+    return _RoleScaffold(
+      title: widget.category.title,
+      subtitle: siteLabel,
+      onRefresh: _load,
+      onSignOut: widget.onSignOut,
+      offline: _offline,
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          key: Key('supervisor-category-${widget.category.name}'),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: [
+            if (_error != null) _ErrorBanner(message: _error!, onRetry: _load),
+            if (_message != null) _MessageBanner(message: _message!),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.category == _SupervisorReviewCategory.emergency
+                        ? 'Pending / Open: ${pending.length}'
+                        : 'Pending: ${pending.length}',
+                    key: const Key('supervisor-category-pending-count'),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                if (_loading)
+                  const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: FleetSpacing.sm),
+            SegmentedButton<_SupervisorCategoryTab>(
+              key: const Key('supervisor-category-tabs'),
+              segments: [
+                ButtonSegment(
+                  value: _SupervisorCategoryTab.pending,
+                  label: Text('PENDING ${pending.length}'),
+                ),
+                const ButtonSegment(
+                  value: _SupervisorCategoryTab.history,
+                  label: Text('HISTORY'),
+                ),
+              ],
+              selected: {_tab},
+              onSelectionChanged: (selection) =>
+                  setState(() => _tab = selection.first),
+            ),
+            const SizedBox(height: FleetSpacing.md),
+            if (visible.isEmpty)
+              _EmptyCard(
+                icon: _tab == _SupervisorCategoryTab.pending
+                    ? Icons.check_circle_outline
+                    : Icons.history,
+                text: _tab == _SupervisorCategoryTab.pending
+                    ? widget.category.emptyPending
+                    : 'No ${widget.category.notificationLabel.toLowerCase()} history.',
+              ),
+            for (final event in visible)
+              if (event.isEmergency && _tab == _SupervisorCategoryTab.pending)
+                _EmergencyCard(
+                  event: event,
+                  showSite: false,
+                  onCall: () => _call(event.driverPhone),
+                  onAcknowledge: () => _emergencyAction(event, 'acknowledge'),
+                  onResolve: () => _emergencyAction(event, 'resolve'),
+                )
+              else
+                _ReviewEventCard(
+                  event: event,
+                  showReviewActions:
+                      _tab == _SupervisorCategoryTab.pending &&
+                      !event.isEmergency,
+                  onVerify: _verify,
+                  onCall: _call,
+                  onEvidence: _showEvidence,
+                ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-enum _AssetFilter { all, needReview, active, unassigned }
-
-enum _SupervisorReviewCategory { emergency, diesel, trips, meter }
-
 class _SupervisorAttentionGrid extends StatelessWidget {
-  const _SupervisorAttentionGrid({
-    required this.emergencyCount,
-    required this.dieselCount,
-    required this.tripCount,
-    required this.meterCount,
-    required this.selected,
-    required this.onSelected,
-  });
+  const _SupervisorAttentionGrid({required this.counts, required this.onOpen});
 
-  final int emergencyCount;
-  final int dieselCount;
-  final int tripCount;
-  final int meterCount;
-  final _SupervisorReviewCategory? selected;
-  final ValueChanged<_SupervisorReviewCategory?> onSelected;
+  final _SupervisorCategoryCounts counts;
+  final ValueChanged<_SupervisorReviewCategory> onOpen;
 
   @override
   Widget build(BuildContext context) => GridView.count(
@@ -499,46 +546,38 @@ class _SupervisorAttentionGrid extends StatelessWidget {
       _SupervisorAttentionTile(
         key: const Key('supervisor-tile-emergency'),
         countKey: const Key('supervisor-count-emergency'),
-        category: _SupervisorReviewCategory.emergency,
         label: 'EMERGENCIES',
-        count: emergencyCount,
+        count: counts.emergency,
         icon: Icons.warning_amber_rounded,
         accent: FleetColors.danger,
-        selected: selected == _SupervisorReviewCategory.emergency,
-        onTap: onSelected,
+        onTap: () => onOpen(_SupervisorReviewCategory.emergency),
       ),
       _SupervisorAttentionTile(
         key: const Key('supervisor-tile-diesel'),
         countKey: const Key('supervisor-count-diesel'),
-        category: _SupervisorReviewCategory.diesel,
         label: 'DIESEL APPROVALS',
-        count: dieselCount,
+        count: counts.diesel,
         icon: Icons.local_gas_station_outlined,
         accent: FleetColors.amber,
-        selected: selected == _SupervisorReviewCategory.diesel,
-        onTap: onSelected,
+        onTap: () => onOpen(_SupervisorReviewCategory.diesel),
       ),
       _SupervisorAttentionTile(
         key: const Key('supervisor-tile-trips'),
         countKey: const Key('supervisor-count-trips'),
-        category: _SupervisorReviewCategory.trips,
         label: 'TRIP APPROVALS',
-        count: tripCount,
+        count: counts.trips,
         icon: Icons.route_outlined,
         accent: FleetColors.deepGreen,
-        selected: selected == _SupervisorReviewCategory.trips,
-        onTap: onSelected,
+        onTap: () => onOpen(_SupervisorReviewCategory.trips),
       ),
       _SupervisorAttentionTile(
         key: const Key('supervisor-tile-meter'),
         countKey: const Key('supervisor-count-meter'),
-        category: _SupervisorReviewCategory.meter,
         label: 'METER READINGS',
-        count: meterCount,
+        count: counts.meter,
         icon: Icons.speed_outlined,
         accent: FleetColors.steel,
-        selected: selected == _SupervisorReviewCategory.meter,
-        onTap: onSelected,
+        onTap: () => onOpen(_SupervisorReviewCategory.meter),
       ),
     ],
   );
@@ -548,43 +587,35 @@ class _SupervisorAttentionTile extends StatelessWidget {
   const _SupervisorAttentionTile({
     required super.key,
     required this.countKey,
-    required this.category,
     required this.label,
     required this.count,
     required this.icon,
     required this.accent,
-    required this.selected,
     required this.onTap,
   });
 
   final Key countKey;
-  final _SupervisorReviewCategory category;
   final String label;
   final int count;
   final IconData icon;
   final Color accent;
-  final bool selected;
-  final ValueChanged<_SupervisorReviewCategory?> onTap;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) => Semantics(
     button: true,
-    selected: selected,
     label: '$label, $count pending',
     child: Material(
       color: count > 0
-          ? accent.withValues(alpha: selected ? 0.2 : 0.11)
+          ? accent.withValues(alpha: 0.11)
           : Theme.of(context).colorScheme.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(FleetRadius.md),
-        side: BorderSide(
-          color: selected ? accent : FleetColors.outline,
-          width: selected ? 2 : 1,
-        ),
+        side: BorderSide(color: count > 0 ? accent : FleetColors.outline),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => onTap(selected ? null : category),
+        onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(FleetSpacing.md),
           child: Column(
@@ -622,39 +653,18 @@ class _SupervisorAttentionTile extends StatelessWidget {
   );
 }
 
-class _SupervisorReviewPanel extends StatelessWidget {
-  const _SupervisorReviewPanel({
-    required this.category,
-    required this.events,
-    required this.showSite,
-    required this.onAllReview,
-    required this.onVerify,
-    required this.onCall,
-    required this.onEvidence,
-    required this.onEmergencyAction,
+class _SupervisorPendingNotifications extends StatelessWidget {
+  const _SupervisorPendingNotifications({
+    required this.counts,
+    required this.onOpen,
   });
 
-  final _SupervisorReviewCategory? category;
-  final List<SupervisorEvent> events;
-  final bool showSite;
-  final VoidCallback onAllReview;
-  final Future<void> Function(SupervisorEvent event, String decision) onVerify;
-  final Future<void> Function(String? phone) onCall;
-  final Future<void> Function(SupervisorEvent event) onEvidence;
-  final Future<void> Function(SupervisorEvent event, String action)
-  onEmergencyAction;
-
-  String get _title => switch (category) {
-    _SupervisorReviewCategory.emergency => 'Emergency response',
-    _SupervisorReviewCategory.diesel => 'Diesel approvals',
-    _SupervisorReviewCategory.trips => 'Trip approvals',
-    _SupervisorReviewCategory.meter => 'Meter readings',
-    null => 'Review queue',
-  };
+  final _SupervisorCategoryCounts counts;
+  final ValueChanged<_SupervisorReviewCategory> onOpen;
 
   @override
   Widget build(BuildContext context) => Card(
-    key: const Key('supervisor-review-panel'),
+    key: const Key('supervisor-pending-notifications'),
     child: Padding(
       padding: const EdgeInsets.all(FleetSpacing.md),
       child: Column(
@@ -663,276 +673,42 @@ class _SupervisorReviewPanel extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _title,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    Text(
-                      category == _SupervisorReviewCategory.emergency
-                          ? '${events.length} unresolved'
-                          : '${events.length} pending',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
+                child: Text(
+                  'Pending notifications',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              if (category != null)
-                TextButton(
-                  key: const Key('supervisor-all-review'),
-                  onPressed: onAllReview,
-                  child: const Text('ALL REVIEW'),
-                ),
+              Text(
+                '${counts.total}',
+                key: const Key('supervisor-pending-total'),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+              ),
             ],
           ),
-          const SizedBox(height: FleetSpacing.sm),
-          if (events.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: FleetSpacing.md),
-              child: Text('Nothing pending.'),
-            ),
-          for (final event in events)
-            if (event.isEmergency)
-              _EmergencyCard(
-                event: event,
-                showSite: showSite,
-                onCall: () => onCall(event.driverPhone),
-                onAcknowledge: () => onEmergencyAction(event, 'acknowledge'),
-                onResolve: () => onEmergencyAction(event, 'resolve'),
-              )
-            else
-              _ReviewEventCard(
-                event: event,
-                showReviewActions: true,
-                showSite: showSite,
-                onVerify: onVerify,
-                onCall: onCall,
-                onEvidence: onEvidence,
-              ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _SupervisorAssetCard extends StatelessWidget {
-  const _SupervisorAssetCard({
-    required this.asset,
-    required this.events,
-    required this.onChangeDriver,
-  });
-
-  final SiteDeployedAsset asset;
-  final List<SupervisorEvent> events;
-  final VoidCallback onChangeDriver;
-
-  @override
-  Widget build(BuildContext context) {
-    final trips = events.where((event) => event.isTrip).length;
-    final kmReadings = events.where((event) => event.isKm).length;
-    final startHmr = events
-        .where((event) => event.isHmr && event.readingType == 'START_READING')
-        .lastOrNull
-        ?.readingValue;
-    final endHmr = events
-        .where((event) => event.isHmr && event.readingType == 'END_READING')
-        .lastOrNull
-        ?.readingValue;
-    final machineHours = startHmr != null && endHmr != null
-        ? endHmr - startHmr
-        : null;
-    final dieselLitres = supervisorDieselLitres(events);
-    final pending = supervisorReviewPendingCount(events);
-    final title = asset.shortName?.trim().isNotEmpty == true
-        ? asset.shortName!
-        : asset.assetCode;
-    final registration = asset.registrationNumber?.trim();
-    return Card(
-      key: Key('supervisor-site-asset-${asset.assetId}'),
-      margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  asset.assetType == 'TIPPER'
-                      ? Icons.local_shipping_outlined
-                      : Icons.precision_manufacturing_outlined,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          if (counts.total == 0) ...[
+            const SizedBox(height: FleetSpacing.sm),
+            const Text('Nothing requires your attention.'),
+          ] else
+            for (final category in _SupervisorReviewCategory.values)
+              if (counts.forCategory(category) > 0)
+                ListTile(
+                  key: Key('supervisor-notification-${category.name}'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(category.notificationLabel),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                      Text(
-                        asset.assetCode,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (registration != null &&
-                          registration.isNotEmpty &&
-                          registration != asset.assetCode)
-                        Text(
-                          registration,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
+                      Text('${counts.forCategory(category)}'),
+                      const Icon(Icons.chevron_right),
                     ],
                   ),
+                  onTap: () => onOpen(category),
                 ),
-                if (pending > 0)
-                  Chip(
-                    key: Key('asset-pending-${asset.assetId}'),
-                    label: Text('$pending pending'),
-                    visualDensity: VisualDensity.compact,
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              asset.driverName ?? 'UNASSIGNED',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            Text(
-              asset.dutyStatus == 'ACTIVE'
-                  ? 'Duty active'
-                  : asset.driverMembershipId == null
-                  ? 'No driver assigned'
-                  : 'Not on duty',
-            ),
-            if (events.isEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                'No activity today',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ] else ...[
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  if (asset.assetType == 'TIPPER') ...[
-                    _CompactMetric(label: 'Trips', value: '$trips'),
-                    _CompactMetric(label: 'KM', value: '$kmReadings'),
-                  ] else ...[
-                    _CompactMetric(
-                      label: 'START HMR',
-                      value: _numberText(startHmr),
-                    ),
-                    _CompactMetric(
-                      label: 'END HMR',
-                      value: _numberText(endHmr),
-                    ),
-                    _CompactMetric(
-                      label: 'MACHINE HOURS',
-                      value: _numberText(machineHours),
-                    ),
-                  ],
-                  _CompactMetric(
-                    label: 'Diesel',
-                    value: '${_numberText(dieselLitres)} L',
-                  ),
-                ],
-              ),
-            ],
-            ...[
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  key: Key('supervisor-assign-driver-${asset.assetId}'),
-                  onPressed: onChangeDriver,
-                  child: Text(
-                    asset.driverMembershipId == null
-                        ? 'ASSIGN DRIVER'
-                        : 'CHANGE DRIVER',
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
+        ],
       ),
-    );
-  }
-}
-
-class _CompactMetric extends StatelessWidget {
-  const _CompactMetric({required this.label, required this.value});
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(10),
-    ),
-    child: Text('$label $value'),
-  );
-}
-
-class _EventSection extends StatelessWidget {
-  const _EventSection({
-    required super.key,
-    required this.title,
-    required this.subtitle,
-    required this.emptyText,
-    required this.events,
-    required this.onVerify,
-    required this.onCall,
-    required this.onEvidence,
-  });
-
-  final String title;
-  final String subtitle;
-  final String emptyText;
-  final List<SupervisorEvent> events;
-  final Future<void> Function(SupervisorEvent event, String decision) onVerify;
-  final Future<void> Function(String? phone) onCall;
-  final Future<void> Function(SupervisorEvent event) onEvidence;
-
-  @override
-  Widget build(BuildContext context) => Card(
-    child: ExpansionTile(
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text(subtitle),
-      children: [
-        if (events.isEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(emptyText),
-            ),
-          ),
-        for (final event in events)
-          _ReviewEventCard(
-            event: event,
-            showReviewActions: title == 'Review',
-            onVerify: onVerify,
-            onCall: onCall,
-            onEvidence: onEvidence,
-          ),
-      ],
     ),
   );
 }
@@ -944,7 +720,6 @@ class _ReviewEventCard extends StatelessWidget {
     required this.onVerify,
     required this.onCall,
     required this.onEvidence,
-    this.showSite = false,
   });
 
   final SupervisorEvent event;
@@ -952,7 +727,6 @@ class _ReviewEventCard extends StatelessWidget {
   final Future<void> Function(SupervisorEvent event, String decision) onVerify;
   final Future<void> Function(String? phone) onCall;
   final Future<void> Function(SupervisorEvent event) onEvidence;
-  final bool showSite;
 
   @override
   Widget build(BuildContext context) {
@@ -961,14 +735,17 @@ class _ReviewEventCard extends StatelessWidget {
         : event.assetCode?.trim().isNotEmpty == true
         ? event.assetCode!
         : event.tipperRegistration;
-    final detail = event.isKm || event.isHmr
-        ? '${event.readingType == 'START_READING' ? 'START' : 'END'} ${event.isHmr ? 'HMR' : 'KM'} · ${_numberText(event.readingValue)}${event.isHmr ? ' hours' : ''}'
+    final detail = event.isHmr
+        ? '${event.readingType == 'START_READING' ? 'START' : 'END'} HMR · ${_numberText(event.readingValue)} hours'
+        : event.isKm
+        ? '${event.readingType == 'START_READING' ? 'START' : 'END'} ODOMETER · ${_numberText(event.readingValue)} KM'
         : event.isDiesel
         ? '${_numberText(event.litres)} LITRES'
         : event.isTrip
         ? 'Trip Complete'
         : '${event.emergencyCategory ?? 'Emergency'} · ${event.emergencyStatus ?? ''}';
     return Card(
+      key: Key('supervisor-event-${event.id}'),
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -998,7 +775,6 @@ class _ReviewEventCard extends StatelessWidget {
                 event.tipperRegistration != assetLabel)
               Text(event.tipperRegistration),
             Text('${event.driverName} · ${_formatDate(event.deviceCreatedAt)}'),
-            if (showSite) Text(event.siteName),
             if (event.isDiesel && !event.evidenceAvailable)
               Text(
                 'Evidence not provided',
@@ -2106,55 +1882,6 @@ class _RoleScaffold extends StatelessWidget {
   );
 }
 
-class _SummaryStrip extends StatelessWidget {
-  const _SummaryStrip({required this.items});
-  final List<_SummaryValue> items;
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      for (final item in items)
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  children: [
-                    Icon(
-                      item.icon,
-                      color: item.danger
-                          ? Theme.of(context).colorScheme.error
-                          : null,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      item.value,
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    Text(
-                      item.label,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-    ],
-  );
-}
-
-class _SummaryValue {
-  const _SummaryValue(this.label, this.value, this.icon, {this.danger = false});
-  final String label;
-  final String value;
-  final IconData icon;
-  final bool danger;
-}
-
 class _MetricGrid extends StatelessWidget {
   const _MetricGrid({required this.metrics});
   final List<_Metric> metrics;
@@ -2371,11 +2098,6 @@ String _friendlyError(ApiException error) {
 String _formatDate(DateTime? value) {
   if (value == null) return 'Time unavailable';
   return '${value.toLocal().day.toString().padLeft(2, '0')}/${value.toLocal().month.toString().padLeft(2, '0')} ${value.toLocal().hour.toString().padLeft(2, '0')}:${value.toLocal().minute.toString().padLeft(2, '0')}';
-}
-
-String _formatTime(DateTime value) {
-  final local = value.toLocal();
-  return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
 }
 
 String _numberText(double? value) => value == null
