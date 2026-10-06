@@ -14,6 +14,8 @@ const assets = [
     rental_party_name: null,
     rental_start_date: null,
     rental_end_date: null,
+    supports_odometer_km: true,
+    supports_hour_meter: false,
     current_deployment: { id: "deployment-1", asset_id: "asset-assigned", site_id: "site-1", site_name: "North Pit", starts_at: "2026-09-01T04:00:00Z", ends_at: null },
     has_active_assignment: true,
     active_assignment: { assignment_id: "assignment-1", site_id: "site-1", site_name: "North Pit", driver_membership_id: "driver-active", driver_name: "Ravi Kumar", starts_at: "2026-09-02T04:00:00Z", regular_duty_minutes: 600 },
@@ -31,6 +33,8 @@ const assets = [
     rental_party_name: "Metro Plant Hire",
     rental_start_date: "2026-09-01",
     rental_end_date: "2027-03-01",
+    supports_odometer_km: false,
+    supports_hour_meter: true,
     current_deployment: { id: "deployment-2", asset_id: "asset-unassigned", site_id: "site-1", site_name: "North Pit", starts_at: "2026-09-03T04:00:00Z", ends_at: null },
     has_active_assignment: false,
     active_assignment: null,
@@ -48,6 +52,8 @@ const assets = [
     rental_party_name: null,
     rental_start_date: null,
     rental_end_date: null,
+    supports_odometer_km: false,
+    supports_hour_meter: true,
     current_deployment: null,
     has_active_assignment: false,
     active_assignment: null,
@@ -129,13 +135,15 @@ const sites = [
   },
 ];
 
-async function mockOwnerApi(page: Page) {
+async function mockOwnerApi(page: Page, futureModules = false) {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const body = path.endsWith("/auth/web-refresh")
       ? { access_token: "owner-test-token", expires_in: 3600, membership_id: "owner-membership", company_id: "company-1", role: "OWNER_ADMIN" }
       : path.endsWith("/auth/me")
         ? { user_id: "owner-user", display_name: "Owner Test", membership_id: "owner-membership", company_id: "company-1", company_name: "Owner Test Company", role: "OWNER_ADMIN" }
+        : path.endsWith("/owner/future-features")
+          ? { maintenance: futureModules, asset_documents: futureModules, notifications: futureModules, telematics: futureModules, fuel_integrations: futureModules, toll_expenses: false, multi_meter: futureModules, payroll: futureModules, attendance_location: futureModules }
         : path.endsWith("/owner/assets")
           ? assets
           : path.endsWith("/owner/people")
@@ -144,7 +152,23 @@ async function mockOwnerApi(page: Page) {
               ? sites
               : path.endsWith("/owner/assets/asset-unassigned/eligible-drivers")
                 ? [{ membership_id: "driver-invited", display_name: "Asha Singh", phone: "+919900000002", status: "INVITED" }]
-                : [];
+              : path.endsWith("/owner/maintenance/schedules")
+                ? futureModules ? [{ id: "schedule-1", asset_id: "asset-assigned", maintenance_type: "ENGINE_OIL", custom_label: null, description: null, interval_basis: "KM", interval_value: "10000.00", warning_threshold: "1000.00", last_service_meter: "50000.00", last_service_date: null, next_due_meter: "60000.00", next_due_date: null, current_meter: null, due_status: "UNKNOWN", status: "ACTIVE", notes: null, criteria: [] }] : []
+                : path.endsWith("/owner/maintenance/work-orders") || path.endsWith("/owner/maintenance/history")
+                  ? []
+                  : path.endsWith("/owner/asset-documents/compliance")
+                    ? futureModules ? [{ asset_id: "asset-assigned", asset_code: assets[0].asset_code, asset_type: "TIPPER", ownership_type: "OWNED", policy_id: "policy-1", document_type: "INSURANCE", required: true, status: "MISSING", document_id: null, revision_number: null, expiry_date: null }] : []
+                    : path.endsWith("/owner/asset-documents") || path.endsWith("/owner/asset-documents/policies")
+                      ? []
+                      : path.endsWith("/owner/notifications")
+                        ? futureModules ? [{ id: "notification-1", category: "MAINTENANCE_DUE", title: "Maintenance due", body: "Engine oil needs attention.", state: "UNREAD", deep_link: { tab: "maintenance" }, created_at: "2026-10-06T00:00:00Z" }] : []
+                        : path.endsWith("/owner/telematics/mappings") || path.endsWith("/owner/telematics/latest") || path.endsWith("/owner/telematics/transitions") || path.endsWith("/owner/telematics/meter-discrepancies")
+                          ? []
+                          : path.endsWith("/owner/workforce/compensation") || path.endsWith("/owner/workforce/attendance") || path.endsWith("/owner/workforce/payroll-periods") || path.endsWith("/owner/attendance-location/snapshots")
+                            ? []
+                          : path.endsWith("/owner/fuel/imports") || path.endsWith("/owner/fuel/transactions") || path.endsWith("/owner/fuel/reconciliations")
+                            ? []
+                            : {};
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
   });
 }
@@ -156,7 +180,40 @@ async function openOwner(page: Page) {
   await expect(page.getByLabel("Live fleet readiness")).toBeVisible();
 }
 
+async function openFutureOwner(page: Page) {
+  await mockOwnerApi(page, true);
+  await page.goto("/owner");
+  await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
+}
+
 test.describe("mocked Owner workstation", () => {
+  test("feature-gated working modules expose operational tables and unknown meter state", async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await openFutureOwner(page);
+
+    for (const name of ["Maintenance", "Compliance", "Telematics", "Fuel", "Workforce"]) {
+      await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole("button", { name: "Notifications, 1 unread" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Maintenance", exact: true }).click();
+    await page.getByRole("tab", { name: "Schedules" }).click();
+    const maintenance = page.getByRole("table", { name: "Maintenance schedules" });
+    await expect(maintenance).toContainText("ENGINE OIL");
+    await expect(maintenance).toContainText("UNKNOWN");
+
+    await page.getByRole("button", { name: "Compliance", exact: true }).click();
+    await expect(page.getByRole("table", { name: "Asset compliance matrix" })).toContainText("MISSING");
+
+    await page.getByRole("button", { name: "Telematics", exact: true }).click();
+    await expect(page.getByRole("table", { name: "Latest telematics positions" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Fuel", exact: true }).click();
+    await expect(page.getByRole("table", { name: "Fuel import batches" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Workforce", exact: true }).click();
+    await expect(page.getByRole("table", { name: "Attendance by day" })).toBeVisible();
+  });
   test("desktop tables and operational selectors expose the right records", async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 });
     await openOwner(page);

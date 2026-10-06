@@ -137,29 +137,33 @@ type AssetDraft = {
   rental_party_name: string;
   rental_start_date: string;
   rental_end_date: string;
+  supports_odometer_km: boolean;
+  supports_hour_meter: boolean;
 };
 
 const blankAsset: AssetDraft = {
   asset_type: "TIPPER", ownership_type: "OWNED", registration_number: "", short_name: "",
   manufacturer: "", model: "", rental_party_name: "", rental_start_date: "", rental_end_date: "",
+  supports_odometer_km: true, supports_hour_meter: false,
 };
 
-function AssetFields({ draft, editing, setDraft }: { draft: AssetDraft; editing: boolean; setDraft: (draft: AssetDraft) => void }) {
+function AssetFields({ draft, editing, multiMeterEnabled, setDraft }: { draft: AssetDraft; editing: boolean; multiMeterEnabled: boolean; setDraft: (draft: AssetDraft) => void }) {
   const machinery = draft.asset_type !== "TIPPER";
   return (
     <div className="owner-form-grid">
-      <label>Asset type<select aria-label="Asset type" disabled={editing} onChange={(event) => setDraft({ ...draft, asset_type: event.target.value as FleetAssetType })} value={draft.asset_type}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
+      <label>Asset type<select aria-label="Asset type" disabled={editing} onChange={(event) => { const asset_type = event.target.value as FleetAssetType; setDraft({ ...draft, asset_type, supports_odometer_km: asset_type === "TIPPER", supports_hour_meter: asset_type !== "TIPPER" }); }} value={draft.asset_type}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
       <label>Ownership<select aria-label="Ownership" onChange={(event) => setDraft({ ...draft, ownership_type: event.target.value as AssetOwnershipType })} value={draft.ownership_type}><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label>
       {!machinery && <label>Registration<input aria-label="Registration" onChange={(event) => setDraft({ ...draft, registration_number: event.target.value })} required value={draft.registration_number} /></label>}
       <label>Short name<input aria-label="Short name" onChange={(event) => setDraft({ ...draft, short_name: event.target.value })} placeholder={machinery ? "e.g. North excavator" : "e.g. BENZ-1"} required={machinery} value={draft.short_name} /></label>
       <label>Manufacturer<input aria-label="Manufacturer" onChange={(event) => setDraft({ ...draft, manufacturer: event.target.value })} value={draft.manufacturer} /></label>
       <label>Model<input aria-label="Model" onChange={(event) => setDraft({ ...draft, model: event.target.value })} value={draft.model} /></label>
       {draft.ownership_type === "RENTED" && <><label>Rental party<input aria-label="Rental party" onChange={(event) => setDraft({ ...draft, rental_party_name: event.target.value })} required value={draft.rental_party_name} /></label><label>Rental start<input aria-label="Rental start" onChange={(event) => setDraft({ ...draft, rental_start_date: event.target.value })} type="date" value={draft.rental_start_date} /></label><label>Rental end<input aria-label="Rental end" onChange={(event) => setDraft({ ...draft, rental_end_date: event.target.value })} type="date" value={draft.rental_end_date} /></label></>}
+      {multiMeterEnabled && <><label className="checkbox"><input checked={draft.supports_odometer_km} onChange={(event) => setDraft({ ...draft, supports_odometer_km: event.target.checked })} type="checkbox" /> Odometer (km)</label><label className="checkbox"><input checked={draft.supports_hour_meter} onChange={(event) => setDraft({ ...draft, supports_hour_meter: event.target.checked })} type="checkbox" /> Hour meter</label></>}
     </div>
   );
 }
 
-function assetPayload(draft: AssetDraft, includeType: boolean) {
+function assetPayload(draft: AssetDraft, includeType: boolean, includeMeters: boolean) {
   return {
     ...(includeType ? { asset_type: draft.asset_type } : {}),
     ownership_type: draft.ownership_type,
@@ -170,12 +174,13 @@ function assetPayload(draft: AssetDraft, includeType: boolean) {
     rental_party_name: draft.ownership_type === "RENTED" ? draft.rental_party_name || null : null,
     rental_start_date: draft.ownership_type === "RENTED" ? draft.rental_start_date || null : null,
     rental_end_date: draft.ownership_type === "RENTED" ? draft.rental_end_date || null : null,
+    ...(includeMeters ? { supports_odometer_km: draft.supports_odometer_km, supports_hour_meter: draft.supports_hour_meter } : {}),
   };
 }
 
 type FleetSort = "name" | "registration" | "type" | "ownership" | "manufacturer" | "site" | "operator" | "duty" | "status";
 
-export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[] }) {
+export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError, multiMeterEnabled = false }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[]; multiMeterEnabled?: boolean }) {
   const mutation = useOwnerAction({ reload, setError });
   const [draft, setDraft] = useState<AssetDraft>(blankAsset);
   const [editingId, setEditingId] = useState("");
@@ -199,14 +204,14 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
   const changeSort = (next: FleetSort) => { const value = toggleSort(sortKey, next, sortDirection); setSortKey(value.key); setSortDirection(value.direction); };
   const edit = (asset: OwnerAsset) => {
     setEditingId(asset.id);
-    setDraft({ asset_type: asset.asset_type, ownership_type: asset.ownership_type, registration_number: asset.registration_number ?? "", short_name: asset.short_name ?? "", manufacturer: asset.manufacturer ?? "", model: asset.model ?? "", rental_party_name: asset.rental_party_name ?? "", rental_start_date: asset.rental_start_date ?? "", rental_end_date: asset.rental_end_date ?? "" });
+    setDraft({ asset_type: asset.asset_type, ownership_type: asset.ownership_type, registration_number: asset.registration_number ?? "", short_name: asset.short_name ?? "", manufacturer: asset.manufacturer ?? "", model: asset.model ?? "", rental_party_name: asset.rental_party_name ?? "", rental_start_date: asset.rental_start_date ?? "", rental_end_date: asset.rental_end_date ?? "", supports_odometer_km: asset.supports_odometer_km, supports_hour_meter: asset.supports_hour_meter });
     setFormOpen(true);
   };
   const closeForm = () => { setDraft(blankAsset); setEditingId(""); setFormOpen(false); };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const endpoint = editingId ? `/api/v1/owner/assets/${editingId}` : "/api/v1/owner/assets";
-    const ok = await mutation.run(editingId ? "Asset updated." : "Asset added.", () => apiRequest(endpoint, { method: editingId ? "PATCH" : "POST", body: JSON.stringify(assetPayload(draft, !editingId)) }));
+    const ok = await mutation.run(editingId ? "Asset updated." : "Asset added.", () => apiRequest(endpoint, { method: editingId ? "PATCH" : "POST", body: JSON.stringify(assetPayload(draft, !editingId, multiMeterEnabled)) }));
     if (ok) closeForm();
   };
 
@@ -214,7 +219,7 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
     <section className="owner-panel">
       <PanelHeading description="Search and manage the complete owned and rented fleet. Internal asset codes are generated automatically." eyebrow="Fleet management" title="Fleet" action={<button onClick={() => { setEditingId(""); setDraft(blankAsset); setFormOpen(true); }} type="button">Add asset</button>} />
       <InlineFeedback error={mutation.localError} success={mutation.success} />
-      {formOpen && <form className="owner-form-panel" onSubmit={(event) => void submit(event)}><div className="owner-form-heading"><div><h3>{editingId ? "Edit asset" : "Add asset"}</h3><p>Use the operational name and registration. The internal code is handled by Fleet Manager.</p></div></div><AssetFields draft={draft} editing={Boolean(editingId)} setDraft={setDraft} /><div className="owner-form-actions"><button className="secondary" onClick={closeForm} type="button">Cancel</button><button disabled={mutation.busy} type="submit">{editingId ? "Save asset" : "Create asset"}</button></div></form>}
+      {formOpen && <form className="owner-form-panel" onSubmit={(event) => void submit(event)}><div className="owner-form-heading"><div><h3>{editingId ? "Edit asset" : "Add asset"}</h3><p>Use the operational name and registration. The internal code is handled by Fleet Manager.</p></div></div><AssetFields draft={draft} editing={Boolean(editingId)} multiMeterEnabled={multiMeterEnabled} setDraft={setDraft} /><div className="owner-form-actions"><button className="secondary" onClick={closeForm} type="button">Cancel</button><button disabled={mutation.busy} type="submit">{editingId ? "Save asset" : "Create asset"}</button></div></form>}
       <FilterToolbar>
         <label className="owner-search-field"><span>Search fleet</span><input aria-label="Search fleet" onChange={(event) => setQuery(event.target.value)} placeholder="Name, registration, site or operator" type="search" value={query} /></label>
         <label>Asset type<select aria-label="Filter asset type" onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}><option value="">All types</option>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>

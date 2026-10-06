@@ -55,12 +55,8 @@ def access_token(db: Session, membership: CompanyMembership) -> str:
     provider = FakeOtpProvider()
     auth = AuthService(db, settings(), provider)
     challenge = auth.request_otp(phone=user.phone_number)
-    pre_session, _ = auth.verify_otp(
-        challenge_id=challenge, otp=provider.deliveries[challenge]
-    )
-    tokens = auth.create_session(
-        pre_session_token=pre_session, membership_id=membership.id
-    )
+    pre_session, _ = auth.verify_otp(challenge_id=challenge, otp=provider.deliveries[challenge])
+    tokens = auth.create_session(pre_session_token=pre_session, membership_id=membership.id)
     db.commit()
     return tokens.access_token
 
@@ -107,9 +103,7 @@ def test_owner_invites_existing_identity_and_invitee_activates_through_otp(
         provider = FakeOtpProvider()
         auth = AuthService(db_session, settings(), provider)
         challenge = auth.request_otp(phone=identity.phone_number)
-        pre_session, _ = auth.verify_otp(
-            challenge_id=challenge, otp=provider.deliveries[challenge]
-        )
+        pre_session, _ = auth.verify_otp(challenge_id=challenge, otp=provider.deliveries[challenge])
         options = auth.list_memberships(pre_session_token=pre_session)
         assert any(str(option[0]) == invited_id for option in options)
         auth.create_session(
@@ -127,9 +121,7 @@ def test_owner_invites_existing_identity_and_invitee_activates_through_otp(
 def test_owner_people_crud_duplicate_and_tenant_boundaries(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     foreign = value(tenant_records, "driver_b", CompanyMembership)
     phone = f"+917{uuid4().int % 1_000_000_000:09d}"
     try:
@@ -149,10 +141,13 @@ def test_owner_people_crud_duplicate_and_tenant_boundaries(
         )
         assert second_role.status_code == 201
         assert second_role.json()["role"] == "SUPERVISOR"
-        assert client.post(
-            "/api/v1/owner/people/invite",
-            json={"phone": phone, "display_name": "Duplicate", "role": "DRIVER"},
-        ).status_code == 409
+        assert (
+            client.post(
+                "/api/v1/owner/people/invite",
+                json={"phone": phone, "display_name": "Duplicate", "role": "DRIVER"},
+            ).status_code
+            == 409
+        )
         updated = client.patch(
             f"/api/v1/owner/people/{person_id}",
             json={"display_name": "Edited Driver"},
@@ -223,9 +218,7 @@ def test_existing_company_person_can_hold_login_and_revoke_multiple_roles(
 
         assert client.post(f"/api/v1/owner/people/{owner.id}/deactivate").status_code == 409
         for role in (MembershipRole.DRIVER, MembershipRole.SUPERVISOR):
-            revoked = client.post(
-                f"/api/v1/owner/people/{granted_ids[role]}/deactivate"
-            )
+            revoked = client.post(f"/api/v1/owner/people/{granted_ids[role]}/deactivate")
             assert revoked.status_code == 200
             assert revoked.json()["status"] == MembershipStatus.INACTIVE.value
     finally:
@@ -235,9 +228,7 @@ def test_existing_company_person_can_hold_login_and_revoke_multiple_roles(
 def test_owner_site_crud_access_rules_and_audit(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     supervisor = value(tenant_records, "supervisor_a", CompanyMembership)
     driver = value(tenant_records, "driver_a", CompanyMembership)
     foreign_site = value(tenant_records, "site_b", Site)
@@ -256,37 +247,42 @@ def test_owner_site_crud_access_rules_and_audit(
         site_id = created.json()["id"]
         assert created.json()["code"] == "QE-1"
         assert created.json()["short_name"] == "Quarry East"
-        duplicate = client.post(
-            "/api/v1/owner/sites", json={"name": "quarry east", "code": "X"}
-        )
+        duplicate = client.post("/api/v1/owner/sites", json={"name": "quarry east", "code": "X"})
         assert duplicate.status_code == 409
         assert client.get(f"/api/v1/owner/sites/{foreign_site.id}").status_code == 404
-        assert client.post(
-            f"/api/v1/owner/sites/{site_id}/supervisors",
-            json={"supervisor_membership_id": str(driver.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/sites/{site_id}/supervisors",
+                json={"supervisor_membership_id": str(driver.id)},
+            ).status_code
+            == 409
+        )
         granted = client.post(
             f"/api/v1/owner/sites/{site_id}/supervisors",
             json={"supervisor_membership_id": str(supervisor.id)},
         )
         assert granted.status_code == 200
         assert granted.json()["supervisors"][0]["membership_id"] == str(supervisor.id)
-        assert client.post(
-            f"/api/v1/owner/sites/{site_id}/supervisors",
-            json={"supervisor_membership_id": str(supervisor.id)},
-        ).status_code == 409
-        revoked = client.delete(
-            f"/api/v1/owner/sites/{site_id}/supervisors/{supervisor.id}"
+        assert (
+            client.post(
+                f"/api/v1/owner/sites/{site_id}/supervisors",
+                json={"supervisor_membership_id": str(supervisor.id)},
+            ).status_code
+            == 409
         )
+        revoked = client.delete(f"/api/v1/owner/sites/{site_id}/supervisors/{supervisor.id}")
         assert revoked.status_code == 200
         assert revoked.json()["supervisors"] == []
         deactivated = client.post(f"/api/v1/owner/sites/{site_id}/deactivate")
         assert deactivated.status_code == 200
         assert deactivated.json()["status"] == "INACTIVE"
-        assert client.post(
-            f"/api/v1/owner/sites/{site_id}/supervisors",
-            json={"supervisor_membership_id": str(supervisor.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/sites/{site_id}/supervisors",
+                json={"supervisor_membership_id": str(supervisor.id)},
+            ).status_code
+            == 409
+        )
         assert client.post(f"/api/v1/owner/sites/{site_id}/reactivate").status_code == 200
         actions = set(
             db_session.scalars(
@@ -303,9 +299,7 @@ def test_owner_site_crud_access_rules_and_audit(
 def test_owner_site_short_name_and_generated_code_are_compatible_and_stable(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         created = client.post(
             "/api/v1/owner/sites",
@@ -410,9 +404,7 @@ def test_owner_lists_operational_volume_and_non_owner_is_forbidden(
     )
     db_session.commit()
     client = owner_client(db_session, owner)
-    forbidden = owner_client(
-        db_session, value(tenant_records, "driver_a", CompanyMembership)
-    )
+    forbidden = owner_client(db_session, value(tenant_records, "driver_a", CompanyMembership))
     try:
         assert len(client.get("/api/v1/owner/people").json()) >= 203
         assert len(client.get("/api/v1/owner/sites").json()) >= 51

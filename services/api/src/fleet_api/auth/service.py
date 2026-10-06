@@ -250,9 +250,7 @@ class AuthService:
             .join(Company, Company.id == CompanyMembership.company_id)
             .where(
                 CompanyMembership.user_id == claims.user_id,
-                CompanyMembership.status.in_(
-                    (MembershipStatus.ACTIVE, MembershipStatus.INVITED)
-                ),
+                CompanyMembership.status.in_((MembershipStatus.ACTIVE, MembershipStatus.INVITED)),
                 Company.status == CompanyStatus.ACTIVE,
             )
         )

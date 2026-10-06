@@ -58,6 +58,8 @@ export type OwnerAsset = {
   rental_party_name: string | null;
   rental_start_date: string | null;
   rental_end_date: string | null;
+  supports_odometer_km: boolean;
+  supports_hour_meter: boolean;
   current_deployment: AssetSiteDeployment | null;
   has_active_assignment: boolean;
   active_assignment: OwnerAssetAssignment | null;
@@ -88,6 +90,285 @@ export type OwnerSite = {
   status: Status;
   supervisors: { access_id: string; membership_id: string; display_name: string }[];
   asset_count: number;
+};
+
+export type FutureFeatures = {
+  maintenance: boolean;
+  asset_documents: boolean;
+  notifications: boolean;
+  telematics: boolean;
+  fuel_integrations: boolean;
+  toll_expenses: boolean;
+  multi_meter: boolean;
+  payroll: boolean;
+  attendance_location: boolean;
+};
+
+export type MaintenanceCriterion = {
+  id: string;
+  basis: "ODOMETER_KM" | "HOUR_METER_HOURS" | "CALENDAR_TIME";
+  interval_value: string;
+  warning_threshold: string;
+  last_baseline_value: string | null;
+  last_baseline_date: string | null;
+  next_due_value: string | null;
+  next_due_date: string | null;
+  current_value: string | null;
+  due_status: "UNKNOWN" | "NOT_DUE" | "DUE_SOON" | "DUE" | "OVERDUE";
+};
+
+export type MaintenanceSchedule = {
+  id: string;
+  asset_id: string;
+  maintenance_type: string;
+  custom_label: string | null;
+  description: string | null;
+  interval_basis: "KM" | "HMR" | "DATE";
+  interval_value: string;
+  warning_threshold: string;
+  last_service_meter: string | null;
+  last_service_date: string | null;
+  next_due_meter: string | null;
+  next_due_date: string | null;
+  current_meter: string | null;
+  due_status: "UNKNOWN" | "NOT_DUE" | "DUE_SOON" | "DUE" | "OVERDUE";
+  status: Status;
+  notes: string | null;
+  criteria: MaintenanceCriterion[];
+};
+
+export type MaintenanceWorkOrder = {
+  id: string;
+  asset_id: string;
+  schedule_id: string | null;
+  title: string;
+  description: string | null;
+  status: "DRAFT" | "SCHEDULED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+  vendor_name: string | null;
+  scheduled_for: string | null;
+  completed_at: string | null;
+  completion_meter: string | null;
+  completion_odometer_km: string | null;
+  completion_hour_meter: string | null;
+  labor_cost: string;
+  parts_cost: string;
+  other_cost: string;
+  notes: string | null;
+};
+
+export type MaintenanceRecord = {
+  id: string;
+  schedule_id: string;
+  work_order_id: string | null;
+  asset_id: string;
+  performed_on: string;
+  meter_value: string | null;
+  completion_odometer_km: string | null;
+  completion_hour_meter: string | null;
+  notes: string | null;
+  vendor_name: string | null;
+  labor_cost: string;
+  parts_cost: string;
+  other_cost: string;
+};
+
+export type AssetDocumentPolicy = {
+  id: string;
+  asset_type: FleetAssetType;
+  ownership_type: AssetOwnershipType | null;
+  document_type: string;
+  required: boolean;
+  expiry_warning_days: number;
+};
+
+export type AssetCompliance = {
+  asset_id: string;
+  asset_code: string;
+  asset_type: FleetAssetType;
+  ownership_type: AssetOwnershipType;
+  policy_id: string;
+  document_type: string;
+  required: boolean;
+  status: "VALID" | "EXPIRING_SOON" | "EXPIRED" | "MISSING" | "NOT_REQUIRED" | "UNKNOWN";
+  document_id: string | null;
+  revision_number: number | null;
+  expiry_date: string | null;
+};
+
+export type AssetDocument = {
+  id: string;
+  asset_id: string;
+  document_type: string;
+  expiry_warning_days: number;
+  revision_number: number;
+  document_number: string | null;
+  issue_date: string | null;
+  expiry_date: string | null;
+  issuer: string | null;
+  notes: string | null;
+  expiry_status: string;
+};
+
+export type InAppNotification = {
+  id: string;
+  category: string;
+  title: string;
+  body: string;
+  state: "UNREAD" | "READ" | "ACKNOWLEDGED";
+  deep_link: Record<string, string> | null;
+  created_at: string;
+};
+
+export type TelematicsMapping = {
+  id: string;
+  asset_id: string;
+  provider: string;
+  provider_vehicle_id: string;
+  active: boolean;
+};
+
+export type TelematicsPosition = {
+  id: string;
+  asset_id: string;
+  mapping_id: string;
+  provider_event_id: string;
+  recorded_at: string;
+  latitude: string;
+  longitude: string;
+  speed_kph: string | null;
+  heading: string | null;
+  ignition_state: boolean | null;
+  odometer_km: string | null;
+  engine_hours: string | null;
+  battery_voltage: string | null;
+};
+
+export type TelematicsMeterDiscrepancy = {
+  id: string;
+  asset_id: string;
+  position_id: string;
+  manual_event_id: string | null;
+  meter_type: string;
+  telemetry_value: string;
+  manual_value: string | null;
+  tolerance: string;
+  difference: string | null;
+  status: "WITHIN_TOLERANCE" | "MISMATCH" | "INSUFFICIENT_DATA";
+  created_at: string;
+};
+
+export type CompensationProfile = {
+  id: string;
+  membership_id: string;
+  pay_basis: "MONTHLY" | "DAILY" | "HOURLY";
+  base_amount: string;
+  effective_from: string;
+  effective_to: string | null;
+  standard_duty_minutes: number;
+  overtime_rate_per_hour: string;
+  notes: string | null;
+};
+
+export type AttendanceDay = {
+  membership_id: string;
+  display_name: string;
+  operational_date: string;
+  duty_minutes: number;
+  overtime_minutes: number;
+  state: "COMPLETE" | "OPEN_SESSION" | "OVERLAP_EXCEPTION" | "MISSING_DATA";
+  location_confidence: string;
+};
+
+export type PayrollPeriod = {
+  id: string;
+  starts_on: string;
+  ends_on: string;
+  status: "DRAFT" | "REVIEWED" | "FINALIZED";
+  reviewed_at: string | null;
+  finalized_at: string | null;
+};
+
+export type PayrollLine = {
+  id: string;
+  period_id: string;
+  membership_id: string;
+  display_name_snapshot: string;
+  pay_basis_snapshot: "MONTHLY" | "DAILY" | "HOURLY";
+  base_pay: string;
+  duty_minutes: number;
+  overtime_minutes: number;
+  overtime_rate_per_hour: string;
+  overtime_amount: string;
+  adjustment_amount: string;
+  calculated_gross_pay: string;
+  calculation_state: string;
+  calculation_snapshot: Record<string, unknown>;
+};
+
+export type AttendanceLocationSnapshot = {
+  id: string;
+  membership_id: string;
+  asset_id: string;
+  site_id: string;
+  captured_at_device: string;
+  source: string;
+  status: string;
+  confidence: string;
+  site_distance_m: string | null;
+  asset_distance_m: string | null;
+};
+
+export type LatestTelematics = {
+  mapping: TelematicsMapping;
+  position: TelematicsPosition | null;
+  stale: boolean;
+};
+
+export type GeofenceTransition = {
+  id: string;
+  asset_id: string;
+  site_id: string;
+  position_id: string;
+  transition_type: "ENTER" | "EXIT";
+  occurred_at: string;
+  distance_m: string;
+};
+
+export type FuelImportBatch = {
+  id: string;
+  file_name: string;
+  source_name: string;
+  status: string;
+  total_rows: number;
+  imported_rows: number;
+  rejected_rows: number;
+  created_at: string;
+};
+
+export type FuelTransaction = {
+  id: string;
+  batch_id: string;
+  row_number: number;
+  row_status: "IMPORTED" | "DUPLICATE" | "INVALID" | "UNMAPPED";
+  error_message: string | null;
+  asset_id: string | null;
+  asset_identifier: string;
+  source_type: string;
+  source_name: string;
+  external_transaction_id: string;
+  occurred_at: string | null;
+  litres: string | null;
+};
+
+export type FuelReconciliation = {
+  id: string;
+  external_transaction_id: string;
+  operational_event_id: string | null;
+  status: string;
+  tolerance_litres: string;
+  difference_litres: string | null;
+  manually_resolved: boolean;
+  resolution_reason: string | null;
 };
 export type DriverAssetAssignment = {
   assignment_id: string;

@@ -14,15 +14,16 @@ This file is the persistent engineering contract for the project. Read it before
 
 This is initially for a real civil construction company.
 
-## V1 scope: company-owned tippers only
+## Current active Pilot scope
 
-Do not implement yet:
+The product now uses a generic `FleetAsset` architecture. The active Pilot
+supports owned and rented Tippers, Excavators, Backhoe Loaders, Graders, and
+Rollers. Tippers use odometer/KM capabilities; machinery uses hour-meter/HMR
+capabilities. Assets have effective-dated Site deployments and effective-dated
+Driver/Operator assignments.
 
-- rented tippers
-- excavators
-- JCBs
-- graders
-- rollers
+Do not implement or activate without an explicit later phase:
+
 - recruitment marketplace
 - WhatsApp integration
 - payroll
@@ -33,6 +34,11 @@ Do not implement yet:
 - continuous GPS tracking
 - predictive maintenance
 - customer billing
+
+Maintenance, asset documents, notifications, telematics-provider, fuel-provider,
+and toll/expense foundations may exist only behind disabled-by-default server
+feature flags. They are not current Pilot workflows and must not appear in
+Driver, Supervisor, or Owner navigation while disabled.
 
 Expansion happens only after the owned-tipper workflow is stable in production.
 
@@ -75,9 +81,10 @@ The driver app is a simple event-entry interface.
 
 The backend determines the driver's currently active:
 
-`Driver -> Tipper -> Site -> Supervisor -> Assignment`
+`Driver/Operator -> FleetAsset -> Site -> Supervisor access -> Assignment`
 
-The driver must not repeatedly choose vehicle/site when a valid active assignment already exists.
+The Driver/Operator must not repeatedly choose asset/Site when a valid active
+assignment already exists.
 
 ---
 
@@ -733,7 +740,7 @@ Do not automatically continue to the next phase.
 10. Phase 9 — Excel export + E2E + hardening
 11. Pilot-hardening phases based on real field usage
 
-Do not add rented tippers until owned-tipper V1 is proven.
+Do not activate a new workflow solely because its schema or adapter exists.
 
 ---
 

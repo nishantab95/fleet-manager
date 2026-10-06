@@ -15,9 +15,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute("ALTER TYPE membership_status_enum ADD VALUE IF NOT EXISTS 'INVITED'")
-    op.add_column(
-        "sites", sa.Column("location_description", sa.String(length=500), nullable=True)
-    )
+    op.add_column("sites", sa.Column("location_description", sa.String(length=500), nullable=True))
     op.add_column("sites", sa.Column("latitude", sa.Numeric(9, 6), nullable=True))
     op.add_column("sites", sa.Column("longitude", sa.Numeric(9, 6), nullable=True))
     op.create_check_constraint(
@@ -33,9 +31,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    invited_count = op.get_bind().execute(
-        sa.text("SELECT count(*) FROM company_memberships WHERE status = 'INVITED'")
-    ).scalar_one()
+    invited_count = (
+        op.get_bind()
+        .execute(sa.text("SELECT count(*) FROM company_memberships WHERE status = 'INVITED'"))
+        .scalar_one()
+    )
     if invited_count:
         raise RuntimeError("cannot downgrade while invited memberships exist")
     op.drop_constraint("ck_sites_longitude_range", "sites", type_="check")

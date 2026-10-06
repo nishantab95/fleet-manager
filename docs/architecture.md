@@ -7,6 +7,30 @@ deployment with explicit domain services, SQLAlchemy models, and one
 PostgreSQL database. Mobile and web clients remain separate shells and do not
 contain Phase 1 business workflows.
 
+## Feature-gated operations boundary (2026-10-06)
+
+Nine future modules share one typed, server-authoritative feature registry.
+Every flag defaults to false; no environment profile enables a module
+implicitly. Disabled endpoints fail closed, and enabling a feature does not
+replace authentication, role authorization, or company scoping.
+
+Migration `0018_future_foundations` introduces maintenance schedules/records
+and stable asset-document revision identities. Forward migration
+`0019_working_future_modules` adds work orders and attachments, document
+policies, durable in-app notifications, normalized telematics/geofences,
+external fuel imports, and reconciliation. Forward migration
+`0020_multi_meter_workforce` adds per-asset meter capabilities, grouped meter
+captures, maintenance criteria, telemetry meter discrepancies, compensation,
+payroll, and attendance-location evidence. Existing single-meter records and
+schedule columns remain intact and are backfilled into the additive model.
+
+The Owner web exposes compact table-first modules only for enabled flags.
+Telematics and fuel use local simulation/CSV ingestion and never call an
+external provider. Attendance location is event-snapshot corroboration, not
+proof of driving and not a payroll deduction input. Toll/expense remains a
+contract-only domain adapter. The Flutter Pilot is unchanged and has no new
+location permission or background tracking.
+
 ## Phase 1 and Phase 2 backend boundaries
 
 - `fleet_api.db.models`: persistence models grouped by company, membership,

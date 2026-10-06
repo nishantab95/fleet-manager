@@ -230,9 +230,7 @@ class OwnerPeopleSiteService:
             raise NotFoundError("person identity was not found")
         return self._person_view(membership, user)
 
-    def invite_person(
-        self, *, phone: str, display_name: str, role: MembershipRole
-    ) -> PersonView:
+    def invite_person(self, *, phone: str, display_name: str, role: MembershipRole) -> PersonView:
         if role not in (MembershipRole.DRIVER, MembershipRole.SUPERVISOR):
             raise DomainError("role must be DRIVER or SUPERVISOR")
         normalized_phone = normalize_phone(phone, default_region=self.phone_default_region)
@@ -416,8 +414,7 @@ class OwnerPeopleSiteService:
                     CompanyMembership,
                     and_(
                         CompanyMembership.company_id == SupervisorSiteAccess.company_id,
-                        CompanyMembership.id
-                        == SupervisorSiteAccess.supervisor_membership_id,
+                        CompanyMembership.id == SupervisorSiteAccess.supervisor_membership_id,
                     ),
                 )
                 .join(User, User.id == CompanyMembership.user_id)
@@ -493,9 +490,7 @@ class OwnerPeopleSiteService:
             clean_short_name = clean_name
         assert clean_name is not None and clean_short_name is not None
         site_id = uuid4()
-        clean_code = (
-            normalize_site_code(code) if code is not None else generated_site_code(site_id)
-        )
+        clean_code = normalize_site_code(code) if code is not None else generated_site_code(site_id)
         self._ensure_unique_site(
             name=clean_name,
             short_name=clean_short_name,

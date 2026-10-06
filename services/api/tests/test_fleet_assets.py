@@ -181,12 +181,8 @@ def test_machinery_asset_can_enter_shared_duty_assignment_workflow(
     assignment = create_assignment(
         db_session,
         company_id=company.id,
-        driver_membership_id=value(
-            tenant_records, "driver_a", CompanyMembership
-        ).id,
-        supervisor_membership_id=value(
-            tenant_records, "supervisor_a", CompanyMembership
-        ).id,
+        driver_membership_id=value(tenant_records, "driver_a", CompanyMembership).id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
         asset_id=excavator.id,
         site_id=value(tenant_records, "site_a", Site).id,
         starts_at=datetime(2026, 1, 1, tzinfo=UTC),

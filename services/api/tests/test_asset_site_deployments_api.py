@@ -66,9 +66,7 @@ def client_for(db: Session, membership: CompanyMembership) -> TestClient:
     provider = FakeOtpProvider()
     auth = AuthService(db, settings(), provider)
     challenge = auth.request_otp(phone=user.phone_number)
-    pre_session, _ = auth.verify_otp(
-        challenge_id=challenge, otp=provider.deliveries[challenge]
-    )
+    pre_session, _ = auth.verify_otp(challenge_id=challenge, otp=provider.deliveries[challenge])
     token = auth.create_session(
         pre_session_token=pre_session, membership_id=membership.id
     ).access_token
@@ -103,9 +101,7 @@ def add_asset(
         short_name=code.title(),
         status=status,
         rental_party_name="Rental Co" if ownership == AssetOwnershipType.RENTED else None,
-        rental_start_date=date(2026, 9, 1)
-        if ownership == AssetOwnershipType.RENTED
-        else None,
+        rental_start_date=date(2026, 9, 1) if ownership == AssetOwnershipType.RENTED else None,
     )
     db.add(asset)
     db.flush()
@@ -152,9 +148,7 @@ def active_assignment(
         db,
         company_id=asset.company_id,
         driver_membership_id=value(records, driver_key, CompanyMembership).id,
-        supervisor_membership_id=value(
-            records, "supervisor_a", CompanyMembership
-        ).id,
+        supervisor_membership_id=value(records, "supervisor_a", CompanyMembership).id,
         asset_id=asset.id,
         site_id=site.id,
         starts_at=datetime.now(UTC) - timedelta(minutes=5),
@@ -214,9 +208,7 @@ def test_owner_deploys_owned_rented_and_generic_unassigned_assets(
         ),
     ]
     db_session.commit()
-    client = client_for(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         for asset in assets:
             body = deploy(client, asset, site)
@@ -253,35 +245,35 @@ def test_move_remove_preserve_history_one_current_and_audit(
         )
         assert duplicate.status_code == 409
         second = deploy(client, asset, second_site)
-        history = client.get(
-            f"/api/v1/owner/assets/{asset.id}/deployments"
-        ).json()
+        history = client.get(f"/api/v1/owner/assets/{asset.id}/deployments").json()
         assert len(history) == 2
         assert history[0]["id"] == second["id"]
         assert history[0]["ends_at"] is None
         assert history[1]["id"] == first["id"]
         assert history[1]["ends_at"] is not None
-        assert db_session.scalar(
-            select(func.count(AssetSiteDeployment.id)).where(
-                AssetSiteDeployment.asset_id == asset.id,
-                AssetSiteDeployment.ends_at.is_(None),
+        assert (
+            db_session.scalar(
+                select(func.count(AssetSiteDeployment.id)).where(
+                    AssetSiteDeployment.asset_id == asset.id,
+                    AssetSiteDeployment.ends_at.is_(None),
+                )
             )
-        ) == 1
-
-        removed = client.delete(
-            f"/api/v1/owner/assets/{asset.id}/deployment"
+            == 1
         )
+
+        removed = client.delete(f"/api/v1/owner/assets/{asset.id}/deployment")
         assert removed.status_code == 200
         assert removed.json()["ends_at"] is not None
-        assert client.get(
-            f"/api/v1/owner/assets/{asset.id}/deployment"
-        ).status_code == 204
-        assert db_session.scalar(
-            select(func.count(AssetSiteDeployment.id)).where(
-                AssetSiteDeployment.asset_id == asset.id,
-                AssetSiteDeployment.ends_at.is_(None),
+        assert client.get(f"/api/v1/owner/assets/{asset.id}/deployment").status_code == 204
+        assert (
+            db_session.scalar(
+                select(func.count(AssetSiteDeployment.id)).where(
+                    AssetSiteDeployment.asset_id == asset.id,
+                    AssetSiteDeployment.ends_at.is_(None),
+                )
             )
-        ) == 0
+            == 0
+        )
         actions = set(
             db_session.scalars(
                 select(AuditLog.action).where(
@@ -311,21 +303,15 @@ def test_deployment_rejects_inactive_and_cross_company_records(
         code="INACTIVE-A",
         status=FleetAssetStatus.INACTIVE,
     )
-    inactive_site = add_site(
-        db_session, company, name="Inactive Site", status=SiteStatus.INACTIVE
-    )
+    inactive_site = add_site(db_session, company, name="Inactive Site", status=SiteStatus.INACTIVE)
     assignment_site = add_site(db_session, company, name="Assignment Site")
     mismatch_site = add_site(db_session, company, name="Mismatch Site")
     mismatch_asset = add_asset(db_session, company, code="MISMATCH-A")
     create_assignment(
         db_session,
         company_id=company.id,
-        driver_membership_id=value(
-            tenant_records, "driver_a", CompanyMembership
-        ).id,
-        supervisor_membership_id=value(
-            tenant_records, "supervisor_a", CompanyMembership
-        ).id,
+        driver_membership_id=value(tenant_records, "driver_a", CompanyMembership).id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
         asset_id=mismatch_asset.id,
         site_id=assignment_site.id,
         starts_at=datetime.now(UTC) - timedelta(minutes=5),
@@ -334,26 +320,36 @@ def test_deployment_rejects_inactive_and_cross_company_records(
     foreign_asset = value(tenant_records, "tipper_b", FleetAsset)
     foreign_site = value(tenant_records, "site_b", Site)
     db_session.commit()
-    client = client_for(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
-        assert client.post(
-            f"/api/v1/owner/assets/{inactive_asset.id}/deployment",
-            json={"site_id": str(active_site.id)},
-        ).status_code == 409
-        assert client.post(
-            f"/api/v1/owner/assets/{active_asset.id}/deployment",
-            json={"site_id": str(inactive_site.id)},
-        ).status_code == 409
-        assert client.post(
-            f"/api/v1/owner/assets/{foreign_asset.id}/deployment",
-            json={"site_id": str(active_site.id)},
-        ).status_code == 404
-        assert client.post(
-            f"/api/v1/owner/assets/{active_asset.id}/deployment",
-            json={"site_id": str(foreign_site.id)},
-        ).status_code == 404
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{inactive_asset.id}/deployment",
+                json={"site_id": str(active_site.id)},
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{active_asset.id}/deployment",
+                json={"site_id": str(inactive_site.id)},
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{foreign_asset.id}/deployment",
+                json={"site_id": str(active_site.id)},
+            ).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{active_asset.id}/deployment",
+                json={"site_id": str(foreign_site.id)},
+            ).status_code
+            == 404
+        )
         mismatch = client.post(
             f"/api/v1/owner/assets/{mismatch_asset.id}/deployment",
             json={"site_id": str(mismatch_site.id)},
@@ -373,9 +369,7 @@ def test_move_and_remove_reject_active_assignment_and_duty(
     assigned_asset = value(tenant_records, "tipper_a", FleetAsset)
     duty_asset = add_asset(db_session, company, code="DUTY-A")
     db_session.commit()
-    client = client_for(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         deploy(client, assigned_asset, site)
         active_assignment(db_session, tenant_records, assigned_asset, site)
@@ -386,9 +380,7 @@ def test_move_and_remove_reject_active_assignment_and_duty(
         )
         assert moved.status_code == 409
         assert "Driver is actively assigned" in moved.json()["detail"]["message"]
-        removed = client.delete(
-            f"/api/v1/owner/assets/{assigned_asset.id}/deployment"
-        )
+        removed = client.delete(f"/api/v1/owner/assets/{assigned_asset.id}/deployment")
         assert removed.status_code == 409
 
         deploy(client, duty_asset, site)
@@ -416,9 +408,7 @@ def test_site_and_asset_deactivation_require_explicit_removal(
 ) -> None:
     asset = value(tenant_records, "tipper_a", FleetAsset)
     site = value(tenant_records, "site_a", Site)
-    client = client_for(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         deploy(client, asset, site)
         site_response = client.post(f"/api/v1/owner/sites/{site.id}/deactivate")
@@ -426,9 +416,7 @@ def test_site_and_asset_deactivation_require_explicit_removal(
         assert site_response.json()["detail"]["message"] == (
             "Site cannot be deactivated while assets are deployed."
         )
-        asset_response = client.post(
-            f"/api/v1/owner/assets/{asset.id}/deactivate"
-        )
+        asset_response = client.post(f"/api/v1/owner/assets/{asset.id}/deactivate")
         assert asset_response.status_code == 409
         assert asset_response.json()["detail"]["message"] == (
             "Asset must be removed from its Site before deactivation."
@@ -454,9 +442,7 @@ def test_supervisor_site_assets_are_authorized_and_include_unassigned(
         )
     )
     db_session.commit()
-    owner_client = client_for(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    owner_client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         deploy(owner_client, assigned, site)
         deploy(owner_client, unassigned, site)
@@ -466,24 +452,24 @@ def test_supervisor_site_assets_are_authorized_and_include_unassigned(
         owner_client.close()
 
     supervisor_client = client_for(db_session, supervisor)
-    driver_client = client_for(
-        db_session, value(tenant_records, "driver_a", CompanyMembership)
-    )
+    driver_client = client_for(db_session, value(tenant_records, "driver_a", CompanyMembership))
     try:
-        visible = supervisor_client.get(
-            f"/api/v1/supervisor/sites/{site.id}/assets"
-        )
+        visible = supervisor_client.get(f"/api/v1/supervisor/sites/{site.id}/assets")
         assert visible.status_code == 200
         by_code = {item["asset_code"]: item for item in visible.json()}
         assert by_code[assigned.asset_code]["driver_name"] == "Driver A"
         assert by_code[unassigned.asset_code]["driver_name"] is None
-        assert supervisor_client.get(
-            f"/api/v1/supervisor/sites/{other_site.id}/assets"
-        ).status_code == 403
-        assert driver_client.post(
-            f"/api/v1/owner/assets/{unassigned.id}/deployment",
-            json={"site_id": str(other_site.id)},
-        ).status_code == 403
+        assert (
+            supervisor_client.get(f"/api/v1/supervisor/sites/{other_site.id}/assets").status_code
+            == 403
+        )
+        assert (
+            driver_client.post(
+                f"/api/v1/owner/assets/{unassigned.id}/deployment",
+                json={"site_id": str(other_site.id)},
+            ).status_code
+            == 403
+        )
     finally:
         supervisor_client.close()
         driver_client.close()

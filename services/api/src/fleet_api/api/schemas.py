@@ -163,6 +163,8 @@ class OwnerAssetCreateRequest(BaseModel):
     rental_party_name: str | None = Field(default=None, max_length=200)
     rental_start_date: date | None = None
     rental_end_date: date | None = None
+    supports_odometer_km: bool | None = None
+    supports_hour_meter: bool | None = None
 
 
 class OwnerAssetUpdateRequest(BaseModel):
@@ -175,6 +177,8 @@ class OwnerAssetUpdateRequest(BaseModel):
     rental_party_name: str | None = Field(default=None, max_length=200)
     rental_start_date: date | None = None
     rental_end_date: date | None = None
+    supports_odometer_km: bool | None = None
+    supports_hour_meter: bool | None = None
 
 
 class OwnerAssetAssignmentResponse(BaseModel):
@@ -255,6 +259,8 @@ class OwnerAssetResponse(BaseModel):
     rental_party_name: str | None
     rental_start_date: date | None
     rental_end_date: date | None
+    supports_odometer_km: bool
+    supports_hour_meter: bool
     current_deployment: AssetSiteDeploymentResponse | None
     has_active_assignment: bool
     active_assignment: OwnerAssetAssignmentResponse | None
@@ -464,6 +470,27 @@ class DriverEventResponse(BaseModel):
     verification_status: str
 
 
+class DriverMultiMeterCaptureRequest(BaseModel):
+    capture_group_uuid: UUID
+    reading_type: KmReadingType
+    device_created_at: datetime
+    installation_identifier: str = Field(min_length=1, max_length=200)
+    platform: DevicePlatform
+    km_client_event_uuid: UUID | None = None
+    odometer_km: Decimal | str | None = None
+    km_object_reference: str | None = Field(default=None, max_length=500)
+    hmr_client_event_uuid: UUID | None = None
+    hour_meter_hours: Decimal | str | None = None
+    hmr_object_reference: str | None = Field(default=None, max_length=500)
+
+
+class DriverMultiMeterCaptureResponse(BaseModel):
+    capture_group_uuid: UUID
+    event_ids: list[UUID]
+    duty_session_id: UUID
+    status: Literal["accepted", "already_accepted"]
+
+
 class EvidenceUploadResponse(BaseModel):
     client_event_uuid: UUID
     object_reference: str
@@ -488,6 +515,7 @@ class SupervisorVerificationHistoryResponse(BaseModel):
 
 class SupervisorEventResponse(BaseModel):
     event_id: UUID
+    capture_group_uuid: UUID | None = None
     event_type: OperationalEventType
     assignment_id: UUID
     duty_session_id: UUID | None

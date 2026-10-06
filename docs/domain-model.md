@@ -17,7 +17,7 @@ without adding a new persistence boundary.
 | `User` | Global application identity with normalized phone number and display name. |
 | `CompanyMembership` | Company-scoped role (`OWNER_ADMIN`, `SUPERVISOR`, or `DRIVER`) and status. |
 | `Site` | Company-scoped work location with company-scoped name/code uniqueness. |
-| `FleetAsset` | Canonical company fleet record with type, ownership, stable asset code, optional road registration, status, and optional rental metadata. |
+| `FleetAsset` | Canonical company fleet record with type, ownership, stable asset code, optional road registration, status, rental metadata, and explicit odometer/hour-meter capabilities. |
 | `SupervisorSiteAccess` | Explicit company-consistent supervisor-to-site grant. |
 | `Assignment` | Effective-dated Driver/Operator-to-FleetAsset relationship linked to its deployment; Site is an immutable history snapshot. |
 | `Device` | Minimal installation identifier, platform, membership association, and active/revoked state. |
@@ -33,6 +33,22 @@ without adding a new persistence boundary.
 | `EvidenceObject` | Private object-storage metadata scoped to one company, driver membership, and client event UUID. |
 | `SiteDailyClosure` | Company/site/operational-date closure snapshot with timezone, state, actor, and timestamps. |
 | `SiteDailyClosureHistory` | Append-only close/reopen state transitions with actor, reason, and time. |
+| `MaintenanceSchedule` | Flag-gated service policy retaining its compatible legacy primary basis. |
+| `MaintenanceCriterion` | Independent odometer, hour-meter, or calendar trigger; any criterion may make the schedule due. |
+| `MaintenanceWorkOrder` | Audited draft/scheduled/in-progress/completed/cancelled maintenance work. |
+| `MaintenanceRecord` | Append-only service history that advances only criteria with authoritative baselines. |
+| `AssetDocument` | Stable asset/document-type identity with an explicit expiry-warning policy. |
+| `AssetDocumentRevision` | Append-only metadata and private evidence revision. |
+| `Notification` | Durable, deduplicated Owner in-app alert with client-neutral deep link. |
+| `TelematicsPosition` | Provider-normalized position with optional odometer, engine-hours, and voltage evidence. |
+| `TelematicsMeterDiscrepancy` | Source-aware comparison against the latest verified manual meter; never overwrites it. |
+| `CompensationProfile` | Effective-dated Driver/Operator pay basis, Decimal base amount, standard day, and explicit OT rate. |
+| `PayrollPeriod` / `PayrollLine` | Review/finalize period and frozen operational gross-pay calculation snapshot. |
+| `AttendanceLocationSnapshot` | Event-based phone-location corroboration bound to server-derived assignment/duty context. |
+
+Notifications, telematics, and fuel reconciliation now have durable tables and
+Owner APIs; no real provider is connected. Toll/expense remains a typed
+contract-only boundary.
 
 ## Actual schema relationships
 
@@ -83,9 +99,12 @@ deactivated rather than deleted.
 Every asset has a non-empty, company-unique `asset_code`. Road registration is
 normalized to uppercase without spaces or hyphens when present and is unique
 within a company, but remains nullable for construction machinery. Rental end
-cannot precede rental start. The centralized `AssetCapabilities` map enables
-the current operational workflow only for tippers in Phase 1A; machinery
-workflows remain disabled.
+cannot precede rental start. The centralized `AssetCapabilities` map supplies
+type defaults, while `supports_odometer_km` and `supports_hour_meter` record
+each physical asset's actual configuration. When the multi-meter flag is
+false, legacy type-derived behavior is preserved. A grouped dual-meter capture
+creates independently reviewable events with one `capture_group_uuid`; asset
+HMR is never treated as employee attendance time.
 
 Migration `0011_fleet_assets` renames the former table and foreign-key columns
 in place. Legacy UUIDs are unchanged. Existing assets become active, owned
@@ -209,6 +228,16 @@ append-only and requires an owner reason.
 37. Reassignment closes the prior half-open interval and inserts a new row.
     Active duty blocks unassign/reassign, while events before the old end remain
     valid and events at or after it cannot attach to that history.
+38. Every future module is disabled unless its individual server feature flag
+    is explicitly true. A flag never grants a role or company scope.
+39. Maintenance KM schedules require an odometer-capable asset; HMR schedules
+    require an hour-meter-capable asset. Date schedules are asset-neutral.
+    Maintenance records are append-only and meter values cannot move backward.
+40. An asset document replacement inserts the next revision; it never updates
+    or deletes the prior revision. Expiry status is calculated from an explicit
+    `as_of` date and per-document warning-days policy.
+41. Asset-document evidence stays private, uses server-generated object keys,
+    and cannot be attached across companies or by trusting a supplied filename.
 
 ## PC V1 emergency contract
 

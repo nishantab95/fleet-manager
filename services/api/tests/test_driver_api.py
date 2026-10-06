@@ -282,9 +282,7 @@ def test_machinery_hmr_duty_capabilities_and_continuity(
     unsupported_km = client.post(
         "/api/v1/driver/events",
         json={
-            **event_payload(
-                str(uuid4()), installation_identifier="machinery-test-device"
-            ),
+            **event_payload(str(uuid4()), installation_identifier="machinery-test-device"),
             "event_type": "KM_READING",
             "reading_type": "START_READING",
             "reading_value": "10",
@@ -354,16 +352,12 @@ def test_machinery_hmr_duty_capabilities_and_continuity(
     assert closed.json()["machine_hours"] == "7.50"
 
     owner = value(tenant_records, "owner_a", CompanyMembership)
-    owner_token = session_for_user(
-        db_session, user_by_name(db_session, "Owner A"), owner
-    )
+    owner_token = session_for_user(db_session, user_by_name(db_session, "Owner A"), owner)
     owner_api = driver_app(db_session, owner_token)
     duty_report = owner_api.get("/api/v1/reports/duty")
     assert duty_report.status_code == 200
     machinery_row = next(
-        item
-        for item in duty_report.json()
-        if item["assignment_id"] == str(assignment.id)
+        item for item in duty_report.json() if item["assignment_id"] == str(assignment.id)
     )
     assert machinery_row["asset_type"] == "EXCAVATOR"
     assert machinery_row["start_hmr"] == "3240.50"
@@ -402,9 +396,7 @@ def test_machinery_hmr_duty_capabilities_and_continuity(
     supervisor_api = driver_app(db_session, supervisor_token)
     event_list = supervisor_api.get(f"/api/v1/supervisor/sites/{site.id}/events")
     assert event_list.status_code == 200
-    hmr_events = [
-        event for event in event_list.json() if event["event_type"] == "HMR_READING"
-    ]
+    hmr_events = [event for event in event_list.json() if event["event_type"] == "HMR_READING"]
     assert [event["reading_value"] for event in reversed(hmr_events)] == [
         "3240.50",
         "3248.00",
@@ -959,10 +951,7 @@ def test_driver_handover_can_start_after_previous_session_closes(
         sessions = list(
             db_session.scalars(
                 select(DutySession)
-                .where(
-                    DutySession.asset_id
-                    == value(tenant_records, "tipper_a", FleetAsset).id
-                )
+                .where(DutySession.asset_id == value(tenant_records, "tipper_a", FleetAsset).id)
                 .order_by(DutySession.started_at)
             ).all()
         )
@@ -1248,9 +1237,7 @@ def test_clean_driver_handover_is_audited_and_preserves_history(
             },
         )
         assert missing_local_confirmation.status_code == 409
-        assert missing_local_confirmation.json()["detail"]["code"] == (
-            "DEVICE_HANDOVER_BLOCKED"
-        )
+        assert missing_local_confirmation.json()["detail"]["code"] == ("DEVICE_HANDOVER_BLOCKED")
 
         handed_over = client_a2.post(
             "/api/v1/driver/device",
@@ -1342,9 +1329,7 @@ def test_active_old_driver_duty_blocks_handover(
     finally:
         client_a2.close()
 
-    device = db_session.scalar(
-        select(Device).where(Device.installation_identifier == installation)
-    )
+    device = db_session.scalar(select(Device).where(Device.installation_identifier == installation))
     assert device is not None
     assert device.membership_id == old_membership.id
 
@@ -1360,10 +1345,13 @@ def test_inactive_old_driver_does_not_lock_clean_phone(
         session_for_user(db_session, user_by_name(db_session, "Driver A"), old_membership),
     )
     try:
-        assert client_a.post(
-            "/api/v1/driver/device",
-            json={"installation_identifier": installation, "platform": "ANDROID"},
-        ).status_code == 200
+        assert (
+            client_a.post(
+                "/api/v1/driver/device",
+                json={"installation_identifier": installation, "platform": "ANDROID"},
+            ).status_code
+            == 200
+        )
     finally:
         client_a.close()
     old_membership.status = MembershipStatus.INACTIVE

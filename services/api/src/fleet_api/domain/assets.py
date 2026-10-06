@@ -71,6 +71,27 @@ def capabilities_for(asset_type: FleetAssetType) -> AssetCapabilities:
     return _CAPABILITIES[asset_type]
 
 
+def capabilities_for_asset(asset: FleetAsset) -> AssetCapabilities:
+    """Return type capabilities with meter support taken from the asset record."""
+
+    defaults = capabilities_for(asset.asset_type)
+    # ORM-created legacy objects can transiently have both Python defaults
+    # false. Preserve the historical type behavior until an explicit edit.
+    supports_odometer = asset.supports_odometer_km
+    supports_hour_meter = asset.supports_hour_meter
+    if not supports_odometer and not supports_hour_meter:
+        supports_odometer = defaults.supports_odometer
+        supports_hour_meter = defaults.supports_hour_meter
+    return AssetCapabilities(
+        supports_trip_complete=defaults.supports_trip_complete,
+        supports_odometer=supports_odometer,
+        supports_hour_meter=supports_hour_meter,
+        supports_diesel=defaults.supports_diesel,
+        supports_emergency=defaults.supports_emergency,
+        supports_duty_session=defaults.supports_duty_session,
+    )
+
+
 def normalize_registration_number(value: str) -> str:
     """Normalize road registration values to uppercase without spaces or hyphens."""
 
@@ -154,6 +175,8 @@ def create_fleet_asset(
     rental_party_name: str | None = None,
     rental_start_date: date | None = None,
     rental_end_date: date | None = None,
+    supports_odometer_km: bool | None = None,
+    supports_hour_meter: bool | None = None,
 ) -> FleetAsset:
     if session.get(Company, company_id) is None:
         raise TenantConsistencyError("company does not exist")
@@ -164,6 +187,7 @@ def create_fleet_asset(
     if short_name is not None and clean_short_name is None:
         raise DomainError("short_name must contain a value when provided")
     asset_id = uuid4()
+    default_capabilities = capabilities_for(asset_type)
     asset = FleetAsset(
         id=asset_id,
         company_id=company_id,
@@ -186,6 +210,16 @@ def create_fleet_asset(
         rental_party_name=rental_party_name.strip() if rental_party_name else None,
         rental_start_date=rental_start_date,
         rental_end_date=rental_end_date,
+        supports_odometer_km=(
+            default_capabilities.supports_odometer
+            if supports_odometer_km is None
+            else supports_odometer_km
+        ),
+        supports_hour_meter=(
+            default_capabilities.supports_hour_meter
+            if supports_hour_meter is None
+            else supports_hour_meter
+        ),
     )
     session.add(asset)
     try:

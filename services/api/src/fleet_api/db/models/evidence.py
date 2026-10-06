@@ -18,7 +18,7 @@ from fleet_api.db.models.common import UUIDTimestampModel, utc_now
 
 
 class EvidenceObject(UUIDTimestampModel):
-    """Private object-storage metadata owned by one driver event upload."""
+    """Private object metadata owned by one authenticated membership upload."""
 
     __tablename__ = "evidence_objects"
 
@@ -45,5 +45,6 @@ class EvidenceObject(UUIDTimestampModel):
             "client_event_uuid",
             name="uq_evidence_objects_driver_event",
         ),
+        UniqueConstraint("company_id", "id", name="uq_evidence_objects_company_id"),
         Index("ix_evidence_objects_company_event", "company_id", "client_event_uuid"),
     )

@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from fleet_api.api.dependencies import get_owner_asset_service
+from fleet_api.api.dependencies import get_app_settings, get_owner_asset_service
 from fleet_api.api.schemas import (
     AssetSiteDeploymentResponse,
     OwnerAssetAssignmentResponse,
@@ -14,6 +14,7 @@ from fleet_api.api.schemas import (
     OwnerAssetResponse,
     OwnerAssetUpdateRequest,
 )
+from fleet_api.core.config import Settings
 from fleet_api.db.session import get_db
 from fleet_api.domain.enums import (
     AssetOwnershipType,
@@ -56,6 +57,8 @@ def _response(view: OwnerAssetView) -> OwnerAssetResponse:
         rental_party_name=view.asset.rental_party_name,
         rental_start_date=view.asset.rental_start_date,
         rental_end_date=view.asset.rental_end_date,
+        supports_odometer_km=view.asset.supports_odometer_km,
+        supports_hour_meter=view.asset.supports_hour_meter,
         current_deployment=(
             AssetSiteDeploymentResponse(
                 id=deployment.deployment_id,
@@ -121,9 +124,14 @@ def get_asset(
 def create_asset(
     payload: OwnerAssetCreateRequest,
     service: OwnerAssetService = Depends(get_owner_asset_service),
+    settings: Settings = Depends(get_app_settings),
     db: Session = Depends(get_db),
 ) -> OwnerAssetResponse:
     try:
+        if not settings.multi_meter_enabled and (
+            payload.supports_odometer_km is not None or payload.supports_hour_meter is not None
+        ):
+            raise DomainError("multi-meter capability editing is unavailable")
         view = service.create_asset(
             asset_type=payload.asset_type,
             ownership_type=payload.ownership_type,
@@ -135,6 +143,8 @@ def create_asset(
             rental_party_name=payload.rental_party_name,
             rental_start_date=payload.rental_start_date,
             rental_end_date=payload.rental_end_date,
+            supports_odometer_km=payload.supports_odometer_km,
+            supports_hour_meter=payload.supports_hour_meter,
         )
         db.commit()
         return _response(view)
@@ -147,9 +157,13 @@ def update_asset(
     asset_id: UUID,
     payload: OwnerAssetUpdateRequest,
     service: OwnerAssetService = Depends(get_owner_asset_service),
+    settings: Settings = Depends(get_app_settings),
     db: Session = Depends(get_db),
 ) -> OwnerAssetResponse:
     try:
+        meter_fields = {"supports_odometer_km", "supports_hour_meter"}
+        if not settings.multi_meter_enabled and meter_fields & payload.model_fields_set:
+            raise DomainError("multi-meter capability editing is unavailable")
         view = service.update_asset(
             asset_id,
             asset_code=payload.asset_code,
@@ -161,6 +175,8 @@ def update_asset(
             rental_party_name=payload.rental_party_name,
             rental_start_date=payload.rental_start_date,
             rental_end_date=payload.rental_end_date,
+            supports_odometer_km=payload.supports_odometer_km,
+            supports_hour_meter=payload.supports_hour_meter,
             fields_set=set(payload.model_fields_set),
         )
         db.commit()

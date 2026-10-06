@@ -88,9 +88,7 @@ def ensure_deployment_for_assignment(
     )
     if overlap is not None:
         if overlap.site_id != site_id:
-            raise ConflictError(
-                "Driver assignment site must match the asset's current deployment."
-            )
+            raise ConflictError("Driver assignment site must match the asset's current deployment.")
         return overlap
     deployment = AssetSiteDeployment(
         company_id=company_id,
@@ -239,9 +237,7 @@ class OwnerDeploymentService:
             raise NotFoundError("site was not found")
         return site
 
-    def _current(
-        self, asset_id: UUID, *, lock: bool = False
-    ) -> AssetSiteDeployment | None:
+    def _current(self, asset_id: UUID, *, lock: bool = False) -> AssetSiteDeployment | None:
         query = select(AssetSiteDeployment).where(
             AssetSiteDeployment.company_id == self.company_id,
             AssetSiteDeployment.asset_id == asset_id,
@@ -282,9 +278,7 @@ class OwnerDeploymentService:
 
     def site_assets(self, site_id: UUID) -> list[DeployedAssetView]:
         site = self._site(site_id)
-        views = list_current_site_assets(
-            self.session, company_id=self.company_id, site_id=site_id
-        )
+        views = list_current_site_assets(self.session, company_id=self.company_id, site_id=site_id)
         return [replace(view, site_name=site.short_name) for view in views]
 
     def _ensure_no_operational_dependency(self, asset_id: UUID, action: str) -> None:
@@ -298,9 +292,7 @@ class OwnerDeploymentService:
             .limit(1)
         )
         if active_duty is not None:
-            raise ConflictError(
-                f"Asset cannot be {action} while an active duty is in progress."
-            )
+            raise ConflictError(f"Asset cannot be {action} while an active duty is in progress.")
         now = datetime.now(UTC)
         active_assignment = self.session.scalar(
             select(Assignment.id)
@@ -312,9 +304,7 @@ class OwnerDeploymentService:
             .limit(1)
         )
         if active_assignment is not None:
-            raise ConflictError(
-                f"Asset cannot be {action} while a Driver is actively assigned."
-            )
+            raise ConflictError(f"Asset cannot be {action} while a Driver is actively assigned.")
 
     def _audit(
         self,

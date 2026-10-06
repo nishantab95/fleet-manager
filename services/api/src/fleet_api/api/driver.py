@@ -18,13 +18,17 @@ from fleet_api.api.schemas import (
     DriverDutyStateResponse,
     DriverEventRequest,
     DriverEventResponse,
+    DriverMultiMeterCaptureRequest,
+    DriverMultiMeterCaptureResponse,
     EvidenceUploadResponse,
 )
 from fleet_api.auth.service import AuthContext
 from fleet_api.core.config import Settings
+from fleet_api.core.features import FutureFeature, require_feature
 from fleet_api.db.session import get_db
 from fleet_api.domain.driver import (
     create_driver_event,
+    create_multi_meter_capture,
     get_current_assignment,
     get_current_duty_state,
     register_device,
@@ -146,9 +150,7 @@ def current_assignment(
         site_id=current.site.id,
         site_name=current.site.name,
         supervisor_name=(
-            current.supervisor_names[0]
-            if len(current.supervisor_names) == 1
-            else None
+            current.supervisor_names[0] if len(current.supervisor_names) == 1 else None
         ),
         supervisor_names=current.supervisor_names,
         regular_duty_minutes=current.assignment.regular_duty_minutes,
@@ -255,6 +257,44 @@ def submit_driver_event(
             client_event_uuid=payload.client_event_uuid,
             status="already_accepted" if result.duplicate else "accepted",
             verification_status=result.event.verification_status.value,
+        )
+    except DomainError as exc:
+        db.rollback()
+        _fail(exc)
+
+
+@router.post(
+    "/meter-captures",
+    response_model=DriverMultiMeterCaptureResponse,
+    dependencies=[Depends(require_feature(FutureFeature.MULTI_METER))],
+)
+def submit_multi_meter_capture(
+    payload: DriverMultiMeterCaptureRequest,
+    context: Annotated[AuthContext, Depends(require_driver)],
+    settings: Annotated[Settings, Depends(get_app_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DriverMultiMeterCaptureResponse:
+    try:
+        for client_uuid in (
+            payload.km_client_event_uuid,
+            payload.hmr_client_event_uuid,
+        ):
+            if client_uuid is not None:
+                validate_driver_event_uuid(db, context, client_event_uuid=client_uuid)
+        device, _ = register_device(
+            db,
+            context,
+            installation_identifier=payload.installation_identifier,
+            platform=payload.platform,
+        )
+        values = payload.model_dump(exclude={"installation_identifier", "platform"})
+        result = create_multi_meter_capture(db, context, settings, device=device, **values)
+        db.commit()
+        return DriverMultiMeterCaptureResponse(
+            capture_group_uuid=payload.capture_group_uuid,
+            event_ids=[item.id for item in result.events],
+            duty_session_id=result.duty_session.id,
+            status="already_accepted" if result.duplicate else "accepted",
         )
     except DomainError as exc:
         db.rollback()

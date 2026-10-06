@@ -10,9 +10,39 @@ FLEET_API_UPSTREAM_URL=https://your-private-fleet-api-host
 
 Then double-click `Start Fleet Manager Owner.bat`. The launcher checks the remote `/health` and `/ready` gates, starts only the local Next.js web app, waits for its same-origin API proxy, and opens the Owner workspace. It does not start a local API or database.
 
-Production foundation for a construction company's company-owned tipper operations.
+Production foundation for a construction company's fleet operations.
 
-V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell; Phase 4 adds the offline-first driver event client and reliable event/evidence sync; Phase 5 adds supervisor site-scoped verification and operational completeness review.
+The active Pilot supports three roles (`DRIVER`, `SUPERVISOR`, and
+`OWNER_ADMIN`) and one canonical `FleetAsset` model. Assets may be owned or
+rented and may be Tippers, Excavators, Backhoe Loaders, Rollers, or Graders.
+Tippers use odometer/KM capabilities; machinery uses hour-meter/HMR
+capabilities. Effective-dated Site deployments and Driver/Operator assignments
+preserve history while the existing Driver, Supervisor, Owner, reporting,
+backup, authentication, and Pilot-update workflows remain active.
+
+## Current active Pilot features
+
+- Tenant-scoped People, Sites, Supervisor access, Fleet Assets, deployments,
+  and Driver/Operator assignments.
+- Tipper trips, KM, diesel, emergency, and duty workflows.
+- Machinery HMR, diesel, emergency, and duty workflows.
+- Offline Drift queue, private evidence, idempotent sync, Supervisor
+  verification, Owner reporting, Excel, templates, and backup/restore.
+
+## Locally gated operations modules
+
+Maintenance, asset compliance, in-app notifications, telematics simulation,
+fuel reconciliation, multi-meter assets, workforce/payroll, and attendance
+location corroboration have persisted backend modules and compact Owner web
+surfaces. They are all disabled by default and appear only when their
+server-authoritative `FLEET_*_ENABLED` flag is explicitly enabled. No real
+telematics, messaging, fuel, toll, payment, or payroll provider is connected.
+
+Toll/expense remains a contract-only foundation. The Driver mobile Pilot is
+unchanged: it has no phone-location permission and does not expose the new
+multi-meter/location capture flow. See
+`docs/overnight-working-modules-2026-10-06.md` for the acceptance matrix,
+limitations, APIs, and local morning procedure.
 
 ## Repository layout
 
@@ -71,7 +101,10 @@ Run checks with:
 
 ## Scope guardrails
 
-Do not add rented equipment, non-tipper machinery, payroll, accounting, customer billing, continuous GPS, predictive maintenance, WhatsApp, AI/LLM features, or asynchronous infrastructure until the owned-tipper workflow is reliable in production.
+Do not activate dormant modules, add continuous phone GPS, external messaging,
+payment/accounting, customer billing, predictive automation, AI/LLM features,
+or asynchronous infrastructure without an explicit reviewed phase. Feature
+flags and UI hiding never replace backend RBAC or tenant isolation.
 
 ## Current status
 
@@ -95,9 +128,9 @@ Phase 2 contains the authentication boundary, OTP challenge persistence,
 membership selection, access/refresh session rotation, authenticated identity
 routes, and reusable tenant/RBAC dependencies. The default OTP provider is
 unavailable and fails closed; development OTP requires explicit development
-configuration. Reporting is limited to company-owned tippers; rented
-equipment, machinery, fuel-efficiency calculations, and later business
-expansion remain deferred.
+configuration. Reporting covers current generic Fleet Assets while retaining
+compatibility labels where required. Fuel-efficiency claims and
+external-provider data remain deferred.
 
 Phase 7 adds release-candidate hardening for a controlled one-tipper pilot:
 production-profile validation, API/web security headers, browser refresh

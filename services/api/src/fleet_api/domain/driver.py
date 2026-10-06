@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from pathlib import PurePosixPath
-from uuid import UUID, uuid4
+from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -27,7 +26,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.models.common import utc_now
-from fleet_api.domain.assets import capabilities_for
+from fleet_api.domain.assets import capabilities_for, capabilities_for_asset
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     DevicePlatform,
@@ -61,7 +60,6 @@ from fleet_api.domain.errors import (
     DutyOdometerContinuityError,
     DutyOdometerOutOfRangeError,
     EvidenceValidationError,
-    ObjectStorageUnavailableError,
     RoleViolationError,
     TenantConsistencyError,
 )
@@ -72,6 +70,7 @@ from fleet_api.domain.events import (
     create_km_reading,
     create_trip_event,
 )
+from fleet_api.domain.private_files import store_private_evidence
 from fleet_api.storage.objects import ObjectStorage
 
 
@@ -92,6 +91,13 @@ class DriverEventResult:
 @dataclass(frozen=True)
 class DriverDutyState:
     session: DutySession | None
+
+
+@dataclass(frozen=True)
+class MultiMeterCaptureResult:
+    events: tuple[OperationalEvent, ...]
+    duty_session: DutySession
+    duplicate: bool
 
 
 def _require_driver(context: AuthContext) -> None:
@@ -129,10 +135,7 @@ def _assignment_query(
             .join(
                 SupervisorSiteAccess,
                 (SupervisorSiteAccess.company_id == CompanyMembership.company_id)
-                & (
-                    SupervisorSiteAccess.supervisor_membership_id
-                    == CompanyMembership.id
-                ),
+                & (SupervisorSiteAccess.supervisor_membership_id == CompanyMembership.id),
             )
             .join(User, User.id == CompanyMembership.user_id)
             .where(
@@ -301,9 +304,7 @@ def _validate_odometer_reading(settings: Settings, reading_value: Decimal | str)
     return value
 
 
-def _validate_hour_meter_reading(
-    settings: Settings, reading_value: Decimal | str
-) -> Decimal:
+def _validate_hour_meter_reading(settings: Settings, reading_value: Decimal | str) -> Decimal:
     try:
         value = reading_value if isinstance(reading_value, Decimal) else Decimal(reading_value)
     except (InvalidOperation, ValueError):
@@ -384,10 +385,12 @@ def register_device(
     if not clean_identifier or len(clean_identifier) > 200:
         raise DomainError("installation_identifier is invalid")
     device = session.scalar(
-        select(Device).where(
+        select(Device)
+        .where(
             Device.company_id == context.company.id,
             Device.installation_identifier == clean_identifier,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     if device is None:
         device = Device(
@@ -419,9 +422,7 @@ def register_device(
         if device.membership_id is None:
             raise TenantConsistencyError("device has no current driver binding")
         if not allow_handover:
-            raise DeviceHandoverRequiredError(
-                current_membership_id=device.membership_id
-            )
+            raise DeviceHandoverRequiredError(current_membership_id=device.membership_id)
         if not local_state_clear:
             raise DeviceHandoverBlockedError(
                 "This phone still has an active duty or unsynced records for another "
@@ -596,8 +597,7 @@ def create_driver_event(
         context=context,
         client_event_uuid=client_event_uuid,
         object_reference=object_reference,
-        required=event_type
-        in {OperationalEventType.KM_READING, OperationalEventType.HMR_READING},
+        required=event_type in {OperationalEventType.KM_READING, OperationalEventType.HMR_READING},
     )
     if event_type in {OperationalEventType.TRIP_COMPLETE, OperationalEventType.DIESEL}:
         active_duty = _require_active_duty(
@@ -819,6 +819,201 @@ def create_driver_event(
     return DriverEventResult(event=event, duplicate=False)
 
 
+def create_multi_meter_capture(
+    session: Session,
+    context: AuthContext,
+    settings: Settings,
+    *,
+    capture_group_uuid: UUID,
+    reading_type: KmReadingType,
+    device_created_at: datetime,
+    device: Device,
+    km_client_event_uuid: UUID | None,
+    odometer_km: Decimal | str | None,
+    km_object_reference: str | None,
+    hmr_client_event_uuid: UUID | None,
+    hour_meter_hours: Decimal | str | None,
+    hmr_object_reference: str | None,
+) -> MultiMeterCaptureResult:
+    """Persist one logical START/END capture as independently reviewable meter events."""
+
+    assignment = _assignment_at_event(
+        session,
+        context=context,
+        device_created_at=device_created_at,
+        settings=settings,
+    )
+    asset = session.get(FleetAsset, assignment.asset_id)
+    if asset is None or asset.company_id != context.company.id:
+        raise TenantConsistencyError("assignment asset does not belong to this company")
+    capabilities = capabilities_for_asset(asset)
+    if capabilities.supports_odometer != (odometer_km is not None):
+        raise DomainError("odometer value must match the asset's enabled meters")
+    if capabilities.supports_hour_meter != (hour_meter_hours is not None):
+        raise DomainError("hour-meter value must match the asset's enabled meters")
+    if odometer_km is None and hour_meter_hours is None:
+        raise DomainError("at least one meter reading is required")
+    if odometer_km is not None and km_client_event_uuid is None:
+        raise DomainError("km_client_event_uuid is required")
+    if hour_meter_hours is not None and hmr_client_event_uuid is None:
+        raise DomainError("hmr_client_event_uuid is required")
+    existing = list(
+        session.scalars(
+            select(OperationalEvent).where(
+                OperationalEvent.company_id == context.company.id,
+                OperationalEvent.capture_group_uuid == capture_group_uuid,
+            )
+        )
+    )
+    if existing:
+        expected_order = [
+            item for item in (km_client_event_uuid, hmr_client_event_uuid) if item is not None
+        ]
+        by_client_uuid = {item.client_event_uuid: item for item in existing}
+        if set(by_client_uuid) != set(expected_order):
+            raise TenantConsistencyError("capture group UUID is already used by another capture")
+        ordered = tuple(by_client_uuid[item] for item in expected_order)
+        duty = session.get(DutySession, ordered[0].duty_session_id)
+        if duty is None or duty.driver_membership_id != context.membership.id:
+            raise TenantConsistencyError("capture group UUID is not owned by this driver")
+        return MultiMeterCaptureResult(ordered, duty, True)
+    km_value = (
+        _validate_odometer_reading(settings, odometer_km) if odometer_km is not None else None
+    )
+    hmr_value = (
+        _validate_hour_meter_reading(settings, hour_meter_hours)
+        if hour_meter_hours is not None
+        else None
+    )
+    is_start = reading_type == KmReadingType.START_READING
+    active_duty = _active_duty_session(session, context=context, lock=True)
+    if is_start and active_duty is not None:
+        raise DutyAlreadyStartedError("an active duty session already exists")
+    if not is_start:
+        active_duty = _require_active_duty(
+            session,
+            context=context,
+            assignment=assignment,
+            device_created_at=device_created_at,
+        )
+        if km_value is not None and (
+            active_duty.start_km is None or km_value < active_duty.start_km
+        ):
+            raise DutyKmValidationError(
+                "END_READING must be greater than or equal to START_READING"
+            )
+        if hmr_value is not None and (
+            active_duty.start_hmr is None or hmr_value < active_duty.start_hmr
+        ):
+            raise DutyHourMeterValidationError("END HMR must be greater than or equal to START HMR")
+    if is_start and km_value is not None:
+        previous_km = _previous_valid_end_km(
+            session,
+            company_id=context.company.id,
+            asset_id=assignment.asset_id,
+            before=device_created_at,
+        )
+        if previous_km is not None and km_value < previous_km:
+            raise DutyOdometerContinuityError(
+                "START KM cannot be lower than the previous END KM",
+                previous_end_km=previous_km,
+            )
+    if is_start and hmr_value is not None:
+        previous_hmr = _previous_valid_end_hmr(
+            session,
+            company_id=context.company.id,
+            asset_id=assignment.asset_id,
+            before=device_created_at,
+        )
+        if previous_hmr is not None and hmr_value < previous_hmr:
+            raise DutyHourMeterContinuityError(
+                "START HMR cannot be lower than the previous END HMR",
+                previous_end_hmr=previous_hmr,
+            )
+    events: list[OperationalEvent] = []
+    if km_value is not None and km_client_event_uuid is not None:
+        _evidence_for_event(
+            session,
+            context=context,
+            client_event_uuid=km_client_event_uuid,
+            object_reference=km_object_reference,
+            required=True,
+        )
+        reading = create_km_reading(
+            session,
+            company_id=context.company.id,
+            assignment_id=assignment.id,
+            client_event_uuid=km_client_event_uuid,
+            device_created_at=device_created_at,
+            reading_type=reading_type,
+            reading_value=km_value,
+            object_reference=km_object_reference,
+            device_id=device.id,
+        )
+        event = session.get(OperationalEvent, reading.event_id)
+        assert event is not None
+        events.append(event)
+    if hmr_value is not None and hmr_client_event_uuid is not None:
+        _evidence_for_event(
+            session,
+            context=context,
+            client_event_uuid=hmr_client_event_uuid,
+            object_reference=hmr_object_reference,
+            required=True,
+        )
+        hmr_reading = create_hour_meter_reading(
+            session,
+            company_id=context.company.id,
+            assignment_id=assignment.id,
+            client_event_uuid=hmr_client_event_uuid,
+            device_created_at=device_created_at,
+            reading_type=HourMeterReadingType(reading_type.value),
+            reading_value=hmr_value,
+            object_reference=hmr_object_reference,
+            device_id=device.id,
+        )
+        event = session.get(OperationalEvent, hmr_reading.event_id)
+        assert event is not None
+        events.append(event)
+    for event in events:
+        event.capture_group_uuid = capture_group_uuid
+    if is_start:
+        first_event = events[0]
+        active_duty = DutySession(
+            company_id=context.company.id,
+            assignment_id=assignment.id,
+            driver_membership_id=context.membership.id,
+            asset_id=assignment.asset_id,
+            site_id=assignment.site_id,
+            operational_date=_operational_date(context, device_created_at),
+            start_event_id=first_event.id,
+            start_km=km_value,
+            start_hmr=hmr_value,
+            started_at=device_created_at,
+            configured_regular_duty_minutes=assignment.regular_duty_minutes,
+            regular_duty_ends_at=device_created_at
+            + timedelta(minutes=assignment.regular_duty_minutes),
+            status=DutySessionStatus.ACTIVE,
+        )
+        session.add(active_duty)
+        session.flush()
+    else:
+        assert active_duty is not None
+        active_duty.end_event_id = events[0].id
+        active_duty.end_km = km_value
+        active_duty.end_hmr = hmr_value
+        active_duty.ended_at = device_created_at
+        active_duty.status = DutySessionStatus.CLOSED
+        active_duty.final_overtime_minutes = max(
+            0,
+            int((device_created_at - active_duty.regular_duty_ends_at).total_seconds() // 60),
+        )
+    for event in events:
+        event.duty_session_id = active_duty.id
+    session.flush()
+    return MultiMeterCaptureResult(tuple(events), active_duty, False)
+
+
 def upload_evidence(
     session: Session,
     context: AuthContext,
@@ -830,67 +1025,14 @@ def upload_evidence(
     content: bytes,
 ) -> EvidenceObject:
     _require_driver(context)
-    normalized_type = content_type.lower().split(";", maxsplit=1)[0].strip()
-    if normalized_type not in settings.evidence_mime_types:
-        raise EvidenceValidationError("unsupported evidence type")
-    if not content or len(content) > settings.evidence_max_bytes:
-        raise EvidenceValidationError("evidence size is invalid")
-    if not _matches_image_signature(normalized_type, content):
-        raise EvidenceValidationError("evidence content does not match its image type")
-    existing = session.scalar(
-        select(EvidenceObject).where(
-            EvidenceObject.company_id == context.company.id,
-            EvidenceObject.membership_id == context.membership.id,
-            EvidenceObject.client_event_uuid == client_event_uuid,
-        )
+    return store_private_evidence(
+        session,
+        context,
+        storage,
+        reference_uuid=client_event_uuid,
+        purpose="events",
+        content_type=content_type,
+        content=content,
+        allowed_mime_types=settings.evidence_mime_types,
+        max_bytes=settings.evidence_max_bytes,
     )
-    if existing is not None:
-        return existing
-    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[normalized_type]
-    object_key = str(
-        PurePosixPath(
-            "companies",
-            str(context.company.id),
-            "memberships",
-            str(context.membership.id),
-            "events",
-            str(client_event_uuid),
-            f"{uuid4()}.{extension}",
-        )
-    )
-    stored_key: str | None = None
-    try:
-        stored_key = storage.put_private(
-            object_key=object_key,
-            content=content,
-            content_type=normalized_type,
-        )
-        evidence = EvidenceObject(
-            company_id=context.company.id,
-            membership_id=context.membership.id,
-            client_event_uuid=client_event_uuid,
-            object_key=stored_key,
-            content_type=normalized_type,
-            size_bytes=len(content),
-        )
-        session.add(evidence)
-        session.flush()
-        return evidence
-    except (IntegrityError, ObjectStorageUnavailableError):
-        if stored_key is not None:
-            try:
-                storage.delete_private(object_key=stored_key)
-            except ObjectStorageUnavailableError:
-                pass
-        raise
-
-
-def _matches_image_signature(content_type: str, content: bytes) -> bool:
-    """Reject MIME-spoofed uploads before they reach private object storage."""
-    if content_type == "image/jpeg":
-        return content.startswith(b"\xff\xd8\xff")
-    if content_type == "image/png":
-        return content.startswith(b"\x89PNG\r\n\x1a\n")
-    if content_type == "image/webp":
-        return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
-    return False

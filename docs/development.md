@@ -117,6 +117,34 @@ provider requires both `FLEET_ENVIRONMENT=development`,
 The default unavailable provider intentionally returns a service-unavailable
 response instead of pretending to deliver an OTP.
 
+## Dormant future-feature configuration
+
+The future foundations are off by default in every profile:
+
+```text
+FLEET_MAINTENANCE_ENABLED=false
+FLEET_ASSET_DOCUMENTS_ENABLED=false
+FLEET_NOTIFICATIONS_ENABLED=false
+FLEET_TELEMATICS_ENABLED=false
+FLEET_FUEL_INTEGRATIONS_ENABLED=false
+FLEET_TOLL_EXPENSES_ENABLED=false
+FLEET_MULTI_METER_ENABLED=false
+FLEET_PAYROLL_ENABLED=false
+FLEET_ATTENDANCE_LOCATION_ENABLED=false
+```
+
+Enable only the module under local/manual review. Backend authentication, role,
+and tenant checks still apply. Enabled persisted modules expose their Owner
+navigation; toll/expenses remains contract-only. No flag configures a live
+external provider or grants a mobile permission.
+
+For a complete local demonstration, enable maintenance, asset documents,
+notifications, telematics, fuel integrations, multi-meter, payroll, and
+attendance location, configure private local object storage, start the API/web,
+and use `scripts/seed_future_modules_demo.py`. The seeder and
+`scripts/telematics_simulator.py` reject non-loopback URLs. See the morning
+procedure in `docs/overnight-working-modules-2026-10-06.md`.
+
 The web shell uses `NEXT_PUBLIC_API_BASE_URL` when set and otherwise calls
 `http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3
 owner shell and Phase 5 supervisor verification shell keep access tokens in
@@ -127,6 +155,13 @@ also have an admin-created `SupervisorSiteAccess` grant before site data is
 visible.
 
 ## Migration workflow
+
+Migration `0018_future_foundations` adds maintenance schedules/records and
+asset documents/revisions. `0019_working_future_modules` makes notifications,
+telematics, and fuel reconciliation durable and extends the first two modules.
+`0020_multi_meter_workforce` is the additive migration for asset meter
+capabilities, maintenance criteria, payroll/workforce, location evidence, and
+telemetry meter discrepancies. Toll/expense still has no persisted API module.
 
 Run from `services/api` after PostgreSQL is available:
 

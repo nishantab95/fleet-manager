@@ -115,9 +115,7 @@ def test_owner_lists_assets_with_filters_and_active_assignment(
         starts_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     db_session.commit()
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         response = client.get(
             "/api/v1/owner/assets",
@@ -139,12 +137,8 @@ def test_owner_lists_assets_with_filters_and_active_assignment(
         client.close()
 
 
-def test_owner_creates_owned_tipper(
-    db_session: Session, tenant_records: dict[str, object]
-) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+def test_owner_creates_owned_tipper(db_session: Session, tenant_records: dict[str, object]) -> None:
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         asset = create_owned(client)
         assert asset["asset_code"] == "TIPPER-44"
@@ -158,9 +152,7 @@ def test_owner_creates_owned_tipper(
 def test_owner_generates_stable_immutable_asset_code_when_omitted(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         payload = owned_payload(registration_number="KA04AA4499")
         payload.pop("asset_code")
@@ -193,9 +185,7 @@ def test_owner_generates_stable_immutable_asset_code_when_omitted(
 def test_generated_asset_codes_are_unique_for_identical_machinery_labels(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         payload = owned_payload(
             asset_type="EXCAVATOR",
@@ -222,9 +212,7 @@ def test_owner_creates_machinery_without_registration(
     tenant_records: dict[str, object],
     asset_type: str,
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         response = client.post(
             "/api/v1/owner/assets",
@@ -246,9 +234,7 @@ def test_owner_creates_machinery_without_registration(
 def test_owner_creates_rented_tipper(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         response = client.post(
             "/api/v1/owner/assets",
@@ -287,9 +273,7 @@ def test_owner_rejects_duplicate_company_identity(
     override: dict[str, object],
     message: str,
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         response = client.post("/api/v1/owner/assets", json=owned_payload(**override))
         assert response.status_code == 409
@@ -301,9 +285,7 @@ def test_owner_rejects_duplicate_company_identity(
 def test_owner_rejects_testown02_case_duplicate_without_creating_asset(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         existing = create_owned(
             client,
@@ -340,12 +322,8 @@ def test_owner_edits_asset_without_recreating_it_or_history(
     assignment = create_assignment(
         db_session,
         company_id=asset.company_id,
-        driver_membership_id=value(
-            tenant_records, "driver_a", CompanyMembership
-        ).id,
-        supervisor_membership_id=value(
-            tenant_records, "supervisor_a", CompanyMembership
-        ).id,
+        driver_membership_id=value(tenant_records, "driver_a", CompanyMembership).id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
         asset_id=asset.id,
         site_id=value(tenant_records, "site_a", Site).id,
         starts_at=datetime.now(UTC) - timedelta(days=2),
@@ -354,9 +332,7 @@ def test_owner_edits_asset_without_recreating_it_or_history(
     asset_id = asset.id
     assignment_id = assignment.id
     db_session.commit()
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         response = client.patch(
             f"/api/v1/owner/assets/{asset_id}",
@@ -384,9 +360,7 @@ def test_owner_changes_owned_to_rented_and_requires_party(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
     asset = value(tenant_records, "tipper_a", FleetAsset)
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         missing = client.patch(
             f"/api/v1/owner/assets/{asset.id}",
@@ -411,9 +385,7 @@ def test_owner_changes_owned_to_rented_and_requires_party(
 def test_owner_changes_rented_to_owned_and_clears_rental_fields(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         rented = client.post(
             "/api/v1/owner/assets",
@@ -441,19 +413,13 @@ def test_owner_changes_rented_to_owned_and_clears_rental_fields(
 def test_owner_deactivates_and_reactivates_unassigned_asset(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         asset = create_owned(client)
-        deactivate = client.post(
-            f"/api/v1/owner/assets/{asset['id']}/deactivate"
-        )
+        deactivate = client.post(f"/api/v1/owner/assets/{asset['id']}/deactivate")
         assert deactivate.status_code == 200
         assert deactivate.json()["status"] == FleetAssetStatus.INACTIVE
-        reactivate = client.post(
-            f"/api/v1/owner/assets/{asset['id']}/reactivate"
-        )
+        reactivate = client.post(f"/api/v1/owner/assets/{asset['id']}/reactivate")
         assert reactivate.status_code == 200
         assert reactivate.json()["status"] == FleetAssetStatus.ACTIVE
     finally:
@@ -467,20 +433,14 @@ def test_owner_cannot_deactivate_effectively_assigned_asset(
     create_assignment(
         db_session,
         company_id=asset.company_id,
-        driver_membership_id=value(
-            tenant_records, "driver_a", CompanyMembership
-        ).id,
-        supervisor_membership_id=value(
-            tenant_records, "supervisor_a", CompanyMembership
-        ).id,
+        driver_membership_id=value(tenant_records, "driver_a", CompanyMembership).id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
         asset_id=asset.id,
         site_id=value(tenant_records, "site_a", Site).id,
         starts_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     db_session.commit()
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         response = client.post(f"/api/v1/owner/assets/{asset.id}/deactivate")
         assert response.status_code == 409
@@ -499,9 +459,7 @@ def test_driver_and_supervisor_cannot_call_owner_asset_api(
     tenant_records: dict[str, object],
     membership_key: str,
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, membership_key, CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, membership_key, CompanyMembership))
     try:
         assert client.get("/api/v1/owner/assets").status_code == 403
         assert client.post("/api/v1/owner/assets", json=owned_payload()).status_code == 403
@@ -513,9 +471,7 @@ def test_owner_cannot_read_edit_or_deactivate_foreign_asset(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
     foreign = value(tenant_records, "tipper_b", FleetAsset)
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         assert client.get(f"/api/v1/owner/assets/{foreign.id}").status_code == 404
         assert (
@@ -525,12 +481,7 @@ def test_owner_cannot_read_edit_or_deactivate_foreign_asset(
             ).status_code
             == 404
         )
-        assert (
-            client.post(
-                f"/api/v1/owner/assets/{foreign.id}/deactivate"
-            ).status_code
-            == 404
-        )
+        assert client.post(f"/api/v1/owner/assets/{foreign.id}/deactivate").status_code == 404
     finally:
         client.close()
 
@@ -538,17 +489,13 @@ def test_owner_cannot_read_edit_or_deactivate_foreign_asset(
 def test_owned_creation_rejects_stale_rental_values(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
-    client = owner_client(
-        db_session, value(tenant_records, "owner_a", CompanyMembership)
-    )
+    client = owner_client(db_session, value(tenant_records, "owner_a", CompanyMembership))
     try:
         response = client.post(
             "/api/v1/owner/assets",
             json=owned_payload(rental_party_name="Should not persist"),
         )
         assert response.status_code == 422
-        assert "cannot contain rental details" in response.json()["detail"][
-            "message"
-        ].lower()
+        assert "cannot contain rental details" in response.json()["detail"]["message"].lower()
     finally:
         client.close()

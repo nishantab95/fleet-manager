@@ -82,6 +82,8 @@ const deployedMachine: OwnerAsset = {
   },
   has_active_assignment: false,
   active_assignment: null,
+  supports_odometer_km: false,
+  supports_hour_meter: true,
 };
 
 const undeployedGrader: OwnerAsset = {

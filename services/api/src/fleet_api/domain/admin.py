@@ -169,9 +169,7 @@ class AdminService:
     def get_site(self, site_id: UUID) -> Site:
         return self._site(site_id)
 
-    def create_site(
-        self, *, name: str, code: str | None, short_name: str | None = None
-    ) -> Site:
+    def create_site(self, *, name: str, code: str | None, short_name: str | None = None) -> Site:
         try:
             site = create_site(
                 self.session,

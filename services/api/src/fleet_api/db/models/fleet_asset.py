@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,6 +50,8 @@ class FleetAsset(UpdatedTimestampModel):
     rental_party_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     rental_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     rental_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    supports_odometer_km: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_hour_meter: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         UniqueConstraint("company_id", "asset_code", name="uq_fleet_assets_company_asset_code"),

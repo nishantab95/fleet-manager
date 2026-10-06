@@ -1,5 +1,32 @@
 # Security Baseline
 
+## Feature-gated operations controls
+
+- All nine future flags default to false. There is no environment-based
+  auto-enable path, and disabled authenticated endpoints return the stable
+  `FEATURE_UNAVAILABLE` contract without mutation.
+- Maintenance and document routes still require backend `OWNER_ADMIN`
+  authorization. Services query by the authenticated company; foreign UUIDs
+  resolve as tenant-scoped not-found responses.
+- Maintenance and document tables carry `company_id` and use composite foreign
+  keys for assets, memberships, schedules, evidence, and documents.
+- Document uploads reuse private object storage, content-size/type/signature
+  checks, and server-generated keys. Original filenames are ignored; no public
+  object URL or object key is returned by document APIs.
+- Notification, telematics, and fuel modules contain no vendor credentials and
+  make no external provider call. The local simulator is restricted to
+  loopback URLs. Toll/expense remains a contract-only adapter.
+- No Android location or notification permission, foreground service, signing
+  change, external secret, or TLS bypass is introduced.
+- Payroll routes are Owner-only. Decimal calculation snapshots are frozen on
+  period creation, finalization is immutable, and adjustments require an
+  audited non-zero amount and reason. This is operational pay, not statutory
+  payroll compliance.
+- Location snapshots derive company, membership, assignment, asset, and Site
+  from the authenticated server context. Capture is event-based, unavailable
+  or denied GPS does not erase the operational event, no off-duty continuous
+  tracker exists, and confidence never triggers a pay deduction.
+
 ## Phase 1 protections
 
 - No secrets, passwords, hardcoded production users, or hardcoded tenant IDs

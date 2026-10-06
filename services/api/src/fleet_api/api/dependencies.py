@@ -19,6 +19,7 @@ from fleet_api.core.config import Settings
 from fleet_api.db.models import CompanyMembership
 from fleet_api.db.session import get_db
 from fleet_api.domain.admin import AdminService
+from fleet_api.domain.asset_documents import AssetDocumentService
 from fleet_api.domain.deployments import OwnerDeploymentService
 from fleet_api.domain.driver_assignments import DriverAssetAssignmentService
 from fleet_api.domain.enums import MembershipRole
@@ -28,9 +29,13 @@ from fleet_api.domain.errors import (
     RoleViolationError,
     TenantConsistencyError,
 )
+from fleet_api.domain.fuel_integrations import FuelIntegrationService
+from fleet_api.domain.maintenance import MaintenanceService
+from fleet_api.domain.notifications import InAppNotificationService
 from fleet_api.domain.owner_assets import OwnerAssetService
 from fleet_api.domain.owner_people_sites import OwnerPeopleSiteService
 from fleet_api.domain.report_templates import ReportTemplateService
+from fleet_api.domain.telematics import TelematicsIngestionService
 from fleet_api.storage.objects import ObjectStorage, build_object_storage
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -195,6 +200,53 @@ def get_report_template_service(
         context,
         request_id=request.headers.get("x-request-id"),
     )
+
+
+def get_maintenance_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> MaintenanceService:
+    return MaintenanceService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_asset_document_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> AssetDocumentService:
+    return AssetDocumentService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_in_app_notification_service(
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> InAppNotificationService:
+    return InAppNotificationService(db, context)
+
+
+def get_telematics_ingestion_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> TelematicsIngestionService:
+    return TelematicsIngestionService(db, context, request_id=request.headers.get("x-request-id"))
+
+
+def get_fuel_integration_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> FuelIntegrationService:
+    return FuelIntegrationService(db, context, request_id=request.headers.get("x-request-id"))
 
 
 def require_company_context(

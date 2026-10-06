@@ -15,8 +15,17 @@ from fleet_api.api.driver import router as driver_router
 from fleet_api.api.owner import router as owner_router
 from fleet_api.api.owner_assignments import router as owner_assignments_router
 from fleet_api.api.owner_deployments import router as owner_deployments_router
+from fleet_api.api.owner_fuel import router as owner_fuel_router
+from fleet_api.api.owner_future import document_router, feature_router, maintenance_router
+from fleet_api.api.owner_notifications import router as owner_notifications_router
 from fleet_api.api.owner_people_sites import router as owner_people_sites_router
 from fleet_api.api.owner_report_templates import router as owner_report_templates_router
+from fleet_api.api.owner_telematics import router as owner_telematics_router
+from fleet_api.api.owner_workforce import (
+    location_driver_router,
+    location_owner_router,
+    workforce_router,
+)
 from fleet_api.api.reports import router as reports_router
 from fleet_api.api.supervisor import router as supervisor_router
 from fleet_api.core.config import Settings, get_settings
@@ -43,7 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Fleet Manager API",
         version=__version__,
-        description="Foundation API for company-owned construction tippers.",
+        description="Fleet operations API for construction assets.",
         lifespan=lifespan,
     )
     app.state.settings = runtime_settings
@@ -53,6 +62,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(owner_router)
     app.include_router(owner_assignments_router)
     app.include_router(owner_people_sites_router)
+    app.include_router(maintenance_router)
+    app.include_router(document_router)
+    app.include_router(feature_router)
+    app.include_router(owner_notifications_router)
+    app.include_router(owner_telematics_router)
+    app.include_router(owner_fuel_router)
+    app.include_router(workforce_router)
+    app.include_router(location_owner_router)
+    app.include_router(location_driver_router)
     app.include_router(owner_deployments_router)
     app.include_router(owner_report_templates_router)
     app.include_router(supervisor_router)

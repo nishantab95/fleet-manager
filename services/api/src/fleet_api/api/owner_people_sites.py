@@ -192,9 +192,7 @@ def get_site(
         _fail(service.session, exc)
 
 
-@router.post(
-    "/sites", response_model=OwnerSiteResponse, status_code=status.HTTP_201_CREATED
-)
+@router.post("/sites", response_model=OwnerSiteResponse, status_code=status.HTTP_201_CREATED)
 def create_site(
     payload: OwnerSiteCreateRequest,
     service: OwnerPeopleSiteService = Depends(get_owner_people_site_service),
@@ -267,9 +265,7 @@ def reactivate_site(
         _fail(db, exc)
 
 
-@router.get(
-    "/sites/{site_id}/supervisors", response_model=list[OwnerSiteSupervisorResponse]
-)
+@router.get("/sites/{site_id}/supervisors", response_model=list[OwnerSiteSupervisorResponse])
 def list_site_supervisors(
     site_id: UUID,
     service: OwnerPeopleSiteService = Depends(get_owner_people_site_service),
@@ -295,9 +291,7 @@ def grant_site_supervisor(
         _fail(db, exc)
 
 
-@router.delete(
-    "/sites/{site_id}/supervisors/{membership_id}", response_model=OwnerSiteResponse
-)
+@router.delete("/sites/{site_id}/supervisors/{membership_id}", response_model=OwnerSiteResponse)
 def revoke_site_supervisor(
     site_id: UUID,
     membership_id: UUID,

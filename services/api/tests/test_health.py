@@ -34,9 +34,7 @@ def test_request_id_is_normalized_and_returned() -> None:
     assert response.headers["x-request-id"] == request_id
 
 
-def test_ready_checks_private_filesystem_storage(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
+def test_ready_checks_private_filesystem_storage(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("fleet_api.main.check_database", lambda: True)
     settings = Settings(
         environment="test",

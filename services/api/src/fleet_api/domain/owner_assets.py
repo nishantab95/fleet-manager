@@ -117,6 +117,8 @@ class OwnerAssetService:
             "rental_end_date": (
                 asset.rental_end_date.isoformat() if asset.rental_end_date else None
             ),
+            "supports_odometer_km": asset.supports_odometer_km,
+            "supports_hour_meter": asset.supports_hour_meter,
         }
 
     def _view_query(
@@ -284,9 +286,7 @@ class OwnerAssetService:
                 FleetAsset.registration_number == registration_number,
             )
             if exclude_asset_id is not None:
-                registration_query = registration_query.where(
-                    FleetAsset.id != exclude_asset_id
-                )
+                registration_query = registration_query.where(FleetAsset.id != exclude_asset_id)
             if self.session.scalar(registration_query) is not None:
                 raise ConflictError("registration number is already used by this company")
 
@@ -301,8 +301,7 @@ class OwnerAssetService:
         if ownership_type == AssetOwnershipType.RENTED and rental_party_name is None:
             raise DomainError("Rental party is required for a rented asset.")
         if ownership_type == AssetOwnershipType.OWNED and any(
-            value is not None
-            for value in (rental_party_name, rental_start_date, rental_end_date)
+            value is not None for value in (rental_party_name, rental_start_date, rental_end_date)
         ):
             raise DomainError("Owned assets cannot contain rental details.")
         if (
@@ -325,6 +324,8 @@ class OwnerAssetService:
         rental_party_name: str | None,
         rental_start_date: date | None,
         rental_end_date: date | None,
+        supports_odometer_km: bool | None = None,
+        supports_hour_meter: bool | None = None,
     ) -> OwnerAssetView:
         normalized_code = normalize_asset_code(asset_code) if asset_code is not None else None
         if asset_type == FleetAssetType.TIPPER and registration_number is None:
@@ -361,21 +362,19 @@ class OwnerAssetService:
                 rental_party_name=clean_rental_party,
                 rental_start_date=rental_start_date,
                 rental_end_date=rental_end_date,
+                supports_odometer_km=supports_odometer_km,
+                supports_hour_meter=supports_hour_meter,
             )
         except DomainError as exc:
             if "already used" in str(exc):
-                raise ConflictError(
-                    "asset code or registration number is already used"
-                ) from exc
+                raise ConflictError("asset code or registration number is already used") from exc
             raise
         self._audit(
             action="OWNER_ASSET_CREATED",
             asset=asset,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(
-            asset=asset, current_deployment=None, active_assignment=None
-        )
+        return OwnerAssetView(asset=asset, current_deployment=None, active_assignment=None)
 
     def update_asset(
         self,
@@ -391,6 +390,8 @@ class OwnerAssetService:
         rental_start_date: date | None,
         rental_end_date: date | None,
         fields_set: set[str],
+        supports_odometer_km: bool | None = None,
+        supports_hour_meter: bool | None = None,
     ) -> OwnerAssetView:
         view = self.get_asset(asset_id)
         asset = view.asset
@@ -419,6 +420,20 @@ class OwnerAssetService:
             if ownership_type is None:
                 raise DomainError("Ownership is required.")
             asset.ownership_type = ownership_type
+        if "supports_odometer_km" in fields_set:
+            if supports_odometer_km is None:
+                raise DomainError("supports_odometer_km cannot be null")
+            asset.supports_odometer_km = supports_odometer_km
+        if "supports_hour_meter" in fields_set:
+            if supports_hour_meter is None:
+                raise DomainError("supports_hour_meter cannot be null")
+            asset.supports_hour_meter = supports_hour_meter
+        if (
+            {"supports_odometer_km", "supports_hour_meter"} & fields_set
+            and not asset.supports_odometer_km
+            and not asset.supports_hour_meter
+        ):
+            raise DomainError("an asset must support at least one meter")
 
         if asset.ownership_type == AssetOwnershipType.OWNED:
             if "ownership_type" in fields_set:
@@ -475,9 +490,7 @@ class OwnerAssetService:
         if asset.status == FleetAssetStatus.INACTIVE:
             return view
         if view.active_assignment is not None:
-            raise ConflictError(
-                "Asset cannot be deactivated while it has an active assignment."
-            )
+            raise ConflictError("Asset cannot be deactivated while it has an active assignment.")
         active_duty = self.session.scalar(
             select(DutySession.id).where(
                 DutySession.company_id == self.company_id,
@@ -486,9 +499,7 @@ class OwnerAssetService:
             )
         )
         if active_duty is not None:
-            raise ConflictError(
-                "Asset cannot be deactivated while it has an active duty session."
-            )
+            raise ConflictError("Asset cannot be deactivated while it has an active duty session.")
         if view.current_deployment is not None:
             raise ConflictError("Asset must be removed from its Site before deactivation.")
         old_values = self._values(asset)
@@ -500,9 +511,7 @@ class OwnerAssetService:
             old_values=old_values,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(
-            asset=asset, current_deployment=None, active_assignment=None
-        )
+        return OwnerAssetView(asset=asset, current_deployment=None, active_assignment=None)
 
     def reactivate_asset(self, asset_id: UUID) -> OwnerAssetView:
         view = self.get_asset(asset_id)
@@ -518,6 +527,4 @@ class OwnerAssetService:
             old_values=old_values,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(
-            asset=asset, current_deployment=None, active_assignment=None
-        )
+        return OwnerAssetView(asset=asset, current_deployment=None, active_assignment=None)

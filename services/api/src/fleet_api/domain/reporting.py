@@ -531,9 +531,7 @@ class ReportingService:
             assignment_id=parts.assignment.id,
             duty_session_id=parts.event.duty_session_id,
             asset_id=parts.asset.id,
-            asset_registration_number=(
-                parts.asset.registration_number or parts.asset.asset_code
-            ),
+            asset_registration_number=(parts.asset.registration_number or parts.asset.asset_code),
             asset_type=parts.asset.asset_type.value,
             ownership_type=parts.asset.ownership_type.value,
             asset_code=parts.asset.asset_code,
@@ -548,12 +546,16 @@ class ReportingService:
             reading_type=(
                 parts.km.reading_type.value
                 if parts.km
-                else parts.hmr.reading_type.value if parts.hmr else None
+                else parts.hmr.reading_type.value
+                if parts.hmr
+                else None
             ),
             reading_value=(
                 parts.km.reading_value
                 if parts.km
-                else parts.hmr.reading_value if parts.hmr else None
+                else parts.hmr.reading_value
+                if parts.hmr
+                else None
             ),
             litres=parts.diesel.litres if parts.diesel else None,
             emergency_category=(
@@ -705,18 +707,14 @@ class ReportingService:
                     description=description,
                     assignment_id=assignment.id,
                     asset_id=asset.id,
-                    asset_registration_number=(
-                        asset.registration_number or asset.asset_code
-                    ),
+                    asset_registration_number=(asset.registration_number or asset.asset_code),
                     site_id=site.id,
                     event_id=event_id,
                 )
             )
 
         if conflicting_start:
-            add_exception(
-                "CONFLICTING_START_READING", "More than one valid START reading exists"
-            )
+            add_exception("CONFLICTING_START_READING", "More than one valid START reading exists")
         elif capabilities.supports_odometer and start_km is None:
             if self._has_status(
                 events, OperationalEventType.KM_READING, VerificationStatus.PENDING_VERIFICATION

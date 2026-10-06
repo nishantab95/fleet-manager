@@ -2,17 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { pcRoleLabEnabled } from "../../lib/auth/config";
-import type { OwnerAsset, OwnerPerson, OwnerSite } from "../../lib/types";
+import type { FutureFeatures, OwnerAsset, OwnerPerson, OwnerSite } from "../../lib/types";
 import { useAuth } from "../auth/AuthProvider";
 import { FleetAmbientScene } from "./FleetAmbientScene";
+import { DocumentsModule, FuelModule, MaintenanceModule, NotificationBell, TelematicsModule, WorkforceModule } from "./FutureModules";
 import { AssignmentsPanel, DeploymentsPanel, FleetOverview, FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
 import { OwnerOperations } from "./OwnerOperations";
 import { ReportTemplates } from "./ReportTemplates";
 
-type Tab = "operations" | "fleet" | "deployments" | "assignments" | "people" | "sites" | "reports" | "templates";
-type NavIcon = "operations" | "fleet" | "deployments" | "assignments" | "people" | "sites" | "reports" | "templates";
+type Tab = "operations" | "fleet" | "deployments" | "assignments" | "people" | "sites" | "reports" | "templates" | "maintenance" | "documents" | "telematics" | "fuel" | "workforce";
+type NavIcon = Tab;
 
-const navigation: { label: string; items: { id: Tab; label: string; icon: NavIcon }[] }[] = [
+const baseNavigation: { label: string; items: { id: Tab; label: string; icon: NavIcon }[] }[] = [
   { label: "Overview", items: [{ id: "operations", label: "Operations", icon: "operations" }] },
   {
     label: "Fleet management",
@@ -48,6 +49,11 @@ function NavGlyph({ icon }: { icon: NavIcon }) {
     sites: <><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.5" /></>,
     reports: <><path d="M4 20V10m6 10V4m6 16v-7m4 7H2" /></>,
     templates: <><path d="M6 3h9l4 4v14H6V3Z" /><path d="M15 3v5h5M9 12h7m-7 4h7" /></>,
+    maintenance: <><path d="m14.7 6.3 3-3a4 4 0 0 1-5 5l-7.8 7.8a2.1 2.1 0 1 0 3 3l7.8-7.8a4 4 0 0 1 5-5l-3 3-3-3Z" /></>,
+    documents: <><path d="M6 3h9l4 4v14H6V3Z" /><path d="M15 3v5h5M9 12h7m-7 4h5" /></>,
+    telematics: <><path d="M4 17a8 8 0 0 1 16 0M7 17a5 5 0 0 1 10 0M10 17a2 2 0 0 1 4 0" /><circle cx="12" cy="17" r="1" /></>,
+    fuel: <><path d="M5 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16M4 21h13M8 7h5v4H8zM16 8h2l2 3v6a2 2 0 0 1-2 2h-2" /></>,
+    workforce: <><circle cx="9" cy="8" r="3" /><path d="M3 20v-2a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v2m1-11h5m-2.5-2.5v5" /></>,
   };
   return <svg aria-hidden="true" className="owner-nav-item__icon" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">{paths[icon]}</svg>;
 }
@@ -75,18 +81,21 @@ export function OwnerWorkspace() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [pageVisible, setPageVisible] = useState(true);
   const [sidebarPinned, setSidebarPinned] = useState(false);
+  const [features, setFeatures] = useState<FutureFeatures>({ maintenance: false, asset_documents: false, notifications: false, telematics: false, fuel_integrations: false, toll_expenses: false, multi_meter: false, payroll: false, attendance_location: false });
 
   const reload = useCallback(async () => {
     setError("");
     try {
-      const [nextAssets, nextPeople, nextSites] = await Promise.all([
+      const [nextAssets, nextPeople, nextSites, nextFeatures] = await Promise.all([
         request<OwnerAsset[]>("/api/v1/owner/assets"),
         request<OwnerPerson[]>("/api/v1/owner/people"),
         request<OwnerSite[]>("/api/v1/owner/sites"),
+        request<FutureFeatures>("/api/v1/owner/future-features"),
       ]);
       setAssets(nextAssets);
       setPeople(nextPeople);
       setSites(nextSites);
+      setFeatures(nextFeatures);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load Owner management data.");
     } finally {
@@ -127,6 +136,20 @@ export function OwnerWorkspace() {
     };
   }, [assets, people]);
 
+  const navigation = useMemo(() => {
+    const items = baseNavigation.map((group) => ({ ...group, items: [...group.items] }));
+    const modules: { id: Tab; label: string; icon: NavIcon; visible: boolean }[] = [
+      { id: "maintenance", label: "Maintenance", icon: "maintenance", visible: features.maintenance },
+      { id: "documents", label: "Compliance", icon: "documents", visible: features.asset_documents },
+      { id: "telematics", label: "Telematics", icon: "telematics", visible: features.telematics },
+      { id: "fuel", label: "Fuel", icon: "fuel", visible: features.fuel_integrations },
+      { id: "workforce", label: "Workforce", icon: "workforce", visible: features.payroll },
+    ];
+    const enabled = modules.filter((item) => item.visible).map((item) => ({ id: item.id, label: item.label, icon: item.icon }));
+    if (enabled.length) items.splice(2, 0, { label: "Asset controls", items: enabled });
+    return items;
+  }, [features]);
+
   const showTab = (nextTab: Tab) => {
     setError("");
     setTab(nextTab);
@@ -147,6 +170,7 @@ export function OwnerWorkspace() {
         <CommandMetric label="Undeployed" tone={summary.undeployed > 0 ? "attention" : "default"} value={summary.undeployed} />
       </div>
       <div className="owner-topbar__actions">
+        {features.notifications && <NotificationBell apiRequest={request} onNavigate={showTab} />}
         {pcRoleLabEnabled && <nav aria-label="PC test lab navigation" className="owner-role-nav"><a href="/lab">Test lab</a><a href="/driver-test">Driver</a><a href="/supervisor">Supervisor</a><a aria-current="page" href="/owner">Owner</a></nav>}
         <button className="owner-logout" onClick={() => void logout()} type="button">Log out</button>
       </div>
@@ -171,13 +195,18 @@ export function OwnerWorkspace() {
             <FleetOverview assets={assets} />
             <div aria-label="Quick operations" className="owner-overview-shortcuts" role="group"><span>Quick operations</span><div className="owner-overview-actions"><button className="secondary" onClick={() => showTab("fleet")} type="button">Review fleet</button><button className="secondary" onClick={() => showTab("deployments")} type="button">Deploy assets</button><button onClick={() => showTab("assignments")} type="button">Assign operators</button></div></div>
           </>}
-          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
+          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} multiMeterEnabled={features.multi_meter} />}
           {tab === "people" && <PeoplePanel people={people} assets={assets} apiRequest={request} reload={reload} setError={setError} />}
           {tab === "sites" && <SitesPanel sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} />}
           {tab === "deployments" && <DeploymentsPanel assets={assets} sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} />}
           {tab === "assignments" && <AssignmentsPanel assets={assets} people={people} apiRequest={request} reload={reload} setError={setError} />}
           {tab === "reports" && <OwnerOperations accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} />}
           {tab === "templates" && <ReportTemplates apiRequest={request} setError={setError} />}
+          {tab === "maintenance" && <MaintenanceModule accessToken={session?.access_token ?? ""} apiRequest={request} assets={assets} sites={sites} multiMeterEnabled={features.multi_meter} />}
+          {tab === "documents" && <DocumentsModule accessToken={session?.access_token ?? ""} apiRequest={request} assets={assets} sites={sites} />}
+          {tab === "telematics" && <TelematicsModule accessToken={session?.access_token ?? ""} apiRequest={request} assets={assets} sites={sites} />}
+          {tab === "fuel" && <FuelModule accessToken={session?.access_token ?? ""} apiRequest={request} assets={assets} sites={sites} />}
+          {tab === "workforce" && <WorkforceModule accessToken={session?.access_token ?? ""} apiRequest={request} attendanceLocationEnabled={features.attendance_location} people={people} />}
         </div>}
       </section>
     </div>

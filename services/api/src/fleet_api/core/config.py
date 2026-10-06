@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     pre_session_ttl_seconds: int = 300
     refresh_token_ttl_seconds: int = 2_592_000
     pilot_driver_phone: str | None = Field(default=None, repr=False)
+    # Dormant future modules. These remain false in every environment unless an
+    # operator explicitly enables an individual module.
+    maintenance_enabled: bool = False
+    asset_documents_enabled: bool = False
+    notifications_enabled: bool = False
+    telematics_enabled: bool = False
+    fuel_integrations_enabled: bool = False
+    toll_expenses_enabled: bool = False
+    multi_meter_enabled: bool = False
+    payroll_enabled: bool = False
+    attendance_location_enabled: bool = False
+    asset_document_allowed_mime_types: str = "image/jpeg,image/png,image/webp,application/pdf"
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":
@@ -181,6 +193,14 @@ class Settings(BaseSettings):
         return {
             mime.strip().lower()
             for mime in self.evidence_allowed_mime_types.split(",")
+            if mime.strip()
+        }
+
+    @property
+    def asset_document_mime_types(self) -> set[str]:
+        return {
+            mime.strip().lower()
+            for mime in self.asset_document_allowed_mime_types.split(",")
             if mime.strip()
         }
 
