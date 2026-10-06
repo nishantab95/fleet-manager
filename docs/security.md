@@ -222,9 +222,12 @@ Tokens and OTP values are never written to handover audit records.
 - The server requires both the asset and target Site to be active. PostgreSQL
   uniqueness and exclusion constraints protect the one-current, non-overlapping
   deployment invariant during concurrent requests.
-- Move and remove operations lock the current relationship and reject active
-  Assignments or duties. Site and asset deactivation require explicit removal,
-  preventing a hidden live placement.
+- Move and removal operations lock and recheck the deployment, Assignment, and
+  duty state. Active duty is always blocked. An off-duty Assignment is ended
+  with the old deployment; a move creates a Site-consistent replacement only
+  when the Owner explicitly keeps the Driver. A preview token detects stale
+  browser state. Site and asset deactivation cannot leave a hidden live
+  placement.
 - Supervisor asset lists require existing same-company Site access and expose
   only active assets currently deployed to that Site. Driver sessions cannot
   call Owner deployment mutations.

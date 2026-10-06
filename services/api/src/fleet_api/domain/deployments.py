@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
@@ -47,6 +48,20 @@ class DeployedAssetView:
     pending_review_count: int
 
 
+RemovalDutyStatus = Literal["UNASSIGNED", "OFF_DUTY", "ON_DUTY"]
+
+
+@dataclass(frozen=True)
+class DeploymentRemovalPlan:
+    asset: FleetAsset
+    deployment: AssetSiteDeployment
+    site: Site
+    assignment: Assignment | None
+    driver_membership_id: UUID | None
+    driver_name: str | None
+    duty_status: RemovalDutyStatus
+
+
 def _effective_assignment_clause(
     now: datetime,
 ) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
@@ -88,9 +103,7 @@ def ensure_deployment_for_assignment(
     )
     if overlap is not None:
         if overlap.site_id != site_id:
-            raise ConflictError(
-                "Driver assignment site must match the asset's current deployment."
-            )
+            raise ConflictError("Driver assignment site must match the asset's current deployment.")
         return overlap
     deployment = AssetSiteDeployment(
         company_id=company_id,
@@ -239,9 +252,7 @@ class OwnerDeploymentService:
             raise NotFoundError("site was not found")
         return site
 
-    def _current(
-        self, asset_id: UUID, *, lock: bool = False
-    ) -> AssetSiteDeployment | None:
+    def _current(self, asset_id: UUID, *, lock: bool = False) -> AssetSiteDeployment | None:
         query = select(AssetSiteDeployment).where(
             AssetSiteDeployment.company_id == self.company_id,
             AssetSiteDeployment.asset_id == asset_id,
@@ -250,6 +261,102 @@ class OwnerDeploymentService:
         if lock:
             query = query.with_for_update()
         return self.session.scalar(query)
+
+    def _active_assignment(
+        self, asset_id: UUID, *, at: datetime, lock: bool = False
+    ) -> Assignment | None:
+        query = (
+            select(Assignment)
+            .where(
+                Assignment.company_id == self.company_id,
+                Assignment.asset_id == asset_id,
+                *_effective_assignment_clause(at),
+            )
+            .order_by(Assignment.starts_at.desc(), Assignment.id.desc())
+            .limit(1)
+        )
+        if lock:
+            query = query.with_for_update()
+        return self.session.scalar(query)
+
+    def _active_duty(self, asset_id: UUID, *, lock: bool = False) -> DutySession | None:
+        query = (
+            select(DutySession)
+            .where(
+                DutySession.company_id == self.company_id,
+                DutySession.asset_id == asset_id,
+                DutySession.status == DutySessionStatus.ACTIVE,
+            )
+            .order_by(DutySession.started_at.desc(), DutySession.id.desc())
+            .limit(1)
+        )
+        if lock:
+            query = query.with_for_update()
+        return self.session.scalar(query)
+
+    def _driver_name(self, assignment: Assignment) -> str:
+        row = self.session.execute(
+            select(CompanyMembership, User)
+            .join(User, User.id == CompanyMembership.user_id)
+            .where(
+                CompanyMembership.company_id == self.company_id,
+                CompanyMembership.id == assignment.driver_membership_id,
+            )
+        ).first()
+        if row is None:
+            raise ConflictError("The active assignment is incomplete.")
+        membership, user = row._tuple()
+        return membership.display_name or user.display_name
+
+    def _removal_plan(self, asset_id: UUID, *, lock: bool) -> DeploymentRemovalPlan:
+        asset = self._asset(asset_id, lock=lock)
+        deployment = self._current(asset.id, lock=lock)
+        if deployment is None:
+            raise ConflictError("Asset is not currently deployed to a site.")
+        site = self._site(deployment.site_id)
+        assignment = self._active_assignment(asset.id, at=datetime.now(UTC), lock=lock)
+        if assignment is not None and (
+            assignment.asset_site_deployment_id != deployment.id
+            or assignment.site_id != deployment.site_id
+        ):
+            raise ConflictError("The active assignment does not match the deployment.")
+        active_duty = self._active_duty(asset.id, lock=lock)
+        operator_assignment = assignment
+        if active_duty is not None and (
+            operator_assignment is None or operator_assignment.id != active_duty.assignment_id
+        ):
+            operator_assignment_query = select(Assignment).where(
+                Assignment.company_id == self.company_id,
+                Assignment.id == active_duty.assignment_id,
+                Assignment.asset_id == asset.id,
+            )
+            if lock:
+                operator_assignment_query = operator_assignment_query.with_for_update()
+            operator_assignment = self.session.scalar(operator_assignment_query)
+            if operator_assignment is None:
+                raise ConflictError("The active duty assignment is incomplete.")
+        duty_status: RemovalDutyStatus = (
+            "ON_DUTY"
+            if active_duty is not None
+            else "UNASSIGNED"
+            if assignment is None
+            else "OFF_DUTY"
+        )
+        return DeploymentRemovalPlan(
+            asset=asset,
+            deployment=deployment,
+            site=site,
+            assignment=assignment,
+            driver_membership_id=(
+                operator_assignment.driver_membership_id
+                if operator_assignment is not None
+                else None
+            ),
+            driver_name=(
+                self._driver_name(operator_assignment) if operator_assignment is not None else None
+            ),
+            duty_status=duty_status,
+        )
 
     def current(self, asset_id: UUID) -> DeploymentView | None:
         self._asset(asset_id)
@@ -282,10 +389,11 @@ class OwnerDeploymentService:
 
     def site_assets(self, site_id: UUID) -> list[DeployedAssetView]:
         site = self._site(site_id)
-        views = list_current_site_assets(
-            self.session, company_id=self.company_id, site_id=site_id
-        )
+        views = list_current_site_assets(self.session, company_id=self.company_id, site_id=site_id)
         return [replace(view, site_name=site.short_name) for view in views]
+
+    def removal_plan(self, asset_id: UUID) -> DeploymentRemovalPlan:
+        return self._removal_plan(asset_id, lock=False)
 
     def _ensure_no_operational_dependency(self, asset_id: UUID, action: str) -> None:
         active_duty = self.session.scalar(
@@ -298,9 +406,7 @@ class OwnerDeploymentService:
             .limit(1)
         )
         if active_duty is not None:
-            raise ConflictError(
-                f"Asset cannot be {action} while an active duty is in progress."
-            )
+            raise ConflictError(f"Asset cannot be {action} while an active duty is in progress.")
         now = datetime.now(UTC)
         active_assignment = self.session.scalar(
             select(Assignment.id)
@@ -312,9 +418,7 @@ class OwnerDeploymentService:
             .limit(1)
         )
         if active_assignment is not None:
-            raise ConflictError(
-                f"Asset cannot be {action} while a Driver is actively assigned."
-            )
+            raise ConflictError(f"Asset cannot be {action} while a Driver is actively assigned.")
 
     def _audit(
         self,
@@ -387,19 +491,53 @@ class OwnerDeploymentService:
         )
         return DeploymentView(deployment, site)
 
-    def remove(self, asset_id: UUID) -> DeploymentView:
-        asset = self._asset(asset_id, lock=True)
-        current = self._current(asset.id, lock=True)
-        if current is None:
-            raise ConflictError("Asset is not currently deployed to a site.")
-        self._ensure_no_operational_dependency(asset.id, "removed")
-        site = self._site(current.site_id)
-        current.ends_at = datetime.now(UTC)
+    def remove(
+        self,
+        asset_id: UUID,
+        *,
+        expected_deployment_id: UUID,
+        expected_assignment_id: UUID | None,
+        expected_duty_status: RemovalDutyStatus,
+    ) -> DeploymentView:
+        plan = self._removal_plan(asset_id, lock=True)
+        actual_assignment_id = plan.assignment.id if plan.assignment is not None else None
+        if (
+            plan.deployment.id != expected_deployment_id
+            or actual_assignment_id != expected_assignment_id
+            or plan.duty_status != expected_duty_status
+        ):
+            raise ConflictError("The asset state changed. Refresh and try again.")
+        if plan.duty_status == "ON_DUTY":
+            raise ConflictError(
+                "The active duty session must be resolved before the Site deployment "
+                "can be removed."
+            )
+        now = datetime.now(UTC)
+        if plan.assignment is not None:
+            plan.assignment.ends_at = now
+        plan.deployment.ends_at = now
         self.session.flush()
+        if plan.assignment is not None:
+            write_audit_log(
+                self.session,
+                company_id=self.company_id,
+                actor_membership_id=self.actor_membership_id,
+                action="DRIVER_UNASSIGNED_FROM_ASSET",
+                entity_type="FLEET_ASSET",
+                entity_id=plan.asset.id,
+                old_values={
+                    "assignment_id": str(plan.assignment.id),
+                    "driver_membership_id": str(plan.assignment.driver_membership_id),
+                    "site_id": str(plan.assignment.site_id),
+                    "asset_site_deployment_id": str(plan.assignment.asset_site_deployment_id),
+                },
+                new_values=None,
+                request_id=self.request_id,
+            )
         self._audit(
             action="ASSET_REMOVED_FROM_SITE",
-            asset_id=asset.id,
-            old_site_id=site.id,
+            asset_id=plan.asset.id,
+            old_site_id=plan.site.id,
             new_site_id=None,
         )
-        return DeploymentView(current, site)
+        return DeploymentView(plan.deployment, plan.site)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { pcRoleLabEnabled } from "../../lib/auth/config";
 import type { OwnerAsset, OwnerPerson, OwnerSite } from "../../lib/types";
 import { useAuth } from "../auth/AuthProvider";
@@ -75,6 +75,9 @@ export function OwnerWorkspace() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [pageVisible, setPageVisible] = useState(true);
   const [sidebarPinned, setSidebarPinned] = useState(false);
+  const [sidebarHovered, setSidebarHovered] = useState(false);
+  const [sidebarKeyboardFocused, setSidebarKeyboardFocused] = useState(false);
+  const sidebarPointerFocus = useRef(false);
 
   const reload = useCallback(async () => {
     setError("");
@@ -127,6 +130,14 @@ export function OwnerWorkspace() {
     };
   }, [assets, people]);
 
+  const sidebarExpanded = sidebarPinned || sidebarHovered || sidebarKeyboardFocused;
+
+  const handleSidebarBlur = (event: FocusEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setSidebarKeyboardFocused(false);
+    }
+  };
+
   const showTab = (nextTab: Tab) => {
     setError("");
     setTab(nextTab);
@@ -152,8 +163,8 @@ export function OwnerWorkspace() {
       </div>
     </header>
 
-    <div className="owner-layout" data-sidebar-pinned={sidebarPinned ? "true" : "false"}>
-      <nav aria-label="Owner sections" className="owner-sidebar">
+    <div className="owner-layout" data-sidebar-expanded={sidebarExpanded ? "true" : "false"} data-sidebar-pinned={sidebarPinned ? "true" : "false"}>
+      <nav aria-label="Owner sections" className="owner-sidebar" onBlur={handleSidebarBlur} onFocus={() => { if (!sidebarPointerFocus.current) setSidebarKeyboardFocused(true); sidebarPointerFocus.current = false; }} onKeyDown={() => { sidebarPointerFocus.current = false; setSidebarKeyboardFocused(true); }} onMouseDown={() => { sidebarPointerFocus.current = true; setSidebarKeyboardFocused(false); }} onMouseEnter={() => setSidebarHovered(true)} onMouseLeave={() => setSidebarHovered(false)}>
         <button aria-label={sidebarPinned ? "Unpin sidebar" : "Pin sidebar"} aria-pressed={sidebarPinned} className="owner-sidebar-pin" onClick={toggleSidebarPin} type="button">
           <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24"><path d="m9 4 6 0 1 6 3 3H5l3-3 1-6Zm3 9v8" /></svg>
           <span>{sidebarPinned ? "Unpin sidebar" : "Pin sidebar"}</span>
@@ -172,10 +183,10 @@ export function OwnerWorkspace() {
             <div aria-label="Quick operations" className="owner-overview-shortcuts" role="group"><span>Quick operations</span><div className="owner-overview-actions"><button className="secondary" onClick={() => showTab("fleet")} type="button">Review fleet</button><button className="secondary" onClick={() => showTab("deployments")} type="button">Deploy assets</button><button onClick={() => showTab("assignments")} type="button">Assign operators</button></div></div>
           </>}
           {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
-          {tab === "people" && <PeoplePanel people={people} assets={assets} apiRequest={request} reload={reload} setError={setError} />}
-          {tab === "sites" && <SitesPanel sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} />}
-          {tab === "deployments" && <DeploymentsPanel assets={assets} sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} />}
-          {tab === "assignments" && <AssignmentsPanel assets={assets} people={people} apiRequest={request} reload={reload} setError={setError} />}
+          {tab === "people" && <PeoplePanel people={people} assets={assets} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
+          {tab === "sites" && <SitesPanel sites={sites} people={people} assets={assets} apiRequest={request} reload={reload} setError={setError} />}
+          {tab === "deployments" && <DeploymentsPanel assets={assets} sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} onViewAssignments={() => showTab("assignments")} />}
+          {tab === "assignments" && <AssignmentsPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
           {tab === "reports" && <OwnerOperations accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} />}
           {tab === "templates" && <ReportTemplates apiRequest={request} setError={setError} />}
         </div>}

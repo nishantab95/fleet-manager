@@ -129,10 +129,7 @@ def _assignment_query(
             .join(
                 SupervisorSiteAccess,
                 (SupervisorSiteAccess.company_id == CompanyMembership.company_id)
-                & (
-                    SupervisorSiteAccess.supervisor_membership_id
-                    == CompanyMembership.id
-                ),
+                & (SupervisorSiteAccess.supervisor_membership_id == CompanyMembership.id),
             )
             .join(User, User.id == CompanyMembership.user_id)
             .where(
@@ -301,9 +298,7 @@ def _validate_odometer_reading(settings: Settings, reading_value: Decimal | str)
     return value
 
 
-def _validate_hour_meter_reading(
-    settings: Settings, reading_value: Decimal | str
-) -> Decimal:
+def _validate_hour_meter_reading(settings: Settings, reading_value: Decimal | str) -> Decimal:
     try:
         value = reading_value if isinstance(reading_value, Decimal) else Decimal(reading_value)
     except (InvalidOperation, ValueError):
@@ -348,6 +343,7 @@ def _assignment_at_event(
     context: AuthContext,
     device_created_at: datetime,
     settings: Settings,
+    lock: bool = False,
 ) -> Assignment:
     _require_driver(context)
     if device_created_at.tzinfo is None:
@@ -355,7 +351,7 @@ def _assignment_at_event(
     now = utc_now()
     if device_created_at > now + timedelta(seconds=settings.event_future_skew_seconds):
         raise DomainError("device_created_at is too far in the future")
-    assignment = session.scalar(
+    statement = (
         select(Assignment)
         .where(
             Assignment.company_id == context.company.id,
@@ -365,6 +361,9 @@ def _assignment_at_event(
         )
         .order_by(Assignment.starts_at.desc(), Assignment.id)
     )
+    if lock:
+        statement = statement.with_for_update()
+    assignment = session.scalar(statement)
     if assignment is None:
         raise AssignmentNotEffectiveError("event timestamp has no driver assignment")
     return assignment
@@ -384,10 +383,12 @@ def register_device(
     if not clean_identifier or len(clean_identifier) > 200:
         raise DomainError("installation_identifier is invalid")
     device = session.scalar(
-        select(Device).where(
+        select(Device)
+        .where(
             Device.company_id == context.company.id,
             Device.installation_identifier == clean_identifier,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     if device is None:
         device = Device(
@@ -419,9 +420,7 @@ def register_device(
         if device.membership_id is None:
             raise TenantConsistencyError("device has no current driver binding")
         if not allow_handover:
-            raise DeviceHandoverRequiredError(
-                current_membership_id=device.membership_id
-            )
+            raise DeviceHandoverRequiredError(current_membership_id=device.membership_id)
         if not local_state_clear:
             raise DeviceHandoverBlockedError(
                 "This phone still has an active duty or unsynced records for another "
@@ -516,11 +515,17 @@ def create_driver_event(
     description: str | None = None,
     object_reference: str | None = None,
 ) -> DriverEventResult:
+    duty_start = (
+        event_type in {OperationalEventType.KM_READING, OperationalEventType.HMR_READING}
+        and reading_type is not None
+        and reading_type.value == KmReadingType.START_READING.value
+    )
     assignment = _assignment_at_event(
         session,
         context=context,
         device_created_at=device_created_at,
         settings=settings,
+        lock=duty_start,
     )
     asset = session.get(FleetAsset, assignment.asset_id)
     if asset is None or asset.company_id != context.company.id:
@@ -596,8 +601,7 @@ def create_driver_event(
         context=context,
         client_event_uuid=client_event_uuid,
         object_reference=object_reference,
-        required=event_type
-        in {OperationalEventType.KM_READING, OperationalEventType.HMR_READING},
+        required=event_type in {OperationalEventType.KM_READING, OperationalEventType.HMR_READING},
     )
     if event_type in {OperationalEventType.TRIP_COMPLETE, OperationalEventType.DIESEL}:
         active_duty = _require_active_duty(

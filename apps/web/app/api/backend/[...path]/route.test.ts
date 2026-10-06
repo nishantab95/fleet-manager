@@ -37,6 +37,32 @@ describe("Fleet API same-origin proxy", () => {
     expect((fetchMock.mock.calls[0]![1]!.headers as Headers).get("content-type")).toContain("multipart/form-data");
   });
 
+  it("forwards deployment removal preview with the asset identifier and exact operation route", async () => {
+    process.env.FLEET_API_UPSTREAM_URL = "https://fleet.test";
+    const fetchMock = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return Response.json({ action: "REMOVE_DEPLOYMENT", can_execute: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const request = new NextRequest("http://localhost:3000/api/backend/api/v1/owner/operations/preview", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "REMOVE_DEPLOYMENT", asset_id: "asset-deployed" }),
+    });
+
+    const response = await proxyFleetRequest(
+      request,
+      context(["api", "v1", "owner", "operations", "preview"]),
+    );
+
+    expect(response.status).toBe(200);
+    const [url, options] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe("https://fleet.test/api/v1/owner/operations/preview");
+    expect(new TextDecoder().decode(options!.body as ArrayBuffer)).toBe(
+      '{"action":"REMOVE_DEPLOYMENT","asset_id":"asset-deployed"}',
+    );
+  });
+
   it("rejects paths outside the Fleet API allow-list", async () => {
     const response = await proxyFleetRequest(new NextRequest("http://localhost:3000/api/backend/private"), context(["private"]));
     expect(response.status).toBe(404);

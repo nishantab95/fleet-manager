@@ -10,11 +10,14 @@ from fleet_api.api.dependencies import get_owner_deployment_service
 from fleet_api.api.schemas import (
     AssetDeploymentRequest,
     AssetSiteDeploymentResponse,
+    DeploymentRemovalPlanResponse,
+    DeploymentRemovalRequest,
     SiteDeployedAssetResponse,
 )
 from fleet_api.db.session import get_db
 from fleet_api.domain.deployments import (
     DeployedAssetView,
+    DeploymentRemovalPlan,
     DeploymentView,
     OwnerDeploymentService,
 )
@@ -69,6 +72,23 @@ def _asset_response(view: DeployedAssetView) -> SiteDeployedAssetResponse:
         driver_name=view.driver_name,
         duty_status=view.duty_status,
         pending_review_count=view.pending_review_count,
+    )
+
+
+def _removal_plan_response(plan: DeploymentRemovalPlan) -> DeploymentRemovalPlanResponse:
+    assignment = plan.assignment
+    return DeploymentRemovalPlanResponse(
+        asset_id=plan.asset.id,
+        asset_code=plan.asset.asset_code,
+        registration_number=plan.asset.registration_number,
+        short_name=plan.asset.short_name,
+        deployment_id=plan.deployment.id,
+        site_id=plan.site.id,
+        site_name=plan.site.short_name,
+        assignment_id=assignment.id if assignment is not None else None,
+        driver_membership_id=plan.driver_membership_id,
+        driver_name=plan.driver_name,
+        duty_status=plan.duty_status,
     )
 
 
@@ -128,15 +148,35 @@ def deploy_asset(
 )
 def remove_asset_deployment(
     asset_id: UUID,
+    payload: DeploymentRemovalRequest,
     service: OwnerDeploymentService = Depends(get_owner_deployment_service),
     db: Session = Depends(get_db),
 ) -> AssetSiteDeploymentResponse:
     try:
-        view = service.remove(asset_id)
+        view = service.remove(
+            asset_id,
+            expected_deployment_id=payload.expected_deployment_id,
+            expected_assignment_id=payload.expected_assignment_id,
+            expected_duty_status=payload.expected_duty_status,
+        )
         db.commit()
         return _deployment_response(view)
     except DomainError as exc:
         _fail(db, exc)
+
+
+@router.get(
+    "/assets/{asset_id}/deployment-removal",
+    response_model=DeploymentRemovalPlanResponse,
+)
+def deployment_removal_plan(
+    asset_id: UUID,
+    service: OwnerDeploymentService = Depends(get_owner_deployment_service),
+) -> DeploymentRemovalPlanResponse:
+    try:
+        return _removal_plan_response(service.removal_plan(asset_id))
+    except DomainError as exc:
+        _fail(service.session, exc)
 
 
 @router.get(

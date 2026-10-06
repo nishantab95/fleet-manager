@@ -45,10 +45,10 @@ identifier. Status-based deactivation preserves assignment and event history.
 Composite `(company_id, asset_id)` foreign keys retain the database tenant
 boundary.
 
-`AssetCapabilities` is the single workflow capability map. Phase 1A enables
-the existing trip, odometer, diesel, emergency, and duty capabilities only for
-`TIPPER`; future machinery types are declared but have no Driver workflow.
-Ownership is descriptive and does not change tipper operations.
+`AssetCapabilities` is the single workflow capability map. `TIPPER` uses trip
+and odometer capture; `EXCAVATOR`, `BACKHOE_LOADER`, `ROLLER`, and `GRADER` use
+hour-meter capture. All current Pilot types support duty, diesel, and emergency
+operations. Ownership is descriptive and does not change operations.
 
 The public 1.0.4 contract remains intentionally tipper-shaped. Existing
 `/tippers` routes, report routes, workbook layout, and fields such as
@@ -340,16 +340,20 @@ or report rows.
 The Owner deployment service exposes current placement, history, deploy/move,
 remove, and Site asset-list operations. Company scope comes only from the
 authenticated Owner membership. Initial deployment selects only an active Site;
-Driver and Supervisor selection remain separate. Moving or removing an asset is
-blocked while an effective Assignment or active duty exists, and an effective
-Assignment can be created only when its Site agrees with the deployment.
+Driver and Supervisor selection remain separate. Active duty blocks a move or
+removal. An off-duty Assignment may be ended with removal or reconciled during a
+move by the Owner relationship orchestrator, and an effective Assignment can be
+created only when its Site agrees with the deployment.
 
 Owner Fleet cards and detail views show Site and Driver independently. Owner
-Site detail provides the alternate Site-first deployment flow. Supervisor Site
-views read the same relationship, so every active deployed asset is visible to
-an authorized Supervisor even when it has no Driver and no events. Event review
-and Driver reporting remain Assignment-based and retain their existing totals
-and behavior.
+Site detail provides the alternate Site-first deployment flow. A direct
+deployment mutation remains conservative, while the Owner relationship
+orchestrator may reconcile an off-duty Assignment and deployment in one
+transaction. Active duty always blocks move and removal. Supervisor Site views
+read the same relationship, so every active deployed asset is visible to an
+authorized Supervisor even when it has no Driver and no events. Event review and
+Driver reporting remain Assignment-based and retain their existing totals and
+behavior.
 
 ## Phase 1B.2C Driver / Operator assignment boundary
 
@@ -369,3 +373,28 @@ Driver current-assignment responses expose every active Site supervisor. Owner
 People views expose a Driver's current asset and Site. Reports continue to join
 events through their historical Assignment and use a compatibility label for
 new rows that have no legacy supervisor value.
+
+## Owner relationship orchestration boundary
+
+`OwnerOperationPlanner` is the shared application service for contextual Owner
+changes launched from People, Fleet, Deployments, Assignments, and Sites. The
+browser submits a business intent and explicit resolution choices to
+`/api/v1/owner/operations/preview`; the service reloads the company-scoped
+membership, asset, deployment, assignment, duty, Site, and Supervisor-access
+state and returns business-language dependencies, blockers, and planned changes.
+The UI does not provide authoritative relationship state.
+
+Every preview includes a SHA-256 state token over the normalized intent and the
+scoped authoritative rows. Execute repeats the preview with row locks and rejects
+a changed token with `409 State changed. Review the operation again.` before any
+mutation. The route commits once after the complete operation. A failure rolls
+back activation, access, deployment, assignment, lifecycle, and audit writes as
+one unit.
+
+The planner can activate or deactivate Driver and Supervisor memberships,
+reconcile Supervisor Site access, deploy, move, remove, or deactivate assets,
+assign or change Drivers, end assignments, and deactivate or reactivate Sites
+with optional setup. It ends effective-dated rows and creates replacements when
+Site context changes; it never rewrites historical Site or Driver attribution.
+Active duty is an explicit blocker and is never ended or synthesized by an Owner
+operation.

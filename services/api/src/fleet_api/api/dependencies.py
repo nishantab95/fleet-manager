@@ -29,6 +29,7 @@ from fleet_api.domain.errors import (
     TenantConsistencyError,
 )
 from fleet_api.domain.owner_assets import OwnerAssetService
+from fleet_api.domain.owner_operations import OwnerOperationPlanner
 from fleet_api.domain.owner_people_sites import OwnerPeopleSiteService
 from fleet_api.domain.report_templates import ReportTemplateService
 from fleet_api.storage.objects import ObjectStorage, build_object_storage
@@ -182,6 +183,18 @@ def get_owner_people_site_service(
         context,
         request_id=request.headers.get("x-request-id"),
         phone_default_region=settings.phone_default_region,
+    )
+
+
+def get_owner_operation_planner(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> OwnerOperationPlanner:
+    return OwnerOperationPlanner(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
     )
 
 

@@ -1,8 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { WebRequest } from "../../lib/api/client";
-import type { OwnerAsset, OwnerPerson, OwnerSite } from "../../lib/types";
+import { ApiError, type WebRequest } from "../../lib/api/client";
+import type {
+  OwnerAsset,
+  OwnerOperationAction,
+  OwnerOperationIntent,
+  OwnerOperationPlan,
+  OwnerPerson,
+  OwnerSite,
+} from "../../lib/types";
 import { AssignmentsPanel, DeploymentsPanel, FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
 
 const siteOne: OwnerSite = {
@@ -122,6 +129,45 @@ const assignedTipper: OwnerAsset = {
   },
 };
 
+function operationPlan(
+  action: OwnerOperationAction,
+  overrides: Partial<OwnerOperationPlan> = {},
+): OwnerOperationPlan {
+  return {
+    action,
+    state_token: "a".repeat(64),
+    title: action === "REMOVE_DEPLOYMENT" ? "Remove Big digger from Site" : "Review operation",
+    summary: "Review the current state before making changes.",
+    current_state: [{ kind: "ASSET", id: deployedMachine.id, label: "Big digger", status: "ACTIVE", details: {} }],
+    dependencies: [{ kind: "DEPLOYMENT", id: "deployment-1", label: "Quarry", status: "ACTIVE", details: { site_id: siteOne.id } }],
+    warnings: [],
+    allowed_resolutions: [],
+    blocked_reasons: [],
+    planned_changes: ["Preserve operational history"],
+    can_execute: true,
+    ...overrides,
+  };
+}
+
+function operationApi(
+  preview: (intent: OwnerOperationIntent) => OwnerOperationPlan,
+  executeError?: Error,
+) {
+  return vi.fn((path: string, options?: RequestInit) => {
+    const body = options?.body ? JSON.parse(options.body as string) as OwnerOperationIntent : null;
+    if (path.endsWith("/preview") && body) return Promise.resolve(preview(body));
+    if (path.endsWith("/execute") && body) {
+      if (executeError) return Promise.reject(executeError);
+      return Promise.resolve({
+        action: body.action,
+        completed_changes: preview(body).planned_changes,
+        message: "Operation completed successfully.",
+      });
+    }
+    return Promise.resolve({});
+  });
+}
+
 afterEach(cleanup);
 
 function common(apiRequest = vi.fn().mockResolvedValue({})) {
@@ -177,7 +223,17 @@ describe("Owner operations tables", () => {
   });
 
   it("shows only undeployed assets in the deploy selector and manages deployed assets in a table", async () => {
-    const apiRequest = vi.fn().mockResolvedValue({});
+    const apiRequest = operationApi((intent) => operationPlan("MOVE_DEPLOYMENT", {
+      title: "Move Big digger",
+      summary: intent.target_site_id ? "Move the asset to Yard without rewriting history." : "Choose a destination while preserving history.",
+      dependencies: [
+        { kind: "DEPLOYMENT", id: "deployment-1", label: "Quarry", status: "ACTIVE", details: { site_id: siteOne.id } },
+        ...(intent.target_site_id ? [{ kind: "TARGET_SITE", id: siteTwo.id, label: "Yard", status: "ACTIVE", details: {} }] : []),
+      ],
+      blocked_reasons: intent.target_site_id ? [] : ["Choose a destination Site."],
+      planned_changes: intent.target_site_id ? ["End Big digger deployment from Quarry", "Deploy Big digger to Yard"] : [],
+      can_execute: Boolean(intent.target_site_id),
+    }));
     const props = common(apiRequest);
     render(<DeploymentsPanel assets={[deployedMachine, undeployedGrader]} sites={[siteOne, siteTwo]} people={[]} {...props} />);
 
@@ -189,14 +245,177 @@ describe("Owner operations tables", () => {
     expect(screen.getByRole("columnheader", { name: /Deployment date/ })).toHaveAttribute("aria-sort", "ascending");
 
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
-    const destination = screen.getByLabelText("Move destination site");
+    const dialog = await screen.findByRole("dialog", { name: "Move Big digger" });
+    expect(within(dialog).getAllByText("Current state")).toHaveLength(2);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    const destination = within(dialog).getByLabelText("Destination Site");
     expect(within(destination).queryByRole("option", { name: "Quarry" })).not.toBeInTheDocument();
     expect(within(destination).getByRole("option", { name: "Yard" })).toBeInTheDocument();
     fireEvent.change(destination, { target: { value: "site-2" } });
-    expect(screen.getByText("Move Big digger from Quarry to Yard?")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Move asset" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
+    await within(dialog).findByText("Deploy Big digger to Yard");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move asset" }));
 
-    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("/api/v1/owner/assets/asset-deployed/deployment", expect.objectContaining({ method: "POST", body: JSON.stringify({ site_id: "site-2" }) })));
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
+      "/api/v1/owner/operations/execute",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    const executeCall = apiRequest.mock.calls.find(([path]) => path.endsWith("/execute"));
+    expect(JSON.parse(executeCall?.[1]?.body as string)).toEqual(expect.objectContaining({
+      action: "MOVE_DEPLOYMENT",
+      asset_id: deployedMachine.id,
+      target_site_id: siteTwo.id,
+      state_token: "a".repeat(64),
+    }));
+  });
+
+  it("shows a relationship-aware simple removal wizard", async () => {
+    const apiRequest = operationApi(() => operationPlan("REMOVE_DEPLOYMENT", {
+      planned_changes: ["Remove Big digger from Quarry", "Preserve deployment and operational history"],
+    }));
+    render(<DeploymentsPanel assets={[deployedMachine]} sites={[siteOne]} people={[]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove Big digger from Site" });
+    expect(dialog).toHaveTextContent("Big digger");
+    expect(dialog).toHaveTextContent("Quarry");
+    const progress = within(dialog).getByRole("list", { name: "Operation progress" });
+    expect(progress).toHaveTextContent("Current state");
+    expect(progress).toHaveTextContent("Choose changes");
+    expect(progress).toHaveTextContent("Review");
+    expect(progress).toHaveTextContent("Result");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(within(dialog).getByRole("button", { name: "Remove asset from Site" })).toBeEnabled();
+  });
+
+  it("shows cascading assignment and deployment changes before removal", async () => {
+    const apiRequest = operationApi(() => operationPlan("REMOVE_DEPLOYMENT", {
+      title: "Remove BENZ-1 from Site",
+      current_state: [{ kind: "ASSET", id: assignedTipper.id, label: "BENZ-1", status: "ACTIVE", details: {} }],
+      dependencies: [
+        { kind: "DEPLOYMENT", id: "deployment-1", label: "Quarry", status: "ACTIVE", details: { site_id: siteOne.id } },
+        { kind: "ASSIGNMENT", id: "assignment-1", label: "Operator Active", status: "OFF_DUTY", details: { asset_id: assignedTipper.id } },
+      ],
+      planned_changes: ["End Operator Active's assignment to BENZ-1", "Remove BENZ-1 from Quarry", "Preserve operational history"],
+    }));
+    render(<DeploymentsPanel assets={[assignedTipper]} sites={[siteOne]} people={[activeDriver]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove BENZ-1 from Site" });
+    expect(dialog).toHaveTextContent("Operator Active");
+    expect(dialog).toHaveTextContent("OFF DUTY");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(dialog).toHaveTextContent("End Operator Active's assignment to BENZ-1");
+    expect(dialog).toHaveTextContent("Remove BENZ-1 from Quarry");
+  });
+
+  it("executes removal with the reviewed state token and refreshes Owner data", async () => {
+    const apiRequest = operationApi(() => operationPlan("REMOVE_DEPLOYMENT", {
+      planned_changes: ["Remove Big digger from Quarry"],
+    }));
+    const props = common(apiRequest);
+    render(<DeploymentsPanel assets={[deployedMachine]} sites={[siteOne]} people={[]} {...props} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove Big digger from Site" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove asset from Site" }));
+
+    await waitFor(() => expect(props.reload).toHaveBeenCalledOnce());
+    const executeCall = apiRequest.mock.calls.find(([path]) => path.endsWith("/execute"));
+    expect(JSON.parse(executeCall?.[1]?.body as string)).toEqual(expect.objectContaining({
+      action: "REMOVE_DEPLOYMENT",
+      asset_id: deployedMachine.id,
+      state_token: "a".repeat(64),
+    }));
+    expect(await within(dialog).findByText("Operation completed successfully.")).toBeInTheDocument();
+  });
+
+  it("blocks active-duty removal and offers the active assignment", async () => {
+    const apiRequest = operationApi(() => operationPlan("REMOVE_DEPLOYMENT", {
+      title: "Remove BENZ-1 from Site",
+      current_state: [{ kind: "ASSET", id: assignedTipper.id, label: "BENZ-1", status: "ACTIVE", details: {} }],
+      dependencies: [
+        { kind: "ASSIGNMENT", id: "assignment-1", label: "Operator Active", status: "ON_DUTY", details: {} },
+        { kind: "DUTY", id: "duty-1", label: "Active duty", status: "ACTIVE", details: {} },
+      ],
+      blocked_reasons: ["The active duty must be resolved before deployment can be removed."],
+      can_execute: false,
+    }));
+    const onViewAssignments = vi.fn();
+    render(<DeploymentsPanel assets={[assignedTipper]} sites={[siteOne]} people={[{ ...activeDriver, has_active_duty: true }]} onViewAssignments={onViewAssignments} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove BENZ-1 from Site" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("The active duty must be resolved");
+    expect(within(dialog).getByRole("button", { name: "Remove asset from Site" })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "View active assignment / duty" }));
+    expect(onViewAssignments).toHaveBeenCalledOnce();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels deployment removal without sending a mutation", async () => {
+    const apiRequest = operationApi(() => operationPlan("REMOVE_DEPLOYMENT"));
+    const props = common(apiRequest);
+    render(<DeploymentsPanel assets={[deployedMachine]} sites={[siteOne]} people={[]} {...props} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove Big digger from Site" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog", { name: "Remove Big digger from Site" })).not.toBeInTheDocument();
+    expect(apiRequest.mock.calls.some(([path]) => path.endsWith("/execute"))).toBe(false);
+    expect(props.reload).not.toHaveBeenCalled();
+  });
+
+  it("explains a stale backend without exposing raw Not Found and can retry", async () => {
+    const apiRequest = operationApi(() => operationPlan("REMOVE_DEPLOYMENT"));
+    apiRequest.mockRejectedValueOnce(new ApiError(404, "Not Found"));
+    render(<DeploymentsPanel assets={[deployedMachine]} sites={[siteOne]} people={[]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove asset from Site" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Server update required");
+    expect(dialog).toHaveTextContent("This management action is not supported by the currently running Fleet Manager server. Update the Fleet Manager server and try again.");
+    expect(within(dialog).queryByText("Not Found")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Close" })).toBeEnabled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Continue" })).toBeEnabled());
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes a missing business record from an unavailable route", async () => {
+    const apiRequest = operationApi(() => operationPlan("REMOVE_DEPLOYMENT"));
+    apiRequest.mockRejectedValueOnce(new ApiError(404, "Asset was not found", "NOT_FOUND"));
+    render(<DeploymentsPanel assets={[deployedMachine]} sites={[siteOne]} people={[]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove asset from Site" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Record unavailable");
+    expect(dialog).toHaveTextContent("This record no longer exists or its state changed. Refresh and try again.");
+    expect(dialog).not.toHaveTextContent("Server update required");
+    expect(dialog).not.toHaveTextContent("Asset was not found");
+    expect(within(dialog).queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the wizard safe and displays a stale-state conflict", async () => {
+    const apiRequest = operationApi(
+      () => operationPlan("REMOVE_DEPLOYMENT"),
+      new Error("State changed. Review the operation again."),
+    );
+    render(<DeploymentsPanel assets={[deployedMachine]} sites={[siteOne]} people={[]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove deployment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove Big digger from Site" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove asset from Site" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("State changed. Review the operation again.");
+    expect(within(dialog).getByRole("button", { name: "Review again" })).toBeEnabled();
+    expect(screen.getByRole("dialog", { name: "Remove Big digger from Site" })).toBeInTheDocument();
   });
 
   it("shows invited lifecycle meaning in the People table", () => {
@@ -221,7 +440,7 @@ describe("Owner operations tables", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sort by Role(s)" }));
     expect(screen.getByRole("columnheader", { name: /Role\(s\)/ })).toHaveAttribute("aria-sort", "ascending");
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage roles" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage person" }));
     const dialog = screen.getByRole("dialog", { name: "Manage Operator Active" });
     expect(within(dialog).getByText("Sole Owner protection is enforced by the server.")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Add Supervisor" }));
@@ -232,30 +451,57 @@ describe("Owner operations tables", () => {
     }));
   });
 
-  it("loads and assigns an INVITED Driver / Operator to a deployed rented machine", async () => {
-    const apiRequest = vi.fn((path: string) => path.endsWith("eligible-drivers")
-      ? Promise.resolve([{ membership_id: invitedDriver.membership_id, display_name: invitedDriver.display_name, phone: invitedDriver.phone, status: "INVITED" }])
-      : Promise.resolve({}));
+  it("reviews and assigns an INVITED Driver / Operator to a deployed rented machine", async () => {
+    const apiRequest = operationApi(() => operationPlan("ASSIGN_DRIVER", {
+      title: "Assign Operator Invited",
+      dependencies: [
+        { kind: "DEPLOYMENT", id: "deployment-1", label: "Quarry", status: "ACTIVE", details: { site_id: siteOne.id } },
+        { kind: "DRIVER", id: invitedDriver.membership_id, label: invitedDriver.display_name, status: "INVITED", details: {} },
+      ],
+      planned_changes: ["Assign Operator Invited to Big digger at Quarry"],
+    }));
     const props = common(apiRequest);
-    render(<AssignmentsPanel assets={[deployedMachine, undeployedGrader, assignedTipper]} people={[invitedDriver, activeDriver]} {...props} />);
+    render(<AssignmentsPanel assets={[deployedMachine, undeployedGrader, assignedTipper]} people={[invitedDriver, activeDriver]} sites={[siteOne]} {...props} />);
 
-    const assetSelect = screen.getByLabelText("Deployed asset");
+    const assetSelect = screen.getByLabelText("Assignment asset");
     expect(within(assetSelect).getByRole("option", { name: /Big digger/ })).toBeInTheDocument();
-    expect(within(assetSelect).queryByRole("option", { name: /Road grader/ })).not.toBeInTheDocument();
+    expect(within(assetSelect).getByRole("option", { name: /Road grader.*Undeployed/ })).toBeInTheDocument();
     expect(within(assetSelect).queryByRole("option", { name: /BENZ-1/ })).not.toBeInTheDocument();
 
     fireEvent.change(assetSelect, { target: { value: "asset-deployed" } });
-    const candidate = await screen.findByRole("option", { name: "Operator Invited · +919100000001 · INVITED" });
+    const candidate = screen.getByRole("option", { name: "Operator Invited · +919100000001 · INVITED" });
     fireEvent.change(screen.getByLabelText("Driver / Operator"), { target: { value: candidate.getAttribute("value") } });
-    fireEvent.click(screen.getByRole("button", { name: "Assign driver" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review assignment" }));
 
-    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("/api/v1/owner/assets/asset-deployed/assignment", expect.objectContaining({ method: "POST", body: JSON.stringify({ driver_membership_id: "driver-invited", regular_duty_minutes: 600 }) })));
+    const dialog = await screen.findByRole("dialog", { name: "Assign Operator Invited" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
+    await within(dialog).findByText("Assign Operator Invited to Big digger at Quarry");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Assign Driver / Operator" }));
+
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
+      "/api/v1/owner/operations/execute",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    const executeCall = apiRequest.mock.calls.find(([path]) => path.endsWith("/execute"));
+    expect(JSON.parse(executeCall?.[1]?.body as string)).toEqual(expect.objectContaining({
+      action: "ASSIGN_DRIVER",
+      asset_id: deployedMachine.id,
+      driver_membership_id: invitedDriver.membership_id,
+      site_id: siteOne.id,
+      regular_duty_minutes: 600,
+    }));
   });
 
-  it("renders current assignment details and requires confirmation before unassigning", async () => {
-    const apiRequest = vi.fn().mockResolvedValue({});
+  it("renders current assignment details and reviews ending the relationship", async () => {
+    const apiRequest = operationApi(() => operationPlan("END_ASSIGNMENT", {
+      title: "End Operator Active assignment",
+      current_state: [{ kind: "ASSET", id: assignedTipper.id, label: "BENZ-1", status: "ACTIVE", details: {} }],
+      dependencies: [{ kind: "ASSIGNMENT", id: "assignment-1", label: "Operator Active", status: "OFF_DUTY", details: {} }],
+      planned_changes: ["End Operator Active's assignment to BENZ-1"],
+    }));
     const props = common(apiRequest);
-    render(<AssignmentsPanel assets={[assignedTipper]} people={[{ ...activeDriver, current_asset_id: assignedTipper.id, current_asset_code: assignedTipper.asset_code, current_site_id: "site-1", current_site_name: "Quarry", has_active_assignment: true }]} {...props} />);
+    render(<AssignmentsPanel assets={[assignedTipper]} people={[{ ...activeDriver, current_asset_id: assignedTipper.id, current_asset_code: assignedTipper.asset_code, current_site_id: "site-1", current_site_name: "Quarry", has_active_assignment: true }]} sites={[siteOne]} {...props} />);
 
     const table = screen.getByRole("table", { name: "Current assignments" });
     fireEvent.click(screen.getByRole("button", { name: "Sort by Phone" }));
@@ -263,10 +509,47 @@ describe("Owner operations tables", () => {
     expect(table).toHaveTextContent("BENZ-1");
     expect(table).toHaveTextContent("+919100000002");
     expect(table).toHaveTextContent("10 hours");
-    fireEvent.click(screen.getByRole("button", { name: "Unassign" }));
-    expect(screen.getByRole("dialog", { name: "Unassign Driver / Operator" })).toHaveTextContent("Operator Active");
-    expect(apiRequest).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog", { name: "Unassign Driver / Operator" })).getByRole("button", { name: "Unassign" }));
-    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("/api/v1/owner/assets/asset-assigned/assignment", { method: "DELETE" }));
+    fireEvent.click(screen.getByRole("button", { name: "End assignment" }));
+    const dialog = await screen.findByRole("dialog", { name: "End Operator Active assignment" });
+    expect(dialog).toHaveTextContent("Operator Active");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "End assignment" }));
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
+      "/api/v1/owner/operations/execute",
+      expect.objectContaining({ method: "POST" }),
+    ));
+  });
+
+  it("changes a Driver / Operator through the shared relationship wizard", async () => {
+    const apiRequest = operationApi((intent) => operationPlan("REASSIGN_DRIVER", {
+      title: "Change Driver / Operator on BENZ-1",
+      current_state: [{ kind: "ASSET", id: assignedTipper.id, label: "BENZ-1", status: "ACTIVE", details: {} }],
+      dependencies: [
+        { kind: "DEPLOYMENT", id: "deployment-1", label: "Quarry", status: "ACTIVE", details: {} },
+        { kind: "ASSIGNMENT", id: "assignment-1", label: "Operator Active", status: "OFF_DUTY", details: { driver_membership_id: activeDriver.membership_id } },
+        ...(intent.driver_membership_id ? [{ kind: "REPLACEMENT_DRIVER", id: invitedDriver.membership_id, label: "Operator Invited", status: "INVITED", details: {} }] : []),
+      ],
+      blocked_reasons: intent.driver_membership_id ? [] : ["Choose a new Driver / Operator."],
+      planned_changes: intent.driver_membership_id ? ["End Operator Active's assignment to BENZ-1", "Assign Operator Invited to BENZ-1 at Quarry"] : ["End Operator Active's assignment to BENZ-1"],
+      can_execute: Boolean(intent.driver_membership_id),
+    }));
+    render(<AssignmentsPanel assets={[assignedTipper]} people={[activeDriver, invitedDriver]} sites={[siteOne]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Change Driver / Operator" }));
+    const dialog = await screen.findByRole("dialog", { name: "Change Driver / Operator on BENZ-1" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    const replacement = within(dialog).getByLabelText("Replacement Driver / Operator");
+    expect(within(replacement).queryByRole("option", { name: /Operator Active/ })).not.toBeInTheDocument();
+    fireEvent.change(replacement, { target: { value: invitedDriver.membership_id } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
+    await within(dialog).findByText("Assign Operator Invited to BENZ-1 at Quarry");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change Driver / Operator" }));
+
+    const executeCall = await waitFor(() => apiRequest.mock.calls.find(([path]) => path.endsWith("/execute")));
+    expect(JSON.parse(executeCall?.[1]?.body as string)).toEqual(expect.objectContaining({
+      action: "REASSIGN_DRIVER",
+      asset_id: assignedTipper.id,
+      driver_membership_id: invitedDriver.membership_id,
+    }));
   });
 });

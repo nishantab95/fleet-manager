@@ -187,10 +187,13 @@ append-only and requires an owner reason.
 31. Deployment and Assignment are independent relationships. An active asset
     may be deployed without a Driver or Supervisor, but any effective Assignment
     must use the same Site as the asset's deployment.
-32. Only active assets may be deployed to active Sites. A move or removal is
-    rejected while the asset has an effective Assignment or active duty, and a
-    Site or asset with a current deployment must be explicitly cleared before
-    deactivation.
+32. Only active assets may be deployed to active Sites. The Owner orchestrator
+    moves an off-duty assigned asset by ending the old Deployment and Assignment,
+    then optionally creating Site-consistent replacement rows; it never rewrites
+    the old Site. Removing a deployment with an off-duty effective Assignment
+    atomically ends both relationships at the same timestamp. Active duty blocks
+    move, removal, and lifecycle teardown. Assignment and deployment rows remain
+    historical records.
 33. Supervisor Site asset visibility is derived from current deployment and
     `SupervisorSiteAccess`, not from event existence. Authorized Supervisors see
     active deployed assets with nullable Driver/duty data; unauthorized Sites

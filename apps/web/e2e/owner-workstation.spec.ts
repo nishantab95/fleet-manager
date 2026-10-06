@@ -129,9 +129,35 @@ const sites = [
   },
 ];
 
-async function mockOwnerApi(page: Page) {
+async function mockOwnerApi(page: Page, options: { ownerOperationsAvailable?: boolean } = {}) {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/owner/operations/preview") && options.ownerOperationsAvailable === false) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Not Found" }),
+      });
+      return;
+    }
+    const intent = path.endsWith("/owner/operations/preview")
+      ? route.request().postDataJSON() as { action: string; asset_id?: string; target_site_id?: string }
+      : null;
+    const operationPlan = intent ? {
+      action: intent.action,
+      state_token: "a".repeat(64),
+      title: intent.action === "MOVE_DEPLOYMENT" ? "Move North Excavator" : "End Ravi Kumar's assignment",
+      summary: "Review the authoritative current relationships.",
+      current_state: [{ kind: "ASSET", id: intent.asset_id, label: intent.action === "MOVE_DEPLOYMENT" ? "North Excavator" : "Green Tipper", status: "ACTIVE", details: {} }],
+      dependencies: intent.action === "MOVE_DEPLOYMENT"
+        ? [{ kind: "DEPLOYMENT", id: "deployment-2", label: "North Pit", status: "ACTIVE", details: { site_id: "site-1" } }]
+        : [{ kind: "ASSIGNMENT", id: "assignment-1", label: "Ravi Kumar", status: "OFF_DUTY", details: { driver_membership_id: "driver-active" } }],
+      warnings: [],
+      allowed_resolutions: intent.action === "MOVE_DEPLOYMENT" ? ["MOVE"] : ["END_ASSIGNMENT"],
+      blocked_reasons: intent.action === "MOVE_DEPLOYMENT" && !intent.target_site_id ? ["Choose a destination Site."] : [],
+      planned_changes: intent.action === "MOVE_DEPLOYMENT" && intent.target_site_id ? ["Move North Excavator to River Yard"] : ["End Ravi Kumar's assignment to Green Tipper"],
+      can_execute: intent.action !== "MOVE_DEPLOYMENT" || Boolean(intent.target_site_id),
+    } : null;
     const body = path.endsWith("/auth/web-refresh")
       ? { access_token: "owner-test-token", expires_in: 3600, membership_id: "owner-membership", company_id: "company-1", role: "OWNER_ADMIN" }
       : path.endsWith("/auth/me")
@@ -142,6 +168,8 @@ async function mockOwnerApi(page: Page) {
             ? people
             : path.endsWith("/owner/sites")
               ? sites
+              : operationPlan
+                ? operationPlan
               : path.endsWith("/owner/assets/asset-unassigned/eligible-drivers")
                 ? [{ membership_id: "driver-invited", display_name: "Asha Singh", phone: "+919900000002", status: "INVITED" }]
                 : [];
@@ -149,8 +177,8 @@ async function mockOwnerApi(page: Page) {
   });
 }
 
-async function openOwner(page: Page) {
-  await mockOwnerApi(page);
+async function openOwner(page: Page, options: { ownerOperationsAvailable?: boolean } = {}) {
+  await mockOwnerApi(page, options);
   await page.goto("/owner");
   await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
   await expect(page.getByLabel("Live fleet readiness")).toBeVisible();
@@ -195,21 +223,23 @@ test.describe("mocked Owner workstation", () => {
     await deploymentRow.getByRole("button", { name: "Move", exact: true }).click();
     const moveDialog = page.getByRole("dialog", { name: "Move North Excavator" });
     await expect(moveDialog).toBeVisible();
-    await expect(moveDialog.getByLabel("Move destination site").locator('option[value="site-1"]')).toHaveCount(0);
-    await expect(moveDialog.getByLabel("Move destination site").locator('option[value="site-2"]')).toContainText("River Yard");
-    await moveDialog.getByRole("button", { name: "Cancel" }).click();
+    await moveDialog.getByRole("button", { name: "Continue" }).click();
+    await expect(moveDialog.getByLabel("Destination Site").locator('option[value="site-1"]')).toHaveCount(0);
+    await expect(moveDialog.getByLabel("Destination Site").locator('option[value="site-2"]')).toContainText("River Yard");
+    await moveDialog.getByRole("button", { name: "Close operation" }).click();
 
     await page.getByRole("button", { name: "Assignments", exact: true }).click();
-    await page.getByLabel("Deployed asset").selectOption("asset-unassigned");
+    await page.getByLabel("Assignment asset").selectOption("asset-unassigned");
     const candidate = page.getByLabel("Driver / Operator").locator('option[value="driver-invited"]');
     await expect(candidate).toContainText("Asha Singh · +919900000002 · INVITED");
     const assignmentRow = page.getByRole("table", { name: "Current assignments" }).getByRole("row").filter({ hasText: "Green Tipper" });
     await expect(assignmentRow).toContainText("Ravi Kumar");
     await expect(assignmentRow).toContainText("+919900000001");
     await expect(assignmentRow).toContainText("10 hours");
-    await assignmentRow.getByRole("button", { name: "Unassign" }).click();
-    await expect(page.getByRole("dialog", { name: "Unassign Driver / Operator" })).toContainText("Active-duty safety rules still apply");
-    await page.getByRole("dialog", { name: "Unassign Driver / Operator" }).getByRole("button", { name: "Cancel" }).click();
+    await assignmentRow.getByRole("button", { name: "End assignment" }).click();
+    const endDialog = page.getByRole("dialog", { name: "End Ravi Kumar's assignment" });
+    await expect(endDialog).toContainText("Ravi Kumar");
+    await endDialog.getByRole("button", { name: "Cancel" }).click();
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
@@ -231,5 +261,21 @@ test.describe("mocked Owner workstation", () => {
     expect(sidebar?.width).toBeLessThanOrEqual(390);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("explains when the configured backend lacks Owner relationship operations", async ({ page }) => {
+    await openOwner(page, { ownerOperationsAvailable: false });
+
+    await page.getByRole("button", { name: "Deployments", exact: true }).click();
+    const deploymentRow = page.getByRole("table", { name: "Current deployments" }).getByRole("row").filter({ hasText: "North Excavator" });
+    await deploymentRow.getByRole("button", { name: "Remove deployment" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Remove asset from Site" });
+    await expect(dialog.getByRole("alert")).toContainText("Server update required");
+    await expect(dialog).toContainText("This management action is not supported by the currently running Fleet Manager server. Update the Fleet Manager server and try again.");
+    await expect(dialog.getByText("Not Found", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Continue" })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Retry" })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeEnabled();
   });
 });

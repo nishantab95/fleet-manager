@@ -17,6 +17,7 @@ from fleet_api.domain.enums import (
     MembershipRole,
     MembershipStatus,
     OperationalEventType,
+    OwnerOperationAction,
     SiteClosureStatus,
     SiteStatus,
     VerificationStatus,
@@ -225,6 +226,84 @@ class AssetSiteDeploymentResponse(BaseModel):
 
 class AssetDeploymentRequest(BaseModel):
     site_id: UUID
+
+
+class DeploymentRemovalRequest(BaseModel):
+    expected_deployment_id: UUID
+    expected_assignment_id: UUID | None
+    expected_duty_status: Literal["UNASSIGNED", "OFF_DUTY", "ON_DUTY"]
+
+
+class DeploymentRemovalPlanResponse(BaseModel):
+    asset_id: UUID
+    asset_code: str
+    registration_number: str | None
+    short_name: str | None
+    deployment_id: UUID
+    site_id: UUID
+    site_name: str
+    assignment_id: UUID | None
+    driver_membership_id: UUID | None
+    driver_name: str | None
+    duty_status: Literal["UNASSIGNED", "OFF_DUTY", "ON_DUTY"]
+
+
+class OwnerOperationAssetResolutionRequest(BaseModel):
+    asset_id: UUID
+    action: Literal["MOVE", "REMOVE"]
+    target_site_id: UUID | None = None
+    assignment_action: Literal["KEEP", "END"] | None = None
+
+
+class OwnerOperationRequest(BaseModel):
+    action: OwnerOperationAction
+    asset_id: UUID | None = None
+    person_membership_id: UUID | None = None
+    site_id: UUID | None = None
+    target_site_id: UUID | None = None
+    driver_membership_id: UUID | None = None
+    selected_site_ids: list[UUID] = Field(default_factory=list, max_length=200)
+    selected_supervisor_ids: list[UUID] = Field(default_factory=list, max_length=200)
+    selected_asset_ids: list[UUID] = Field(default_factory=list, max_length=500)
+    asset_resolutions: list[OwnerOperationAssetResolutionRequest] = Field(
+        default_factory=list,
+        max_length=500,
+    )
+    assignment_action: Literal["KEEP", "END"] | None = None
+    activate_membership: bool = False
+    regular_duty_minutes: int = Field(default=600, ge=1, le=1440)
+
+
+class OwnerOperationExecuteRequest(OwnerOperationRequest):
+    state_token: str = Field(min_length=64, max_length=64)
+
+
+class OwnerOperationItemResponse(BaseModel):
+    kind: str
+    id: UUID
+    label: str
+    status: str
+    details: dict[str, str | int | bool | None] = Field(default_factory=dict)
+
+
+class OwnerOperationPlanResponse(BaseModel):
+    action: OwnerOperationAction
+    state_token: str
+    title: str
+    summary: str
+    current_state: list[OwnerOperationItemResponse]
+    dependencies: list[OwnerOperationItemResponse]
+    warnings: list[str]
+    allowed_resolutions: list[str]
+    blocked_reasons: list[str]
+    planned_changes: list[str]
+    can_execute: bool
+
+
+class OwnerOperationResultResponse(BaseModel):
+    action: OwnerOperationAction
+    completed_changes: list[str]
+    message: str
 
 
 class SiteDeployedAssetResponse(BaseModel):

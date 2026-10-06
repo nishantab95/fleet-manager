@@ -68,12 +68,25 @@ for (const role of roles) {
           await sidebar.hover();
           await expect(sidebar).toHaveCSS("width", "224px");
           await expect(page.getByRole("button", { name: "Fleet", exact: true })).toHaveAttribute("title", "Fleet");
+          await page.getByRole("button", { name: "Deployments", exact: true }).click();
+          await page.mouse.move(viewport - 20, 400);
+          await expect(page.locator(".owner-layout")).toHaveAttribute("data-sidebar-expanded", "false");
+          await expect(sidebar).toHaveCSS("width", "64px");
+          await expect(page.getByRole("button", { name: "Deployments", exact: true })).toHaveAttribute("aria-current", "page");
+
+          await sidebar.hover();
           await page.getByRole("button", { name: "Pin sidebar" }).click();
+          await page.getByRole("button", { name: "Assignments", exact: true }).click();
           await page.mouse.move(viewport - 20, 400);
           await expect(page.locator(".owner-layout")).toHaveAttribute("data-sidebar-pinned", "true");
           await expect(sidebar).toHaveCSS("width", "224px");
+          await expect(page.getByRole("button", { name: "Assignments", exact: true })).toHaveAttribute("aria-current", "page");
+          await page.getByRole("button", { name: "Unpin sidebar" }).click();
+          await page.mouse.move(viewport - 20, 400);
+          await expect(page.locator(".owner-layout")).toHaveAttribute("data-sidebar-expanded", "false");
+          await expect(sidebar).toHaveCSS("width", "64px");
           await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
-          await expect(page.getByLabel("Live fleet readiness")).toBeVisible();
+          await expect(page.getByRole("heading", { name: "Assignments" })).toBeVisible();
         }
 
         if (role.name === "supervisor") {

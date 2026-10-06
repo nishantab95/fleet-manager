@@ -36,6 +36,78 @@ export type SupervisorAccess = { id: string; supervisor_membership_id: string; s
 export type Assignment = { id: string; driver_membership_id: string; driver_name: string; supervisor_membership_id: string; supervisor_name: string; tipper_id: string; registration_number: string; site_id: string; site_name: string; starts_at: string; ends_at: string | null; regular_duty_minutes: number };
 
 export type AssetSiteDeployment = { id: string; asset_id: string; site_id: string; site_name: string; starts_at: string; ends_at: string | null };
+export type DeploymentRemovalPlan = {
+  asset_id: string;
+  asset_code: string;
+  registration_number: string | null;
+  short_name: string | null;
+  deployment_id: string;
+  site_id: string;
+  site_name: string;
+  assignment_id: string | null;
+  driver_membership_id: string | null;
+  driver_name: string | null;
+  duty_status: "UNASSIGNED" | "OFF_DUTY" | "ON_DUTY";
+};
+export type OwnerOperationAction =
+  | "ACTIVATE_PERSON"
+  | "SET_SUPERVISOR_SITES"
+  | "DEACTIVATE_PERSON"
+  | "DEPLOY_ASSET"
+  | "MOVE_DEPLOYMENT"
+  | "REMOVE_DEPLOYMENT"
+  | "ASSIGN_DRIVER"
+  | "REASSIGN_DRIVER"
+  | "END_ASSIGNMENT"
+  | "DEACTIVATE_ASSET"
+  | "DEACTIVATE_SITE"
+  | "REACTIVATE_SITE";
+export type OwnerOperationAssetResolution = {
+  asset_id: string;
+  action: "MOVE" | "REMOVE";
+  target_site_id?: string | null;
+  assignment_action?: "KEEP" | "END" | null;
+};
+export type OwnerOperationIntent = {
+  action: OwnerOperationAction;
+  asset_id?: string | null;
+  person_membership_id?: string | null;
+  site_id?: string | null;
+  target_site_id?: string | null;
+  driver_membership_id?: string | null;
+  selected_site_ids?: string[];
+  selected_supervisor_ids?: string[];
+  selected_asset_ids?: string[];
+  asset_resolutions?: OwnerOperationAssetResolution[];
+  assignment_action?: "KEEP" | "END" | null;
+  activate_membership?: boolean;
+  regular_duty_minutes?: number;
+};
+export type OwnerOperationItem = {
+  kind: string;
+  id: string;
+  label: string;
+  status: string;
+  details: Record<string, string | number | boolean | null>;
+};
+export type OwnerOperationPlan = {
+  action: OwnerOperationAction;
+  state_token: string;
+  title: string;
+  summary: string;
+  current_state: OwnerOperationItem[];
+  dependencies: OwnerOperationItem[];
+  warnings: string[];
+  allowed_resolutions: string[];
+  blocked_reasons: string[];
+  planned_changes: string[];
+  can_execute: boolean;
+};
+export type OwnerOperationResult = {
+  action: OwnerOperationAction;
+  completed_changes: string[];
+  message: string;
+};
 export type OwnerAssetAssignment = {
   assignment_id: string;
   site_id: string;

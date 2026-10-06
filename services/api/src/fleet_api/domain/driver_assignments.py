@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -112,9 +112,7 @@ class DriverAssetAssignmentService:
             raise ConflictError("Asset must be deployed to an active Site before assignment.")
         if self.context.membership.role == MembershipRole.SUPERVISOR:
             try:
-                ensure_supervisor_site_access(
-                    self.session, self.context, site_id=site.id
-                )
+                ensure_supervisor_site_access(self.session, self.context, site_id=site.id)
             except DomainError as exc:
                 raise TenantConsistencyError(
                     "supervisor is not authorized for the asset's Site"
@@ -144,25 +142,35 @@ class DriverAssetAssignmentService:
             raise ConflictError("Driver / Operator must be invited or active before assignment.")
         return DriverCandidate(membership, user)
 
-    def _current_for_asset(
-        self, asset_id: UUID, *, lock: bool = False
-    ) -> Assignment | None:
-        statement = select(Assignment).where(
-            Assignment.company_id == self.company_id,
-            Assignment.asset_id == asset_id,
-            Assignment.ends_at.is_(None),
+    def _current_for_asset(self, asset_id: UUID, *, lock: bool = False) -> Assignment | None:
+        now = datetime.now(UTC)
+        statement = (
+            select(Assignment)
+            .where(
+                Assignment.company_id == self.company_id,
+                Assignment.asset_id == asset_id,
+                Assignment.starts_at <= now,
+                or_(Assignment.ends_at.is_(None), Assignment.ends_at > now),
+            )
+            .order_by(Assignment.starts_at.desc(), Assignment.id.desc())
+            .limit(1)
         )
         if lock:
             statement = statement.with_for_update()
         return self.session.scalar(statement)
 
-    def _current_for_driver(
-        self, membership_id: UUID, *, lock: bool = False
-    ) -> Assignment | None:
-        statement = select(Assignment).where(
-            Assignment.company_id == self.company_id,
-            Assignment.driver_membership_id == membership_id,
-            Assignment.ends_at.is_(None),
+    def _current_for_driver(self, membership_id: UUID, *, lock: bool = False) -> Assignment | None:
+        now = datetime.now(UTC)
+        statement = (
+            select(Assignment)
+            .where(
+                Assignment.company_id == self.company_id,
+                Assignment.driver_membership_id == membership_id,
+                Assignment.starts_at <= now,
+                or_(Assignment.ends_at.is_(None), Assignment.ends_at > now),
+            )
+            .order_by(Assignment.starts_at.desc(), Assignment.id.desc())
+            .limit(1)
         )
         if lock:
             statement = statement.with_for_update()
@@ -170,27 +178,18 @@ class DriverAssetAssignmentService:
 
     def _view(self, assignment: Assignment) -> DriverAssetAssignmentView:
         asset = self.session.get(FleetAsset, assignment.asset_id)
-        deployment = self.session.get(
-            AssetSiteDeployment, assignment.asset_site_deployment_id
-        )
+        deployment = self.session.get(AssetSiteDeployment, assignment.asset_site_deployment_id)
         site = self.session.get(Site, assignment.site_id)
-        membership = self.session.get(
-            CompanyMembership, assignment.driver_membership_id
-        )
+        membership = self.session.get(CompanyMembership, assignment.driver_membership_id)
         driver = self.session.get(User, membership.user_id) if membership else None
-        if any(
-            value is None
-            for value in (asset, deployment, site, membership, driver)
-        ):
+        if any(value is None for value in (asset, deployment, site, membership, driver)):
             raise TenantConsistencyError("assignment references are incomplete")
         assert asset is not None
         assert deployment is not None
         assert site is not None
         assert membership is not None
         assert driver is not None
-        return DriverAssetAssignmentView(
-            assignment, asset, deployment, site, membership, driver
-        )
+        return DriverAssetAssignmentView(assignment, asset, deployment, site, membership, driver)
 
     def current(self, asset_id: UUID) -> DriverAssetAssignmentView | None:
         self._asset(asset_id)
@@ -224,12 +223,12 @@ class DriverAssetAssignmentService:
         if asset.status != FleetAssetStatus.ACTIVE:
             raise ConflictError("Only an active asset can receive a Driver / Operator.")
         if not capabilities_for(asset.asset_type).supports_duty_session:
-            raise ConflictError(
-                "This asset type is not supported by the current Driver workflow."
-            )
+            raise ConflictError("This asset type is not supported by the current Driver workflow.")
+        now = datetime.now(UTC)
         assigned_driver_ids = select(Assignment.driver_membership_id).where(
             Assignment.company_id == self.company_id,
-            Assignment.ends_at.is_(None),
+            Assignment.starts_at <= now,
+            or_(Assignment.ends_at.is_(None), Assignment.ends_at > now),
         )
         rows = self.session.execute(
             select(CompanyMembership, User)
@@ -237,9 +236,7 @@ class DriverAssetAssignmentService:
             .where(
                 CompanyMembership.company_id == self.company_id,
                 CompanyMembership.role == MembershipRole.DRIVER,
-                CompanyMembership.status.in_(
-                    (MembershipStatus.INVITED, MembershipStatus.ACTIVE)
-                ),
+                CompanyMembership.status.in_((MembershipStatus.INVITED, MembershipStatus.ACTIVE)),
                 User.status == UserStatus.ACTIVE,
                 CompanyMembership.id.not_in(assigned_driver_ids),
             )
@@ -255,9 +252,7 @@ class DriverAssetAssignmentService:
         if asset.status != FleetAssetStatus.ACTIVE:
             raise ConflictError("Only an active asset can receive a Driver / Operator.")
         if not capabilities_for(asset.asset_type).supports_duty_session:
-            raise ConflictError(
-                "This asset type is not supported by the current Driver workflow."
-            )
+            raise ConflictError("This asset type is not supported by the current Driver workflow.")
 
     def _create(
         self,
@@ -302,18 +297,14 @@ class DriverAssetAssignmentService:
             old_values = {
                 "driver_membership_id": str(old_driver_id),
                 "site_id": str(assignment.site_id),
-                "asset_site_deployment_id": str(
-                    assignment.asset_site_deployment_id
-                ),
+                "asset_site_deployment_id": str(assignment.asset_site_deployment_id),
             }
         new_values: dict[str, object] | None = None
         if new_driver_id is not None:
             new_values = {
                 "driver_membership_id": str(new_driver_id),
                 "site_id": str(assignment.site_id),
-                "asset_site_deployment_id": str(
-                    assignment.asset_site_deployment_id
-                ),
+                "asset_site_deployment_id": str(assignment.asset_site_deployment_id),
                 "assignment_id": str(assignment.id),
             }
         write_audit_log(
@@ -369,9 +360,7 @@ class DriverAssetAssignmentService:
             .limit(1)
         )
         if duty is not None:
-            raise ConflictError(
-                "Driver must end the active duty before assignment can change."
-            )
+            raise ConflictError("Driver must end the active duty before assignment can change.")
 
     def unassign(self, asset_id: UUID) -> DriverAssetAssignmentView:
         self._asset(asset_id, lock=True)
