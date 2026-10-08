@@ -13,7 +13,7 @@ import 'domain/role_models.dart';
 
 const pilotPackageName = 'com.fleetmanager.fleet_manager_mobile.pilot';
 const pilotSignerSha256 =
-    '45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196';
+    '9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520';
 
 class PilotUpdateException implements Exception {
   const PilotUpdateException(this.code, this.message);

@@ -447,7 +447,7 @@ def test_publish_pilot_apk_uses_verified_atomic_destination(
         version_name="1.2.3-pilot",
         version_code=45,
         signer_sha256=(
-            "45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196"
+            "9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520"
         ),
         apk_sha256=server_manager.sha256(source),
     )
@@ -533,7 +533,7 @@ def test_publish_rolls_back_every_active_file_on_atomic_failure(
         version_name="2.0.0-pilot",
         version_code=50,
         signer_sha256=(
-            "45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196"
+            "9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520"
         ),
         apk_sha256=server_manager.sha256(source),
     )
@@ -590,7 +590,7 @@ def test_publish_rejects_wrong_pilot_identity_before_publication(
             version_name="2.0.0",
             version_code=50,
             signer_sha256=(
-                "45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196"
+                "9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520"
             ),
             apk_sha256=server_manager.sha256(source),
         ),

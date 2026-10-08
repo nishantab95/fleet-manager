@@ -35,6 +35,13 @@ pnpm-debug.log*
 .flutter-plugins-dependencies
 build/
 
+# Android signing material and local SDK configuration
+**/*.jks
+**/*.keystore
+**/*.p12
+**/key.properties
+/apps/mobile/android/local.properties
+
 # IDE / OS
 .idea/
 .vscode/

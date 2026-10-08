@@ -4,10 +4,27 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Signing credentials are loaded from the user's Gradle configuration, never this repository.
+val pilotSigningStoreFile = providers.gradleProperty("fleetPilotStoreFile").orNull
+val pilotSigningStorePassword = providers.gradleProperty("fleetPilotStorePassword").orNull
+val pilotSigningKeyAlias = providers.gradleProperty("fleetPilotKeyAlias").orNull
+val pilotSigningKeyPassword = providers.gradleProperty("fleetPilotKeyPassword").orNull
+
 android {
     namespace = "com.fleetmanager.fleet_manager_mobile"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+
+    signingConfigs {
+        create("fleetPilotRelease") {
+            if (pilotSigningStoreFile != null) {
+                storeFile = file(pilotSigningStoreFile)
+            }
+            storePassword = pilotSigningStorePassword
+            keyAlias = pilotSigningKeyAlias
+            keyPassword = pilotSigningKeyPassword
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -53,6 +70,14 @@ android {
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+}
+
+// Keep production signing behavior unchanged; only Pilot release builds use the
+// permanent Fleet Pilot signing identity. Missing credentials never fall back to debug.
+androidComponents {
+    onVariants(selector().withFlavor("environment" to "pilot").withBuildType("release")) { variant ->
+        variant.signingConfig?.setConfig(android.signingConfigs.getByName("fleetPilotRelease"))
     }
 }
 

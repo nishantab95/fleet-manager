@@ -13,7 +13,7 @@ from pathlib import Path
 
 EXPECTED_PACKAGE = "com.fleetmanager.fleet_manager_mobile.pilot"
 EXPECTED_SIGNER_SHA256 = (
-    "45a624b2f96e2ae4e51b2e5eb19acda0e321287bf501b2a09bfdd6e207034196"
+    "9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520"
 )
 APK_PREFIX = "FleetManager-Pilot-upload-"
 APK_SUFFIX = ".apk"
@@ -124,7 +124,7 @@ def validate_expected_identity(identity: ApkIdentity) -> None:
             f"Wrong package: expected {EXPECTED_PACKAGE}, found {identity.package}"
         )
     if identity.signer_sha256 != EXPECTED_SIGNER_SHA256:
-        raise ReleaseValidationError("Wrong APK signing certificate SHA-256.")
+        raise ReleaseValidationError("SIGNING_IDENTITY_MISMATCH=YES")
 
 
 def version_text(identity: ApkIdentity, filename: str) -> str:

@@ -103,6 +103,43 @@ def _fetch_text(url: str, timeout: float = 10) -> str:
         return response.read(16 * 1024).decode("utf-8")
 
 
+def _published_version_code(dns_name: str) -> int:
+    url = f"https://{dns_name}/pilot/release.json"
+    try:
+        value = json.loads(_fetch_text(url))
+    except (OSError, urllib.error.URLError, UnicodeError, json.JSONDecodeError) as error:
+        raise SendError(
+            "Published Pilot release manifest could not be verified; refusing transfer."
+        ) from error
+    version_code = value.get("version_code") if isinstance(value, dict) else None
+    if isinstance(version_code, bool) or not isinstance(version_code, int) or version_code < 1:
+        raise SendError("Published Pilot versionCode is missing or invalid; refusing transfer.")
+    return version_code
+
+
+def _validate_build_provenance(
+    apk: Path, identity: common.ApkIdentity, commit: str
+) -> None:
+    sidecar = Path(f"{apk}.build.json")
+    try:
+        record = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SendError("Successful build provenance is missing or invalid; refusing transfer.") from error
+    expected = {
+        "package": identity.package,
+        "versionName": identity.version_name,
+        "versionCode": identity.version_code,
+        "signerSha256": identity.signer_sha256,
+        "apkSha256": identity.apk_sha256,
+        "sourceGitCommit": commit,
+    }
+    if not isinstance(record, dict) or record.get("sourceTreeClean") is not True:
+        raise SendError("Build provenance does not prove a clean source tree; refusing transfer.")
+    for key, actual in expected.items():
+        if record.get(key) != actual:
+            raise SendError(f"Build provenance mismatch for {key}; refusing transfer.")
+
+
 def _remote_file_hash(url: str) -> str:
     import hashlib
 
@@ -145,6 +182,7 @@ def send(apk: Path, target: str, timeout: int) -> int:
     commit = _git_provenance()
     identity = common.inspect_apk(apk)
     common.validate_expected_identity(identity)
+    _validate_build_provenance(apk, identity, commit)
     tailscale = _tailscale()
     dns_name = _server_dns_name(tailscale, target)
     _run(
@@ -152,6 +190,12 @@ def send(apk: Path, target: str, timeout: int) -> int:
         "Tailscale destination check",
         timeout=30,
     )
+    published_version_code = _published_version_code(dns_name)
+    if identity.version_code <= published_version_code:
+        raise SendError(
+            f"versionCode {identity.version_code} must be greater than published "
+            f"versionCode {published_version_code}."
+        )
 
     release_id = f"{identity.version_code}-{identity.apk_sha256[:16]}"
     basename = f"{common.APK_PREFIX}{release_id}"

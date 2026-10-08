@@ -108,3 +108,17 @@ These fixed OTPs are local Pilot provider behavior only. Production authenticati
   in-app updater accepts only the private Tailscale HTTPS origin.
 - The final APK was built with `flutter build apk --flavor pilot --release --build-name=1.0.0 --build-number=1 --dart-define=FLEET_PILOT=true`.
 - The app uses the existing backend authorization and report calculations; it does not calculate OT, distance, verification, or tenant access independently.
+
+## Build a Pilot APK
+
+Run `powershell.exe -ExecutionPolicy Bypass -File scripts\build-pilot-apk.ps1`
+from the repository root. The script uses the permanent signing key documented
+in [the signing backup instructions](mobile-pilot-signing-backup.md), builds
+the Pilot flavor against the private Fleet server, and verifies package,
+version, certificate fingerprint, and SHA-256 before preparing the named APK.
+It does not publish or install the APK. Keep the keystore outside Git and make
+an encrypted backup before relying on version 22 for future updates.
+
+The release sender requires the build provenance sidecar, a clean source tree,
+the pinned signing certificate, and a versionCode higher than the currently
+published release before transferring a candidate.

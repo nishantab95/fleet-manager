@@ -114,7 +114,7 @@ def test_signed_identity_rejects_wrong_package_and_signer(tmp_path: Path) -> Non
     apk.write_bytes(b"candidate")
     with pytest.raises(common.ReleaseValidationError, match="Wrong package"):
         common.validate_expected_identity(identity(apk, package="wrong.package"))
-    with pytest.raises(common.ReleaseValidationError, match="signing certificate"):
+    with pytest.raises(common.ReleaseValidationError, match="SIGNING_IDENTITY_MISMATCH=YES"):
         common.validate_expected_identity(identity(apk, signer="0" * 64))
 
 
