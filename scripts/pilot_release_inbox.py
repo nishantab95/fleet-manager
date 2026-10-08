@@ -26,13 +26,13 @@ except ImportError:  # pragma: no cover - production is Windows
     msvcrt = None  # type: ignore[assignment]
 
 
-INBOX_ROOT = Path(r"F:\FleetManagerData\releases\incoming")
+INBOX_ROOT = Path(r"D:\FleetManagerData\releases\incoming")
 ARCHIVE_DIR = INBOX_ROOT / "archive"
 REJECTED_DIR = INBOX_ROOT / "rejected"
 STAGING_DIR = INBOX_ROOT / "staging"
 STATUS_FILE = INBOX_ROOT / "publisher-status.json"
 LOCK_FILE = INBOX_ROOT / "publisher.lock"
-LOG_FILE = Path(r"F:\FleetManagerData\logs\pilot-publisher.log")
+LOG_FILE = Path(r"D:\FleetManagerData\logs\pilot-publisher.log")
 DOWNLOADS_DIR = Path.home() / "Downloads"
 TAILSCALE_EXE = server_manager.TAILSCALE_EXE
 MAX_MANIFEST_BYTES = 32 * 1024

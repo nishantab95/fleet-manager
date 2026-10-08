@@ -77,13 +77,13 @@ EVIDENCE_MANIFEST_NAME = "evidence-backup-manifest.json"
 TAILSCALE_EXE = Path(r"C:\Program Files\Tailscale\tailscale.exe")
 TAILSCALE_PROXY_TARGET = "http://127.0.0.1:8000"
 TAILSCALE_PILOT_PATH = "/pilot"
-PILOT_RELEASE_DIR = Path(r"F:\FleetManagerData\releases\pilot")
+PILOT_RELEASE_DIR = Path(r"D:\FleetManagerData\releases\pilot")
 PILOT_APK_NAME = "FleetManager-Pilot-latest.apk"
 PILOT_SHA256_NAME = "sha256.txt"
 PILOT_VERSION_NAME = "version.txt"
 PILOT_RELEASE_MANIFEST_NAME = "release.json"
 PILOT_PUBLISHER_STATUS_FILE = Path(
-    r"F:\FleetManagerData\releases\incoming\publisher-status.json"
+    r"D:\FleetManagerData\releases\incoming\publisher-status.json"
 )
 LOCAL_STATUS_KEYS = ("docker", "postgres", "evidence", "api", "health", "ready")
 DEPLOYMENT_SOURCE_PATHS = (

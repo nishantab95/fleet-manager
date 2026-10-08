@@ -27,7 +27,7 @@ DEFAULT_APK = (
     / "flutter-apk"
     / "app-pilot-release.apk"
 )
-DEFAULT_TARGET = "bilagi-g7"
+DEFAULT_TARGET = "staunch-pc-03"
 
 
 class SendError(RuntimeError):
