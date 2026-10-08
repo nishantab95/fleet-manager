@@ -20,11 +20,14 @@ const completeness = [{
   unresolved_emergency: true,
 }];
 
-function event(eventType: "TRIP_COMPLETE" | "KM_READING" | "DIESEL" | "EMERGENCY", index: number) {
+function event(eventType: "TRIP_COMPLETE" | "KM_READING" | "HMR_READING" | "DIESEL" | "EMERGENCY", index: number, captureGroupUuid: string | null = null) {
+  const isMeter = eventType === "KM_READING" || eventType === "HMR_READING";
   return {
     event_id: `event-${index}`,
     event_type: eventType,
     assignment_id: "assignment-1",
+    duty_session_id: isMeter ? "duty-session-1" : null,
+    capture_group_uuid: captureGroupUuid,
     driver_name: "Pilot Driver",
     driver_phone: "+919876543210",
     tipper_registration_number: "PILOT12",
@@ -33,8 +36,8 @@ function event(eventType: "TRIP_COMPLETE" | "KM_READING" | "DIESEL" | "EMERGENCY
     device_created_at: "2026-09-24T00:00:00Z",
     server_received_at: "2026-09-24T00:00:01Z",
     verification_status: "PENDING_VERIFICATION" as const,
-    reading_type: eventType === "KM_READING" ? (index === 5 ? "START_READING" : "END_READING") : null,
-    reading_value: eventType === "KM_READING" ? (index === 5 ? "10000.00" : "10120.00") : null,
+    reading_type: isMeter ? (index === 5 || index === 9 ? "START_READING" : "END_READING") : null,
+    reading_value: eventType === "KM_READING" ? (index === 5 ? "10000.00" : "10120.00") : eventType === "HMR_READING" ? (index === 9 ? "500.00" : "505.50") : null,
     litres: eventType === "DIESEL" ? "30.000" : null,
     emergency_category: eventType === "EMERGENCY" ? "TYRE_OR_VEHICLE_PROBLEM" : null,
     emergency_status: eventType === "EMERGENCY" ? "OPEN" : null,
@@ -45,7 +48,7 @@ function event(eventType: "TRIP_COMPLETE" | "KM_READING" | "DIESEL" | "EMERGENCY
   };
 }
 
-const events = [event("TRIP_COMPLETE", 1), event("TRIP_COMPLETE", 2), event("TRIP_COMPLETE", 3), event("TRIP_COMPLETE", 4), event("KM_READING", 5), event("KM_READING", 6), event("DIESEL", 7), event("EMERGENCY", 8)];
+const events = [event("TRIP_COMPLETE", 1), event("TRIP_COMPLETE", 2), event("TRIP_COMPLETE", 3), event("TRIP_COMPLETE", 4), event("KM_READING", 5, "capture-start"), event("KM_READING", 6, "capture-end"), event("DIESEL", 7), event("EMERGENCY", 8), event("HMR_READING", 9, "capture-start"), event("HMR_READING", 10, "capture-end")];
 
 afterEach(cleanup);
 
@@ -56,7 +59,7 @@ describe("Supervisor workspace", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Operations by tipper" })).toBeInTheDocument());
     expect(screen.getByText("Pending Trips").parentElement).toHaveTextContent("4");
-    expect(screen.getByText("Pending KM").parentElement).toHaveTextContent("2");
+    expect(screen.getByText("Pending Meters").parentElement).toHaveTextContent("2");
     expect(screen.getByText("Pending Diesel").parentElement).toHaveTextContent("1");
     expect(screen.getByText("Open Emergencies").parentElement).toHaveTextContent("1");
     expect(screen.getAllByRole("article")).toHaveLength(7);
@@ -109,8 +112,10 @@ describe("Supervisor workspace", () => {
     render(<SupervisorShell accessToken="token" error="" sites={[site]} setError={vi.fn()} onLogout={vi.fn()} apiRequest={apiRequest} />);
 
     await waitFor(() => expect(screen.getAllByText("PILOT13").length).toBeGreaterThan(1));
-    expect(screen.getByText("START KM")).toBeInTheDocument();
-    expect(screen.getByText("END KM")).toBeInTheDocument();
+    expect(screen.getByText("START READINGS")).toBeInTheDocument();
+    expect(screen.getByText("END READINGS")).toBeInTheDocument();
+    expect(screen.getByText(/KM\s+10000\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/HMR\s+500\.00/)).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { name: "DIESEL" })).toHaveLength(2);
     const secondTipperGroup = screen.getAllByText("PILOT13").at(-1)?.closest("details");
     expect(secondTipperGroup).not.toBeNull();

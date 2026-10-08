@@ -174,7 +174,7 @@ void main() {
     );
   });
 
-  testWidgets('tipper duty start and end require the matching KM reading', (
+  testWidgets('dual-meter tipper captures KM and HMR in one duty form', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1000));
@@ -190,8 +190,9 @@ void main() {
     );
     await tester.tap(find.text('START DUTY'));
     await tester.pumpAndSettle();
-    expect(find.text('START KM'), findsOneWidget);
-    expect(find.text('Kilometres'), findsOneWidget);
+    expect(find.text('START READINGS'), findsOneWidget);
+    expect(find.text('Odometer KM'), findsOneWidget);
+    expect(find.text('Hour Meter / HMR'), findsOneWidget);
     await tester.tap(find.text('CANCEL'));
     await tester.pumpAndSettle();
 
@@ -203,8 +204,9 @@ void main() {
     );
     await tester.tap(find.text('END DUTY'));
     await tester.pumpAndSettle();
-    expect(find.text('END KM'), findsOneWidget);
-    expect(find.text('Kilometres'), findsOneWidget);
+    expect(find.text('END READINGS'), findsOneWidget);
+    expect(find.text('Odometer KM'), findsOneWidget);
+    expect(find.text('Hour Meter / HMR'), findsOneWidget);
   });
 
   testWidgets('machinery duty start and end require the matching HMR', (
@@ -258,16 +260,16 @@ void main() {
     );
 
     expect(find.text('KM READING'), findsNothing);
-    expect(find.text('CORRECT START KM'), findsOneWidget);
-    await tester.tap(find.text('CORRECT START KM'));
+    expect(find.text('CORRECT START KM + HMR'), findsOneWidget);
+    await tester.tap(find.text('CORRECT START KM + HMR'));
     await tester.pumpAndSettle();
-    expect(find.text('START KM'), findsOneWidget);
+    expect(find.text('START READINGS'), findsOneWidget);
     await tester.tap(find.text('CANCEL'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('END DUTY'));
     await tester.pumpAndSettle();
-    expect(find.text('END KM'), findsOneWidget);
+    expect(find.text('END READINGS'), findsOneWidget);
     expect(find.text('Correct the rejected START KM'), findsNothing);
   });
 
@@ -404,11 +406,17 @@ void main() {
     );
     await tester.tap(find.text('START DUTY'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).last, '5676543455.81');
+    await tester.enterText(find.byType(TextField).first, '5676543455.81');
+    await tester.enterText(find.byType(TextField).last, '1250.25');
     await tester.tap(find.text('CONTINUE'));
     await tester.pump();
 
-    expect(find.text(invalidOdometerMessage), findsOneWidget);
+    expect(
+      find.text(
+        'Enter both valid readings. Neither meter is optional for this asset.',
+      ),
+      findsOneWidget,
+    );
     expect(await harness.database.pendingForSync(), isEmpty);
   });
 

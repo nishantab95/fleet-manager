@@ -105,18 +105,8 @@ class DutySession(UpdatedTimestampModel):
             "end_hmr IS NULL OR end_hmr >= 0", name="ck_duty_sessions_end_hmr_non_negative"
         ),
         CheckConstraint(
-            "(start_km IS NOT NULL AND start_hmr IS NULL) OR "
-            "(start_km IS NULL AND start_hmr IS NOT NULL)",
-            name="ck_duty_sessions_one_start_meter",
-        ),
-        CheckConstraint(
-            "NOT (end_km IS NOT NULL AND end_hmr IS NOT NULL)",
-            name="ck_duty_sessions_one_end_meter",
-        ),
-        CheckConstraint(
-            "(start_km IS NULL OR end_hmr IS NULL) AND "
-            "(start_hmr IS NULL OR end_km IS NULL)",
-            name="ck_duty_sessions_meter_type_consistent",
+            "start_km IS NOT NULL OR start_hmr IS NOT NULL",
+            name="ck_duty_sessions_start_meter_present",
         ),
         CheckConstraint(
             "configured_regular_duty_minutes > 0",

@@ -168,6 +168,49 @@ Supervisor and Owner web workspaces render those bytes in a modal, while the sta
 role-scoped evidence endpoint. Report workbooks link to that application route
 with `FLEET_WEB_PUBLIC_BASE_URL`; they never embed images or object-storage keys.
 
+## Maintenance V2 and meter-capability boundary
+
+Maintenance is an Owner/Admin module built on the canonical `FleetAsset` and
+its operational history. `fleet_api.domain.maintenance` owns template matching,
+plan materialization, due-state calculation, work-order transitions, service
+completion, and immutable maintenance history. The `/api/v1/owner/maintenance`
+routes are transport adapters and derive tenant scope from the authenticated
+Owner membership.
+
+Maintenance triggers are configured per plan item. Wheeled assets may use any
+non-empty combination of calendar date, odometer kilometres, and hour-meter
+hours. Non-wheeled/tracked assets may use date and hours, but never kilometres.
+Operational meter capabilities remain separate from those task triggers:
+`is_wheeled` classifies the asset, while `supports_odometer_km` and
+`supports_hour_meter` determine which readings the Driver must capture. A
+wheeled asset configured for both meters requires KM and HMR together at duty
+start and duty end; a tracked hour-meter asset requires HMR only. Drivers never
+enter maintenance calendar dates.
+
+Driver dual-meter capture is one logical, idempotent operation. The mobile
+client persists one compound queue record before network work, uploads each
+meter's evidence, and submits both readings to `/api/v1/driver/meter-captures`.
+The backend validates the exact asset capability set and stores the meter events
+under one `capture_group_uuid` in one transaction. Supervisor review and alert
+counts group those rows as one capture card, while reporting and maintenance
+retain the individual typed readings.
+
+Maintenance templates are versioned setup data. Applying a template copies
+compatible task definitions into an asset-owned plan; later template changes do
+not rewrite that plan. Specific manufacturer/model/year matches are preferred
+deterministically, a generic template may provide descriptive starter tasks,
+and no invented OEM interval is supplied. Copying another asset's plan copies
+only compatible task definitions and resets all service baselines; it never
+copies maintenance history. Work-order completion records decimal costs,
+optional notes and references, supplied meter baselines, and the calendar
+completion date in an immutable history row.
+
+Migrations `0019_asset_meters` and `0020_maintenance_v2` add the independent
+asset capabilities, grouped meter captures, templates, plans, criteria, work
+orders, history, and attachment metadata. Historical Pilot tippers are safely
+backfilled as wheeled KM assets and historical machinery as HMR assets, so an
+upgrade does not suddenly demand a second reading from existing assignments.
+
 ## Tenant boundary
 
 `Company` is the tenancy root. Company-owned rows carry a non-null

@@ -15,7 +15,7 @@ from fleet_api.db.models import (
     Site,
     SupervisorSiteAccess,
 )
-from fleet_api.domain.assets import capabilities_for
+from fleet_api.domain.assets import capabilities_for_asset
 from fleet_api.domain.deployments import ensure_deployment_for_assignment
 from fleet_api.domain.enums import MembershipRole
 from fleet_api.domain.errors import (
@@ -96,7 +96,7 @@ def create_assignment(
     asset = _require_owned_record(
         session, company_id=company_id, record_id=asset_id, model=FleetAsset
     )
-    if not capabilities_for(asset.asset_type).supports_duty_session:
+    if not capabilities_for_asset(asset).supports_duty_session:
         raise DomainError("asset type does not support the current duty workflow")
     _require_owned_record(session, company_id=company_id, record_id=site_id, model=Site)
 

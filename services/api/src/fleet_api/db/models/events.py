@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
@@ -43,6 +44,7 @@ class OperationalEvent(UpdatedTimestampModel):
         ForeignKey("duty_sessions.id", ondelete="SET NULL"), nullable=True, index=True
     )
     client_event_uuid: Mapped[UUID] = mapped_column(nullable=False)
+    capture_group_uuid: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     device_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     device_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     server_received_at: Mapped[datetime] = mapped_column(
@@ -79,6 +81,14 @@ class OperationalEvent(UpdatedTimestampModel):
             "server_received_at",
         ),
         Index("ix_events_assignment_time", "assignment_id", "device_created_at"),
+        Index(
+            "uq_events_company_capture_group_type",
+            "company_id",
+            "capture_group_uuid",
+            "event_type",
+            unique=True,
+            postgresql_where=text("capture_group_uuid IS NOT NULL"),
+        ),
     )
 
 
@@ -121,11 +131,11 @@ class HourMeterReading(Base):
     object_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     __table_args__ = (
-        CheckConstraint(
-            "reading_value >= 0", name="ck_hour_meter_readings_non_negative"
-        ),
+        CheckConstraint("reading_value >= 0", name="ck_hour_meter_readings_non_negative"),
         Index("ix_hour_meter_readings_type", "reading_type"),
     )
+
+
 class DieselEvent(Base):
     __tablename__ = "diesel_events"
 

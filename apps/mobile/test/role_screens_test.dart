@@ -80,7 +80,8 @@ void main() {
       await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
       await tester.pumpAndSettle();
       expect(find.text('Meter readings'), findsOneWidget);
-      expect(find.text('START ODOMETER · 10000 KM'), findsOneWidget);
+      expect(find.text('START READINGS'), findsOneWidget);
+      expect(find.text('KM       10000'), findsOneWidget);
       expect(find.text('APPROVE'), findsOneWidget);
       await tester.tap(find.text('APPROVE'));
       await tester.pumpAndSettle();
@@ -90,7 +91,8 @@ void main() {
       expect(find.text('PENDING 0'), findsOneWidget);
       await tester.tap(find.text('HISTORY'));
       await tester.pumpAndSettle();
-      expect(find.text('START ODOMETER · 10000 KM'), findsOneWidget);
+      expect(find.text('START READINGS'), findsOneWidget);
+      expect(find.text('KM       10000'), findsOneWidget);
       expect(find.text('APPROVED'), findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
@@ -286,10 +288,10 @@ void main() {
     await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
     await tester.pumpAndSettle();
     expect(find.text('Meter readings'), findsOneWidget);
-    expect(find.text('START ODOMETER · 10000 KM'), findsOneWidget);
-    expect(find.text('END ODOMETER · 10120 KM'), findsOneWidget);
-    expect(find.text('START HMR · 3240.50 hours'), findsOneWidget);
-    expect(find.text('END HMR · 3248 hours'), findsOneWidget);
+    expect(find.text('KM       10000'), findsOneWidget);
+    expect(find.text('KM       10120'), findsOneWidget);
+    expect(find.text('HMR      3240.50'), findsOneWidget);
+    expect(find.text('HMR      3248'), findsOneWidget);
     expect(find.textContaining('Trip Complete'), findsNothing);
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -339,7 +341,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('HISTORY'));
       await tester.pumpAndSettle();
-      expect(find.text(scenario.$2), findsOneWidget);
+      expect(
+        scenario.$1 == 'supervisor-tile-meter'
+            ? find.textContaining(scenario.$2)
+            : find.text(scenario.$2),
+        findsOneWidget,
+      );
       for (final excluded in scenario.$3) {
         expect(find.text(excluded), findsNothing);
       }
@@ -475,7 +482,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('supervisor-tile-meter')));
     await tester.pumpAndSettle();
-    expect(find.text('START ODOMETER · 777 KM'), findsOneWidget);
+    expect(find.text('START READINGS'), findsOneWidget);
+    expect(find.text('KM       777'), findsOneWidget);
     expect(find.text('Trip Complete'), findsNothing);
 
     await tester.pageBack();
@@ -736,6 +744,8 @@ class _FakeRoleApi extends ApiClient {
       'id': 'pilot-asset',
       'asset_code': 'TIPPER-12',
       'asset_type': 'TIPPER',
+      'supports_odometer_km': true,
+      'supports_hour_meter': false,
       'ownership_type': 'OWNED',
       'registration_number': 'PILOT12',
       'short_name': 'Tipper 12',
@@ -897,6 +907,8 @@ class _FakeRoleApi extends ApiClient {
       'asset_id': 'excavator-7',
       'asset_code': 'EXCAVATOR-07',
       'asset_type': 'EXCAVATOR',
+      'supports_odometer_km': false,
+      'supports_hour_meter': true,
       'ownership_type': 'RENTED',
       'registration_number': 'EXC-07',
       'short_name': 'Excavator 7',
@@ -1058,6 +1070,8 @@ class _FakeRoleApi extends ApiClient {
       'asset_code': 'TIPPER-12',
       'asset_type': 'TIPPER',
       'tipper_registration_number': 'PILOT-12',
+      'supports_odometer_km': true,
+      'supports_hour_meter': false,
       'site_name': 'Pilot Site',
       'duty_start': '2026-09-25T05:00:00Z',
       'start_km': 10000,
@@ -1076,6 +1090,8 @@ class _FakeRoleApi extends ApiClient {
       'asset_code': 'EXC-01',
       'asset_type': 'EXCAVATOR',
       'tipper_registration_number': 'EXC-01',
+      'supports_odometer_km': false,
+      'supports_hour_meter': true,
       'site_name': 'Test Site B',
       'duty_start': '2026-09-25T05:00:00Z',
       'start_hmr': 1000,
@@ -1368,6 +1384,7 @@ SupervisorEvent _copySupervisorEvent(
   assetCode: event.assetCode,
   assetType: event.assetType,
   dutySessionId: event.dutySessionId,
+  captureGroupUuid: event.captureGroupUuid,
   driverPhone: event.driverPhone,
   readingType: event.readingType,
   readingValue: event.readingValue,

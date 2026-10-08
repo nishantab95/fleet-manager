@@ -85,6 +85,10 @@ const deployedMachine: OwnerAsset = {
   short_name: "Big digger",
   manufacturer: "CAT",
   model: "320",
+  model_year: 2024,
+  is_wheeled: false,
+  supports_odometer_km: false,
+  supports_hour_meter: true,
   chassis_number: "CAT-CHASSIS-320",
   engine_number: "CAT-ENGINE-320",
   status: "ACTIVE",
@@ -236,7 +240,7 @@ describe("Owner management panels", () => {
     expect(rentedRow).toHaveTextContent("Primary: +91 98765 43210");
     expect(rentedRow).toHaveTextContent("Alternate: +91 99887 76655");
     expect(rentedRow.querySelector(".owner-fleet-rental hr")).not.toBeInTheDocument();
-    expect(within(rentedRow).getAllByRole("button").map((button) => button.textContent)).toEqual(["Manage", "History"]);
+    expect(within(rentedRow).getAllByRole("button").map((button) => button.textContent)).toEqual(["Manage", "Maintenance plan", "History"]);
     const assignedRow = within(fleet).getByRole("row", { name: /BENZ-1/ });
     const assignedAssetCell = assignedRow.querySelector<HTMLElement>('td[data-label="Asset"]')!;
     const assignedSetupCell = assignedRow.querySelector<HTMLElement>('td[data-label="Current setup"]')!;

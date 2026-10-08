@@ -9,6 +9,8 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
@@ -44,6 +46,16 @@ def _alembic_config(engine: Engine) -> Config:
     config.set_main_option("script_location", str(api_root / "migrations"))
     config.set_main_option("sqlalchemy.url", engine.url.render_as_string(hide_password=False))
     return config
+
+
+def test_database_is_at_the_single_model_complete_head(postgres_engine: Engine) -> None:
+    config = _alembic_config(postgres_engine)
+    script = ScriptDirectory.from_config(config)
+    with postgres_engine.connect() as connection:
+        current = MigrationContext.configure(connection).get_current_revision()
+    assert script.get_heads() == ["0020_maintenance_v2"]
+    assert current == script.get_current_head()
+    command.check(config)
 
 
 def _insert_legacy_graph(connection: Connection) -> None:
@@ -892,6 +904,85 @@ def test_0018_preserves_existing_rented_assets_with_nullable_new_fields(
                 "engine_number": "YES",
                 "rental_owner_phone_primary": "YES",
                 "rental_owner_phone_secondary": "YES",
+            }
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM fleet_assets WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM report_templates WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :company"),
+                {"company": company_id},
+            )
+
+
+def test_0019_safely_backfills_existing_asset_meter_and_wheel_capabilities(
+    postgres_engine: Engine,
+) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("90000000-0000-0000-0000-000000000001")
+    tipper_id = UUID("90000000-0000-0000-0000-000000000002")
+    excavator_id = UUID("90000000-0000-0000-0000-000000000003")
+    command.downgrade(config, "0018_asset_contacts")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'Meter Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO fleet_assets "
+                    "(id, company_id, asset_type, ownership_type, asset_code, "
+                    "registration_number, short_name, status) VALUES "
+                    "(:tipper, :company, 'TIPPER', 'OWNED', 'LEGACY-TIPPER', "
+                    "'KA01MM0001', 'Legacy tipper', 'ACTIVE'), "
+                    "(:excavator, :company, 'EXCAVATOR', 'OWNED', 'LEGACY-EXC', "
+                    "NULL, 'Legacy excavator', 'ACTIVE')"
+                ),
+                {
+                    "tipper": tipper_id,
+                    "excavator": excavator_id,
+                    "company": company_id,
+                },
+            )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.connect() as connection:
+            rows = {
+                row["id"]: row
+                for row in connection.execute(
+                    text(
+                        "SELECT id, model_year, is_wheeled, supports_odometer_km, "
+                        "supports_hour_meter FROM fleet_assets WHERE company_id = :company"
+                    ),
+                    {"company": company_id},
+                ).mappings()
+            }
+            assert dict(rows[tipper_id]) == {
+                "id": tipper_id,
+                "model_year": None,
+                "is_wheeled": True,
+                "supports_odometer_km": True,
+                "supports_hour_meter": False,
+            }
+            assert dict(rows[excavator_id]) == {
+                "id": excavator_id,
+                "model_year": None,
+                "is_wheeled": False,
+                "supports_odometer_km": False,
+                "supports_hour_meter": True,
             }
     finally:
         command.upgrade(config, "head")

@@ -114,7 +114,7 @@ function compareText(left: string | null | undefined, right: string | null | und
   return (left ?? "").localeCompare(right ?? "", undefined, { numeric: true, sensitivity: "base" });
 }
 
-export function FleetOverview({ assets }: { assets: OwnerAsset[] }) {
+export function FleetOverview({ assets, maintenanceAlertCount = 0 }: { assets: OwnerAsset[]; maintenanceAlertCount?: number }) {
   const active = assets.filter((asset) => asset.status === "ACTIVE");
   const assigned = active.filter((asset) => asset.has_active_assignment).length;
   const deployed = active.filter((asset) => asset.current_deployment).length;
@@ -133,6 +133,7 @@ export function FleetOverview({ assets }: { assets: OwnerAsset[] }) {
         <div><span>Unassigned</span><strong>{active.length - assigned}</strong></div>
         <div><span>Undeployed</span><strong>{active.length - deployed}</strong></div>
         <div><span>Rented</span><strong>{active.filter((asset) => asset.ownership_type === "RENTED").length}</strong></div>
+        <div><span>Maintenance alerts</span><strong>{maintenanceAlertCount}</strong></div>
       </div>
     </section>
   );
@@ -145,6 +146,10 @@ type AssetDraft = {
   short_name: string;
   manufacturer: string;
   model: string;
+  model_year: string;
+  is_wheeled: boolean;
+  supports_odometer_km: boolean;
+  supports_hour_meter: boolean;
   chassis_number: string;
   engine_number: string;
   rental_party_name: string;
@@ -156,7 +161,7 @@ type AssetDraft = {
 
 const blankAsset: AssetDraft = {
   asset_type: "TIPPER", ownership_type: "OWNED", registration_number: "", short_name: "",
-  manufacturer: "", model: "", chassis_number: "", engine_number: "", rental_party_name: "",
+  manufacturer: "", model: "", model_year: "", is_wheeled: true, supports_odometer_km: true, supports_hour_meter: true, chassis_number: "", engine_number: "", rental_party_name: "",
   rental_owner_phone_primary: "", rental_owner_phone_secondary: "", rental_start_date: "", rental_end_date: "",
 };
 
@@ -168,6 +173,10 @@ function draftForAsset(asset: OwnerAsset): AssetDraft {
     short_name: asset.short_name ?? "",
     manufacturer: asset.manufacturer ?? "",
     model: asset.model ?? "",
+    model_year: asset.model_year?.toString() ?? "",
+    is_wheeled: asset.is_wheeled,
+    supports_odometer_km: asset.supports_odometer_km,
+    supports_hour_meter: asset.supports_hour_meter,
     chassis_number: asset.chassis_number ?? "",
     engine_number: asset.engine_number ?? "",
     rental_party_name: asset.rental_party_name ?? "",
@@ -187,13 +196,24 @@ function AssetFields({ draft, editing, setDraft }: { draft: AssetDraft; editing:
         <div className="owner-form-grid">
           <label>Short name *<input aria-label="Short name" onChange={(event) => setDraft({ ...draft, short_name: event.target.value })} placeholder={machinery ? "e.g. North excavator" : "e.g. BENZ-1"} required value={draft.short_name} /></label>
           {!machinery && <label>Registration *<input aria-label="Registration" onChange={(event) => setDraft({ ...draft, registration_number: event.target.value })} required value={draft.registration_number} /></label>}
-          <label>Asset type *<select aria-label="Asset type" disabled={editing} onChange={(event) => setDraft({ ...draft, asset_type: event.target.value as FleetAssetType })} value={draft.asset_type}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
+          <label>Asset type *<select aria-label="Asset type" disabled={editing} onChange={(event) => { const assetType = event.target.value as FleetAssetType; const isWheeled = ["TIPPER", "BACKHOE_LOADER", "ROLLER", "GRADER"].includes(assetType); setDraft({ ...draft, asset_type: assetType, is_wheeled: isWheeled, supports_odometer_km: ["TIPPER", "BACKHOE_LOADER", "GRADER"].includes(assetType), supports_hour_meter: true }); }} value={draft.asset_type}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
           <label>Ownership *<select aria-label="Ownership" onChange={(event) => setDraft({ ...draft, ownership_type: event.target.value as AssetOwnershipType })} value={draft.ownership_type}><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label>
           <label>Manufacturer<input aria-label="Manufacturer" onChange={(event) => setDraft({ ...draft, manufacturer: event.target.value })} value={draft.manufacturer} /></label>
           <label>Model<input aria-label="Model" onChange={(event) => setDraft({ ...draft, model: event.target.value })} value={draft.model} /></label>
+          <label>Model year <small>Optional</small><input aria-label="Model year" inputMode="numeric" max="2200" min="1900" onChange={(event) => setDraft({ ...draft, model_year: event.target.value })} type="number" value={draft.model_year} /></label>
           <label>Chassis number <small>Optional</small><input aria-label="Chassis number" onChange={(event) => setDraft({ ...draft, chassis_number: event.target.value })} value={draft.chassis_number} /></label>
           <label>Engine number <small>Optional</small><input aria-label="Engine number" onChange={(event) => setDraft({ ...draft, engine_number: event.target.value })} value={draft.engine_number} /></label>
         </div>
+      </fieldset>
+      <fieldset className="owner-form-section">
+        <legend>Meter capabilities</legend>
+        <p className="muted">Classify the undercarriage separately from the physical meters. Calendar maintenance is always available.</p>
+        <div className="owner-chip-list">
+          <label><input checked={draft.is_wheeled} onChange={(event) => setDraft({ ...draft, is_wheeled: event.target.checked, supports_odometer_km: event.target.checked ? draft.supports_odometer_km : false })} type="checkbox" /> Wheeled asset</label>
+          <label><input checked={draft.supports_odometer_km} disabled={!draft.is_wheeled} onChange={(event) => setDraft({ ...draft, supports_odometer_km: event.target.checked })} type="checkbox" /> Odometer KM</label>
+          <label><input checked={draft.supports_hour_meter} onChange={(event) => setDraft({ ...draft, supports_hour_meter: event.target.checked })} type="checkbox" /> Hour Meter / HMR</label>
+        </div>
+        {!draft.supports_odometer_km && !draft.supports_hour_meter && <p className="notice error">At least one operational meter is required.</p>}
       </fieldset>
       {draft.ownership_type === "RENTED" && <fieldset className="owner-form-section">
         <legend>Rental Owner / Supplier</legend>
@@ -217,6 +237,10 @@ function assetPayload(draft: AssetDraft, includeType: boolean) {
     short_name: draft.short_name || null,
     manufacturer: draft.manufacturer || null,
     model: draft.model || null,
+    model_year: draft.model_year ? Number(draft.model_year) : null,
+    is_wheeled: draft.is_wheeled,
+    supports_odometer_km: draft.supports_odometer_km,
+    supports_hour_meter: draft.supports_hour_meter,
     chassis_number: draft.chassis_number || null,
     engine_number: draft.engine_number || null,
     rental_party_name: draft.ownership_type === "RENTED" ? draft.rental_party_name || null : null,
@@ -256,7 +280,7 @@ const fleetSortOptions: { value: FleetSort; label: string }[] = [
   { value: "type-asc", label: "Asset type A–Z" },
 ];
 
-export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError, openRelationshipManager, editAssetId = null, onEditHandled }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[]; editAssetId?: string | null; onEditHandled?: () => void }) {
+export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError, openRelationshipManager, editAssetId = null, onEditHandled, onConfigureMaintenance }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[]; editAssetId?: string | null; onEditHandled?: () => void; onConfigureMaintenance?: (assetId: string) => void }) {
   const mutation = useOwnerAction({ reload, setError });
   const requestedEditAsset = editAssetId ? assets.find((asset) => asset.id === editAssetId) : undefined;
   const [draft, setDraft] = useState<AssetDraft>(() => requestedEditAsset ? draftForAsset(requestedEditAsset) : blankAsset);
@@ -357,7 +381,7 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
             <td data-label="Asset"><div className="owner-fleet-cell owner-fleet-asset"><strong>{assetLabel(asset)}</strong><span>{asset.registration_number || "No registration"}</span><span>{title(asset.asset_type)}</span><span>{[asset.manufacturer, asset.model].filter(Boolean).join(" ") || "Make / model not provided"}</span>{asset.ownership_type === "RENTED" && <div className="owner-fleet-rental"><span>Owner: {asset.rental_party_name || "Not provided"}</span><span>{asset.rental_owner_phone_primary ? `Primary: ${phoneDisplay(asset.rental_owner_phone_primary)}` : "Primary phone not provided"}</span>{asset.rental_owner_phone_secondary && <span>Alternate: {phoneDisplay(asset.rental_owner_phone_secondary)}</span>}</div>}</div></td>
             <td data-label="Current setup"><div className="owner-fleet-cell owner-fleet-setup"><div className="owner-fleet-ownership"><StatusChip status={asset.ownership_type} /></div><strong>{asset.current_deployment?.site_name || "Undeployed"}</strong><div className="owner-fleet-statuses"><StatusChip label={dutyStatus === "ON_DUTY" ? "On duty" : dutyStatus === "OFF_DUTY" ? "Off duty" : "Not assigned"} status={dutyStatus === "ON_DUTY" ? "ON_DUTY" : dutyStatus === "OFF_DUTY" ? "AVAILABLE" : "UNDEPLOYED"} /><StatusChip status={asset.status} /></div></div></td>
             <td data-label="Driver / Operator"><div className="owner-fleet-cell"><strong>{asset.active_assignment?.driver_name || "Unassigned"}</strong><span>{asset.active_assignment ? phoneDisplay(asset.active_assignment.driver_phone || person?.phone || "—") : "—"}</span></div></td>
-            <td data-label="Actions"><div className="owner-row-actions owner-row-actions--fleet"><button className="owner-text-button" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: asset.status === "INACTIVE" ? "lifecycle" : undefined, initialAction: asset.status === "INACTIVE" ? "REACTIVATE_ASSET" : undefined })} type="button">Manage</button><button className="owner-text-button" onClick={() => void openRelationshipHistory(asset)} type="button">History</button></div></td>
+            <td data-label="Actions"><div className="owner-row-actions owner-row-actions--fleet"><button className="owner-text-button" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: asset.status === "INACTIVE" ? "lifecycle" : undefined, initialAction: asset.status === "INACTIVE" ? "REACTIVATE_ASSET" : undefined })} type="button">Manage</button><button className="owner-text-button" onClick={() => onConfigureMaintenance?.(asset.id)} type="button">Maintenance plan</button><button className="owner-text-button" onClick={() => void openRelationshipHistory(asset)} type="button">History</button></div></td>
           </tr>; })}
         </tbody>
       </OperationsTable>

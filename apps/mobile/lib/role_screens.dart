@@ -203,9 +203,7 @@ extension on _SupervisorReviewCategory {
     _SupervisorReviewCategory.diesel => event.isDiesel,
     _SupervisorReviewCategory.trips =>
       event.isTrip && event.assetType == 'TIPPER',
-    _SupervisorReviewCategory.meter =>
-      (event.assetType == 'TIPPER' && event.isKm) ||
-          (event.assetType != 'TIPPER' && event.isHmr),
+    _SupervisorReviewCategory.meter => event.isKm || event.isHmr,
   };
 
   bool isPending(SupervisorEvent event) => switch (this) {
@@ -233,11 +231,20 @@ class _SupervisorCategoryCounts {
     int count(_SupervisorReviewCategory category) => events
         .where((event) => category.matches(event) && category.isPending(event))
         .length;
+    final pendingMeterGroups = events
+        .where(
+          (event) =>
+              _SupervisorReviewCategory.meter.matches(event) &&
+              _SupervisorReviewCategory.meter.isPending(event),
+        )
+        .map((event) => event.captureGroupUuid ?? event.id)
+        .toSet()
+        .length;
     return _SupervisorCategoryCounts(
       emergency: count(_SupervisorReviewCategory.emergency),
       diesel: count(_SupervisorReviewCategory.diesel),
       trips: count(_SupervisorReviewCategory.trips),
-      meter: count(_SupervisorReviewCategory.meter),
+      meter: pendingMeterGroups,
     );
   }
 
@@ -438,7 +445,33 @@ class _SupervisorCategoryScreenState extends State<_SupervisorCategoryScreen> {
   Widget build(BuildContext context) {
     final pending = _pending;
     final history = _history;
-    final visible = _tab == _SupervisorCategoryTab.pending ? pending : history;
+    final visibleGroups = <List<SupervisorEvent>>[];
+    var pendingGroupCount = pending.length;
+    if (widget.category == _SupervisorReviewCategory.meter) {
+      final byCapture = <String, List<SupervisorEvent>>{};
+      for (final event in _categoryEvents) {
+        final key = event.captureGroupUuid ?? event.id;
+        byCapture.putIfAbsent(key, () => []).add(event);
+      }
+      final pendingGroups = byCapture.values
+          .where((group) => group.any(widget.category.isPending))
+          .toList();
+      final historyGroups = byCapture.values
+          .where(
+            (group) =>
+                group.every((event) => !widget.category.isPending(event)),
+          )
+          .toList();
+      pendingGroupCount = pendingGroups.length;
+      visibleGroups.addAll(
+        _tab == _SupervisorCategoryTab.pending ? pendingGroups : historyGroups,
+      );
+    } else {
+      final visible = _tab == _SupervisorCategoryTab.pending
+          ? pending
+          : history;
+      visibleGroups.addAll(visible.map((event) => [event]));
+    }
     final siteLabel = widget.site.shortName?.trim().isNotEmpty == true
         ? widget.site.shortName!
         : widget.site.name;
@@ -462,7 +495,7 @@ class _SupervisorCategoryScreenState extends State<_SupervisorCategoryScreen> {
                   child: Text(
                     widget.category == _SupervisorReviewCategory.emergency
                         ? 'Pending / Open: ${pending.length}'
-                        : 'Pending: ${pending.length}',
+                        : 'Pending: $pendingGroupCount',
                     key: const Key('supervisor-category-pending-count'),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
@@ -480,7 +513,7 @@ class _SupervisorCategoryScreenState extends State<_SupervisorCategoryScreen> {
               segments: [
                 ButtonSegment(
                   value: _SupervisorCategoryTab.pending,
-                  label: Text('PENDING ${pending.length}'),
+                  label: Text('PENDING $pendingGroupCount'),
                 ),
                 const ButtonSegment(
                   value: _SupervisorCategoryTab.history,
@@ -492,7 +525,7 @@ class _SupervisorCategoryScreenState extends State<_SupervisorCategoryScreen> {
                   setState(() => _tab = selection.first),
             ),
             const SizedBox(height: FleetSpacing.md),
-            if (visible.isEmpty)
+            if (visibleGroups.isEmpty)
               _EmptyCard(
                 icon: _tab == _SupervisorCategoryTab.pending
                     ? Icons.check_circle_outline
@@ -501,25 +534,113 @@ class _SupervisorCategoryScreenState extends State<_SupervisorCategoryScreen> {
                     ? widget.category.emptyPending
                     : 'No ${widget.category.notificationLabel.toLowerCase()} history.',
               ),
-            for (final event in visible)
-              if (event.isEmergency && _tab == _SupervisorCategoryTab.pending)
-                _EmergencyCard(
-                  event: event,
-                  showSite: false,
-                  onCall: () => _call(event.driverPhone),
-                  onAcknowledge: () => _emergencyAction(event, 'acknowledge'),
-                  onResolve: () => _emergencyAction(event, 'resolve'),
+            for (final group in visibleGroups)
+              if (widget.category == _SupervisorReviewCategory.meter)
+                _GroupedMeterCard(
+                  events: group,
+                  showReviewActions: _tab == _SupervisorCategoryTab.pending,
+                  onVerify: _verify,
+                  onEvidence: _showEvidence,
                 )
               else
-                _ReviewEventCard(
-                  event: event,
-                  showReviewActions:
-                      _tab == _SupervisorCategoryTab.pending &&
-                      !event.isEmergency,
-                  onVerify: _verify,
-                  onCall: _call,
-                  onEvidence: _showEvidence,
+                for (final event in group)
+                  if (event.isEmergency &&
+                      _tab == _SupervisorCategoryTab.pending)
+                    _EmergencyCard(
+                      event: event,
+                      showSite: false,
+                      onCall: () => _call(event.driverPhone),
+                      onAcknowledge: () =>
+                          _emergencyAction(event, 'acknowledge'),
+                      onResolve: () => _emergencyAction(event, 'resolve'),
+                    )
+                  else
+                    _ReviewEventCard(
+                      event: event,
+                      showReviewActions:
+                          _tab == _SupervisorCategoryTab.pending &&
+                          !event.isEmergency,
+                      onVerify: _verify,
+                      onCall: _call,
+                      onEvidence: _showEvidence,
+                    ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupedMeterCard extends StatelessWidget {
+  const _GroupedMeterCard({
+    required this.events,
+    required this.showReviewActions,
+    required this.onVerify,
+    required this.onEvidence,
+  });
+
+  final List<SupervisorEvent> events;
+  final bool showReviewActions;
+  final Future<void> Function(SupervisorEvent event, String decision) onVerify;
+  final Future<void> Function(SupervisorEvent event) onEvidence;
+
+  @override
+  Widget build(BuildContext context) {
+    final first = events.first;
+    final kmEvents = events.where((event) => event.isKm).toList();
+    final hmrEvents = events.where((event) => event.isHmr).toList();
+    final km = kmEvents.isEmpty ? null : kmEvents.first;
+    final hmr = hmrEvents.isEmpty ? null : hmrEvents.first;
+    final asset = first.assetShortName?.trim().isNotEmpty == true
+        ? first.assetShortName!
+        : first.assetCode ?? first.tipperRegistration;
+    final reading = first.readingType == 'START_READING' ? 'START' : 'END';
+    return Card(
+      key: Key('supervisor-meter-${first.captureGroupUuid ?? first.id}'),
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$reading READINGS',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            Text('$asset · ${first.driverName}'),
+            if (km != null) Text('KM       ${_numberText(km.readingValue)}'),
+            if (hmr != null) Text('HMR      ${_numberText(hmr.readingValue)}'),
+            const SizedBox(height: 8),
+            for (final event in events)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Wrap(
+                  spacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _StatusChip(event.verificationStatus),
+                    if (event.evidenceAvailable)
+                      TextButton(
+                        onPressed: () => onEvidence(event),
+                        child: Text(event.isKm ? 'KM PHOTO' : 'HMR PHOTO'),
+                      ),
+                    if (showReviewActions && event.isPending) ...[
+                      TextButton(
+                        onPressed: () => onVerify(event, 'APPROVED'),
+                        child: const Text('APPROVE'),
+                      ),
+                      TextButton(
+                        onPressed: () => onVerify(event, 'REJECTED'),
+                        child: const Text('REJECT'),
+                      ),
+                      TextButton(
+                        onPressed: () => onVerify(event, 'DISPUTED'),
+                        child: const Text('DISPUTE'),
+                      ),
+                    ],
+                  ],
                 ),
+              ),
           ],
         ),
       ),

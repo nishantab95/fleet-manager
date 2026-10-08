@@ -27,22 +27,24 @@ def value[T](records: dict[str, object], key: str, expected_type: type[T]) -> T:
 
 def test_asset_capabilities_are_centralized_and_ownership_independent() -> None:
     tipper = capabilities_for(FleetAssetType.TIPPER)
+    assert tipper.is_wheeled is True
     assert tipper.supports_trip_complete is True
     assert tipper.supports_odometer is True
-    assert tipper.supports_hour_meter is False
+    assert tipper.supports_hour_meter is True
     assert tipper.supports_diesel is True
     assert tipper.supports_emergency is True
     assert tipper.supports_duty_session is True
 
-    for asset_type in (
-        FleetAssetType.EXCAVATOR,
-        FleetAssetType.BACKHOE_LOADER,
-        FleetAssetType.ROLLER,
-        FleetAssetType.GRADER,
+    for asset_type, supports_odometer in (
+        (FleetAssetType.EXCAVATOR, False),
+        (FleetAssetType.BACKHOE_LOADER, True),
+        (FleetAssetType.ROLLER, False),
+        (FleetAssetType.GRADER, True),
     ):
         machinery = capabilities_for(asset_type)
+        assert machinery.is_wheeled is (asset_type != FleetAssetType.EXCAVATOR)
         assert machinery.supports_trip_complete is False
-        assert machinery.supports_odometer is False
+        assert machinery.supports_odometer is supports_odometer
         assert machinery.supports_hour_meter is True
         assert machinery.supports_diesel is True
         assert machinery.supports_emergency is True
@@ -89,6 +91,28 @@ def test_generic_assets_allow_nullable_registration_and_tenant_scoped_codes(
     assert excavator_a.registration_number is None
     assert excavator_b.asset_code == excavator_a.asset_code
     assert second_unregistered.registration_number is None
+    assert excavator_a.is_wheeled is False
+    assert excavator_a.supports_odometer_km is False
+
+
+def test_non_wheeled_asset_rejects_odometer_capability(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    with pytest.raises(DomainError, match="non-wheeled"):
+        create_fleet_asset(
+            db_session,
+            company_id=company.id,
+            asset_type=FleetAssetType.EXCAVATOR,
+            ownership_type=AssetOwnershipType.OWNED,
+            asset_code="TRACKED-WITH-KM",
+            registration_number=None,
+            short_name="Tracked with invalid KM",
+            is_wheeled=False,
+            supports_odometer_km=True,
+            supports_hour_meter=True,
+        )
 
 
 def test_asset_uniqueness_and_rental_date_constraints(
@@ -181,12 +205,8 @@ def test_machinery_asset_can_enter_shared_duty_assignment_workflow(
     assignment = create_assignment(
         db_session,
         company_id=company.id,
-        driver_membership_id=value(
-            tenant_records, "driver_a", CompanyMembership
-        ).id,
-        supervisor_membership_id=value(
-            tenant_records, "supervisor_a", CompanyMembership
-        ).id,
+        driver_membership_id=value(tenant_records, "driver_a", CompanyMembership).id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
         asset_id=excavator.id,
         site_id=value(tenant_records, "site_a", Site).id,
         starts_at=datetime(2026, 1, 1, tzinfo=UTC),

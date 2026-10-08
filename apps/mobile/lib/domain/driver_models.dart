@@ -1,12 +1,20 @@
 import 'dart:convert';
 
-enum DriverEventType { tripComplete, kmReading, hmrReading, diesel, emergency }
+enum DriverEventType {
+  tripComplete,
+  kmReading,
+  hmrReading,
+  meterCapture,
+  diesel,
+  emergency,
+}
 
 extension DriverEventTypeWire on DriverEventType {
   String get wireName => switch (this) {
     DriverEventType.tripComplete => 'TRIP_COMPLETE',
     DriverEventType.kmReading => 'KM_READING',
     DriverEventType.hmrReading => 'HMR_READING',
+    DriverEventType.meterCapture => 'METER_CAPTURE',
     DriverEventType.diesel => 'DIESEL',
     DriverEventType.emergency => 'EMERGENCY',
   };
@@ -121,6 +129,8 @@ class DriverAssignment {
     required this.tipperShortName,
     this.assetType = 'TIPPER',
     this.tipperAssetCode,
+    this.supportsOdometerKm,
+    this.supportsHourMeter,
     required this.siteId,
     required this.siteName,
     required this.supervisorName,
@@ -133,6 +143,8 @@ class DriverAssignment {
   final String? tipperShortName;
   final String? tipperAssetCode;
   final String assetType;
+  final bool? supportsOdometerKm;
+  final bool? supportsHourMeter;
   final String siteId;
   final String siteName;
   final String supervisorName;
@@ -152,6 +164,8 @@ class DriverAssignment {
       assetType: '${json['asset_type'] ?? 'TIPPER'}',
       tipperAssetCode:
           (json['asset_code'] ?? json['tipper_asset_code']) as String?,
+      supportsOdometerKm: json['supports_odometer_km'] as bool?,
+      supportsHourMeter: json['supports_hour_meter'] as bool?,
       siteId: json['site_id'] as String,
       siteName: json['site_name'] as String,
       supervisorName: supervisorNames.isNotEmpty
@@ -168,6 +182,8 @@ class DriverAssignment {
     'tipper_short_name': tipperShortName,
     'asset_type': assetType,
     if (tipperAssetCode != null) 'asset_code': tipperAssetCode,
+    'supports_odometer_km': supportsOdometerKm,
+    'supports_hour_meter': supportsHourMeter,
     'site_id': siteId,
     'site_name': siteName,
     'supervisor_name': supervisorName,
@@ -195,7 +211,7 @@ class DriverAssetCapabilities {
   static const tipper = DriverAssetCapabilities(
     supportsTripComplete: true,
     supportsOdometer: true,
-    supportsHourMeter: false,
+    supportsHourMeter: true,
     supportsDiesel: true,
     supportsEmergency: true,
     supportsDutySession: true,
@@ -208,14 +224,35 @@ class DriverAssetCapabilities {
     supportsEmergency: true,
     supportsDutySession: true,
   );
+  static const wheeledMachinery = DriverAssetCapabilities(
+    supportsTripComplete: false,
+    supportsOdometer: true,
+    supportsHourMeter: true,
+    supportsDiesel: true,
+    supportsEmergency: true,
+    supportsDutySession: true,
+  );
 
   static DriverAssetCapabilities forType(String assetType) =>
-      assetType == 'TIPPER' ? tipper : machinery;
+      switch (assetType) {
+        'TIPPER' => tipper,
+        'BACKHOE_LOADER' || 'GRADER' => wheeledMachinery,
+        _ => machinery,
+      };
 }
 
 extension DriverAssignmentCapabilities on DriverAssignment {
-  DriverAssetCapabilities get capabilities =>
-      DriverAssetCapabilities.forType(assetType);
+  DriverAssetCapabilities get capabilities {
+    final base = DriverAssetCapabilities.forType(assetType);
+    return DriverAssetCapabilities(
+      supportsTripComplete: base.supportsTripComplete,
+      supportsOdometer: supportsOdometerKm ?? base.supportsOdometer,
+      supportsHourMeter: supportsHourMeter ?? base.supportsHourMeter,
+      supportsDiesel: base.supportsDiesel,
+      supportsEmergency: base.supportsEmergency,
+      supportsDutySession: base.supportsDutySession,
+    );
+  }
 }
 
 enum DriverAssignmentAuthority {

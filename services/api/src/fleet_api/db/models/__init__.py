@@ -19,6 +19,17 @@ from fleet_api.db.models.events import (
 )
 from fleet_api.db.models.evidence import EvidenceObject
 from fleet_api.db.models.fleet_asset import FleetAsset
+from fleet_api.db.models.maintenance import (
+    MaintenanceAttachment,
+    MaintenanceCriterion,
+    MaintenancePlan,
+    MaintenanceRecord,
+    MaintenanceSchedule,
+    MaintenanceTemplate,
+    MaintenanceTemplateCriterion,
+    MaintenanceTemplateItem,
+    MaintenanceWorkOrder,
+)
 from fleet_api.db.models.membership import CompanyMembership, SupervisorSiteAccess
 from fleet_api.db.models.report_template import ReportTemplate
 
@@ -38,6 +49,15 @@ __all__ = [
     "FleetAsset",
     "HourMeterReading",
     "KmReading",
+    "MaintenanceAttachment",
+    "MaintenanceCriterion",
+    "MaintenancePlan",
+    "MaintenanceRecord",
+    "MaintenanceSchedule",
+    "MaintenanceTemplate",
+    "MaintenanceTemplateCriterion",
+    "MaintenanceTemplateItem",
+    "MaintenanceWorkOrder",
     "OperationalEvent",
     "OtpChallenge",
     "ReportTemplate",

@@ -72,6 +72,7 @@ def _event_response(view: SupervisorEvent) -> SupervisorEventResponse:
         event_type=view.event.event_type,
         assignment_id=view.assignment.id,
         duty_session_id=view.event.duty_session_id,
+        capture_group_uuid=view.event.capture_group_uuid,
         driver_name=view.driver.display_name,
         driver_phone=(view.driver.phone_number if view.emergency is not None else None),
         asset_code=view.asset.asset_code,
@@ -86,12 +87,16 @@ def _event_response(view: SupervisorEvent) -> SupervisorEventResponse:
         reading_type=(
             view.km.reading_type.value
             if view.km is not None
-            else view.hmr.reading_type.value if view.hmr is not None else None
+            else view.hmr.reading_type.value
+            if view.hmr is not None
+            else None
         ),
         reading_value=(
             view.km.reading_value
             if view.km is not None
-            else view.hmr.reading_value if view.hmr is not None else None
+            else view.hmr.reading_value
+            if view.hmr is not None
+            else None
         ),
         litres=view.diesel.litres if view.diesel is not None else None,
         emergency_category=view.emergency.category if view.emergency is not None else None,
@@ -211,9 +216,7 @@ def list_supervisor_site_assets(
 def current_asset_assignment(
     site_id: UUID,
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_supervisor_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_supervisor_driver_assignment_service),
 ) -> DriverAssetAssignmentResponse | Response:
     try:
         service.ensure_asset_site(asset_id, site_id)
@@ -233,9 +236,7 @@ def current_asset_assignment(
 def asset_assignment_history(
     site_id: UUID,
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_supervisor_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_supervisor_driver_assignment_service),
 ) -> list[DriverAssetAssignmentResponse]:
     try:
         service.ensure_asset_site(asset_id, site_id)
@@ -252,9 +253,7 @@ def asset_assignment_history(
 def eligible_asset_drivers(
     site_id: UUID,
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_supervisor_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_supervisor_driver_assignment_service),
 ) -> list[DriverCandidateResponse]:
     try:
         service.ensure_asset_site(asset_id, site_id)
@@ -281,9 +280,7 @@ def assign_asset_driver(
     site_id: UUID,
     asset_id: UUID,
     payload: DriverAssetAssignmentRequest,
-    service: DriverAssetAssignmentService = Depends(
-        get_supervisor_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_supervisor_driver_assignment_service),
 ) -> DriverAssetAssignmentResponse:
     try:
         service.ensure_asset_site(asset_id, site_id)
@@ -306,9 +303,7 @@ def assign_asset_driver(
 def unassign_asset_driver(
     site_id: UUID,
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_supervisor_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_supervisor_driver_assignment_service),
 ) -> DriverAssetAssignmentResponse:
     try:
         service.ensure_asset_site(asset_id, site_id)
@@ -328,9 +323,7 @@ def reassign_asset_driver(
     site_id: UUID,
     asset_id: UUID,
     payload: DriverAssetAssignmentRequest,
-    service: DriverAssetAssignmentService = Depends(
-        get_supervisor_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_supervisor_driver_assignment_service),
 ) -> DriverAssetAssignmentResponse:
     try:
         service.ensure_asset_site(asset_id, site_id)

@@ -169,6 +169,13 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             json={"supervisor_membership_id": supervisor_membership_id, "site_id": site_id},
         )
         assert access.status_code == 201
+        reporting_zone = ZoneInfo("Asia/Kolkata")
+        local_now = datetime.now(reporting_zone)
+        event_local = local_now.replace(hour=12, minute=0, second=0, microsecond=0)
+        if event_local > local_now:
+            event_local -= timedelta(days=1)
+        created_at = event_local.astimezone(UTC)
+        reporting_date = event_local.date()
         assignment = client.post(
             "/api/v1/admin/assignments",
             json={
@@ -176,7 +183,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
                 "supervisor_membership_id": supervisor_membership_id,
                 "tipper_id": tipper_id,
                 "site_id": site_id,
-                "starts_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+                "starts_at": (created_at - timedelta(hours=1)).isoformat(),
             },
         )
         assert assignment.status_code == 201
@@ -188,8 +195,6 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             membership_id=driver_membership_id,
         )
         _auth(client, driver_token)
-        created_at = datetime.now(UTC)
-        reporting_date = created_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
 
         def submit_with_evidence(event_type: str, **extra: object) -> str:
             event_id = str(uuid4())
@@ -212,10 +217,55 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             assert response.status_code == 200
             return cast(str, response.json()["event_id"])
 
-        start_event_id = submit_with_evidence(
-            "KM_READING",
-            reading_type="START_READING",
-            reading_value="10000",
+        def submit_meter_capture(
+            reading_type: str,
+            *,
+            captured_at: datetime,
+            odometer_km: str,
+            hour_meter: str,
+            expected_status: int = 200,
+        ) -> list[str]:
+            group_id = str(uuid4())
+            km_event_id = str(uuid4())
+            hmr_event_id = str(uuid4())
+
+            def upload(client_event_uuid: str) -> str:
+                response = client.post(
+                    "/api/v1/driver/evidence",
+                    params={"client_event_uuid": client_event_uuid},
+                    files={"file": ("meter.jpg", b"\xff\xd8\xffpilot-image", "image/jpeg")},
+                )
+                assert response.status_code == 200
+                return cast(str, response.json()["object_reference"])
+
+            payload = {
+                "capture_group_uuid": group_id,
+                "reading_type": reading_type,
+                "device_created_at": captured_at.isoformat(),
+                "installation_identifier": "pilot-device-12",
+                "platform": "ANDROID",
+                "km_client_event_uuid": km_event_id,
+                "odometer_km": odometer_km,
+                "km_object_reference": upload(km_event_id),
+                "hmr_client_event_uuid": hmr_event_id,
+                "hour_meter": hour_meter,
+                "hmr_object_reference": upload(hmr_event_id),
+            }
+            response = client.post("/api/v1/driver/meter-captures", json=payload)
+            assert response.status_code == expected_status, response.text
+            if expected_status != 200:
+                return []
+            assert response.json()["capture_group_uuid"] == group_id
+            retry = client.post("/api/v1/driver/meter-captures", json=payload)
+            assert retry.status_code == 200, retry.text
+            assert retry.json()["status"] == "already_accepted"
+            return cast(list[str], response.json()["event_ids"])
+
+        start_event_ids = submit_meter_capture(
+            "START_READING",
+            captured_at=created_at - timedelta(minutes=30),
+            odometer_km="10000",
+            hour_meter="500",
         )
         trip_event_ids = []
         for _ in range(8):
@@ -227,10 +277,21 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             assert response.status_code == 200
             trip_event_ids.append(response.json()["event_id"])
         diesel_event_id = submit_with_evidence("DIESEL", litres="30")
-        end_event_id = submit_with_evidence(
-            "KM_READING",
-            reading_type="END_READING",
-            reading_value="10120",
+        assert (
+            submit_meter_capture(
+                "END_READING",
+                captured_at=created_at,
+                odometer_km="9999",
+                hour_meter="499",
+                expected_status=422,
+            )
+            == []
+        )
+        end_event_ids = submit_meter_capture(
+            "END_READING",
+            captured_at=created_at,
+            odometer_km="10120",
+            hour_meter="505.5",
         )
 
         supervisor_token = _login(
@@ -246,7 +307,20 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
         )
         assert supervisor_events.status_code == 200
         event_ids = [item["event_id"] for item in supervisor_events.json()]
-        assert set(event_ids) == {start_event_id, *trip_event_ids, diesel_event_id, end_event_id}
+        assert set(event_ids) == {
+            *start_event_ids,
+            *trip_event_ids,
+            diesel_event_id,
+            *end_event_ids,
+        }
+        grouped: dict[str, list[str]] = {}
+        for item in supervisor_events.json():
+            if item["capture_group_uuid"] is not None:
+                grouped.setdefault(item["capture_group_uuid"], []).append(item["event_type"])
+        assert sorted(sorted(event_types) for event_types in grouped.values()) == [
+            ["HMR_READING", "KM_READING"],
+            ["HMR_READING", "KM_READING"],
+        ]
         approved = client.post(
             "/api/v1/supervisor/events/verify-batch",
             json={
@@ -286,6 +360,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
         assert tipper_report.status_code == 200
         assert site_report.json()["approved_trip_count"] == 8
         assert float(tipper_report.json()[0]["distance_km"]) == 120
+        assert float(tipper_report.json()[0]["machine_hours"]) == 5.5
         assert float(tipper_report.json()[0]["verified_diesel_issued"]) == 30
 
         templates = client.get("/api/v1/owner/report-templates")
@@ -313,7 +388,7 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             "Exceptions",
         ]
         assert workbook["Trip Register"].max_row - 4 == 8
-        assert workbook["Meter Readings"].max_row - 4 == 2
+        assert workbook["Meter Readings"].max_row - 4 == 4
         assert workbook["Diesel Register"].max_row - 4 == 1
         workbook.close()
 

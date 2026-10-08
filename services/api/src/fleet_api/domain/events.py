@@ -68,6 +68,7 @@ def _existing_or_new_event(
     device_id: UUID | None,
     device_created_at: datetime,
     event_type: OperationalEventType,
+    capture_group_uuid: UUID | None = None,
 ) -> tuple[OperationalEvent, bool]:
     _event_context(
         session,
@@ -93,6 +94,7 @@ def _existing_or_new_event(
         device_id=device_id,
         device_created_at=device_created_at,
         event_type=event_type,
+        capture_group_uuid=capture_group_uuid,
     )
     try:
         # Keep the unique-key race inside a savepoint so a concurrent retry
@@ -159,6 +161,7 @@ def create_km_reading(
     reading_value: Decimal,
     object_reference: str | None = None,
     device_id: UUID | None = None,
+    capture_group_uuid: UUID | None = None,
 ) -> KmReading:
     if reading_value < 0:
         raise DomainError("reading_value must be non-negative")
@@ -170,6 +173,7 @@ def create_km_reading(
         device_id=device_id,
         device_created_at=device_created_at,
         event_type=OperationalEventType.KM_READING,
+        capture_group_uuid=capture_group_uuid,
     )
     reading = session.get(KmReading, event.id)
     if existing:
@@ -198,6 +202,7 @@ def create_hour_meter_reading(
     reading_value: Decimal,
     object_reference: str | None = None,
     device_id: UUID | None = None,
+    capture_group_uuid: UUID | None = None,
 ) -> HourMeterReading:
     if not reading_value.is_finite() or reading_value < 0:
         raise DomainError("reading_value must be finite and non-negative")
@@ -209,6 +214,7 @@ def create_hour_meter_reading(
         device_id=device_id,
         device_created_at=device_created_at,
         event_type=OperationalEventType.HMR_READING,
+        capture_group_uuid=capture_group_uuid,
     )
     reading = session.get(HourMeterReading, event.id)
     if existing:

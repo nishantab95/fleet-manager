@@ -113,6 +113,10 @@ class OwnerAssetService:
             "short_name": asset.short_name,
             "manufacturer": asset.manufacturer,
             "model": asset.model,
+            "model_year": asset.model_year,
+            "is_wheeled": asset.is_wheeled,
+            "supports_odometer_km": asset.supports_odometer_km,
+            "supports_hour_meter": asset.supports_hour_meter,
             "chassis_number": asset.chassis_number,
             "engine_number": asset.engine_number,
             "status": asset.status.value,
@@ -339,6 +343,10 @@ class OwnerAssetService:
         short_name: str | None,
         manufacturer: str | None,
         model: str | None,
+        model_year: int | None,
+        is_wheeled: bool | None,
+        supports_odometer_km: bool | None,
+        supports_hour_meter: bool | None,
         chassis_number: str | None,
         engine_number: str | None,
         rental_party_name: str | None,
@@ -399,6 +407,10 @@ class OwnerAssetService:
                 short_name=short_name,
                 manufacturer=manufacturer,
                 model=model,
+                model_year=model_year,
+                is_wheeled=is_wheeled,
+                supports_odometer_km=supports_odometer_km,
+                supports_hour_meter=supports_hour_meter,
                 chassis_number=chassis_number,
                 engine_number=engine_number,
                 rental_party_name=clean_rental_party,
@@ -427,6 +439,10 @@ class OwnerAssetService:
         short_name: str | None,
         manufacturer: str | None,
         model: str | None,
+        model_year: int | None,
+        is_wheeled: bool | None,
+        supports_odometer_km: bool | None,
+        supports_hour_meter: bool | None,
         chassis_number: str | None,
         engine_number: str | None,
         ownership_type: AssetOwnershipType | None,
@@ -460,6 +476,26 @@ class OwnerAssetService:
             asset.manufacturer = _clean_optional(manufacturer)
         if "model" in fields_set:
             asset.model = _clean_optional(model)
+        if "model_year" in fields_set:
+            if model_year is not None and not 1900 <= model_year <= 2200:
+                raise DomainError("Model year must be between 1900 and 2200.")
+            asset.model_year = model_year
+        if "is_wheeled" in fields_set:
+            if is_wheeled is None:
+                raise DomainError("Wheeled classification must be true or false.")
+            asset.is_wheeled = is_wheeled
+        if "supports_odometer_km" in fields_set:
+            if supports_odometer_km is None:
+                raise DomainError("Odometer capability must be true or false.")
+            asset.supports_odometer_km = supports_odometer_km
+        if "supports_hour_meter" in fields_set:
+            if supports_hour_meter is None:
+                raise DomainError("Hour-meter capability must be true or false.")
+            asset.supports_hour_meter = supports_hour_meter
+        if not asset.supports_odometer_km and not asset.supports_hour_meter:
+            raise DomainError("At least one meter capability must be enabled.")
+        if asset.supports_odometer_km and not asset.is_wheeled:
+            raise DomainError("Non-wheeled assets cannot use an odometer KM capability.")
         if "chassis_number" in fields_set:
             asset.chassis_number = _clean_optional(chassis_number)
         if "engine_number" in fields_set:

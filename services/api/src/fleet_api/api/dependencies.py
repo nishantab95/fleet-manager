@@ -28,6 +28,7 @@ from fleet_api.domain.errors import (
     RoleViolationError,
     TenantConsistencyError,
 )
+from fleet_api.domain.maintenance import MaintenanceService
 from fleet_api.domain.owner_assets import OwnerAssetService
 from fleet_api.domain.owner_operations import OwnerOperationPlanner
 from fleet_api.domain.owner_people_sites import OwnerPeopleSiteService
@@ -206,6 +207,18 @@ def get_report_template_service(
     context: Annotated[AuthContext, Depends(require_owner_admin)],
 ) -> ReportTemplateService:
     return ReportTemplateService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_maintenance_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_owner_admin)],
+) -> MaintenanceService:
+    return MaintenanceService(
         db,
         context,
         request_id=request.headers.get("x-request-id"),

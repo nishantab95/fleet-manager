@@ -18,7 +18,7 @@ from fleet_api.db.models import (
     Site,
     User,
 )
-from fleet_api.domain.assets import capabilities_for
+from fleet_api.domain.assets import capabilities_for_asset
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     DutySessionStatus,
@@ -222,7 +222,7 @@ class DriverAssetAssignmentService:
         self._deployment(asset_id)
         if asset.status != FleetAssetStatus.ACTIVE:
             raise ConflictError("Only an active asset can receive a Driver / Operator.")
-        if not capabilities_for(asset.asset_type).supports_duty_session:
+        if not capabilities_for_asset(asset).supports_duty_session:
             raise ConflictError("This asset type is not supported by the current Driver workflow.")
         now = datetime.now(UTC)
         assigned_driver_ids = select(Assignment.driver_membership_id).where(
@@ -251,7 +251,7 @@ class DriverAssetAssignmentService:
     def _ensure_assignable_asset(self, asset: FleetAsset) -> None:
         if asset.status != FleetAssetStatus.ACTIVE:
             raise ConflictError("Only an active asset can receive a Driver / Operator.")
-        if not capabilities_for(asset.asset_type).supports_duty_session:
+        if not capabilities_for_asset(asset).supports_duty_session:
             raise ConflictError("This asset type is not supported by the current Driver workflow.")
 
     def _create(

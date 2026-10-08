@@ -6,18 +6,19 @@ import type { OwnerAsset, OwnerOperationIntent, OwnerOperationPlan, OwnerOperati
 import { useAuth } from "../auth/AuthProvider";
 import { FleetAmbientScene } from "./FleetAmbientScene";
 import { FleetOverview, FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
+import { Maintenance } from "./Maintenance";
 import { OwnerOperations } from "./OwnerOperations";
 import { OwnerRelationshipManager, type OwnerRelationshipTarget } from "./OwnerRelationshipManager";
 import { ReportTemplates } from "./ReportTemplates";
 
-type Tab = "operations" | "fleet" | "people" | "sites" | "reports" | "templates";
+type Tab = "operations" | "fleet" | "maintenance" | "people" | "sites" | "reports" | "templates";
 type NavIcon = Tab;
 
 const navigation: { label: string; items: { id: Tab; label: string; icon: NavIcon }[] }[] = [
   { label: "Overview", items: [{ id: "operations", label: "Operations", icon: "operations" }] },
   {
     label: "Fleet management",
-    items: [{ id: "fleet", label: "Fleet", icon: "fleet" }],
+    items: [{ id: "fleet", label: "Fleet", icon: "fleet" }, { id: "maintenance", label: "Maintenance", icon: "maintenance" }],
   },
   {
     label: "Organization",
@@ -39,6 +40,7 @@ function NavGlyph({ icon }: { icon: NavIcon }) {
   const paths: Record<NavIcon, ReactNode> = {
     operations: <><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z" /></>,
     fleet: <><path d="M3 7.5h12.5l3 4.5H21v5h-2.2a3 3 0 0 1-5.6 0H9.8a3 3 0 0 1-5.6 0H3V7.5Z" /><path d="M6 7.5 8 4h6l1.5 3.5M6.8 18a1.2 1.2 0 1 0 0-2.4A1.2 1.2 0 0 0 6.8 18Zm9.2 0a1.2 1.2 0 1 0 0-2.4A1.2 1.2 0 0 0 16 18Z" /></>,
+    maintenance: <><path d="m14.7 6.3 3-3a4 4 0 0 1-5 5l-7.8 7.8a2 2 0 1 1-2.8-2.8l7.8-7.8a4 4 0 0 1 5-5l-3 3 2.8 2.8Z" /><path d="m14 14 6 6" /></>,
     people: <><path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M18 8a3 3 0 0 1 0 6m4 6v-2a4 4 0 0 0-3-3.87" /></>,
     sites: <><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.5" /></>,
     reports: <><path d="M4 20V10m6 10V4m6 16v-7m4 7H2" /></>,
@@ -67,6 +69,8 @@ export function OwnerWorkspace() {
   const [success, setSuccess] = useState("");
   const [relationshipTarget, setRelationshipTarget] = useState<OwnerRelationshipTarget | null>(null);
   const [editAssetId, setEditAssetId] = useState<string | null>(null);
+  const [maintenanceAssetId, setMaintenanceAssetId] = useState<string | null>(null);
+  const [maintenanceAlertCount, setMaintenanceAlertCount] = useState(0);
   const [assets, setAssets] = useState<OwnerAsset[]>([]);
   const [people, setPeople] = useState<OwnerPerson[]>([]);
   const [sites, setSites] = useState<OwnerSite[]>([]);
@@ -80,14 +84,17 @@ export function OwnerWorkspace() {
   const reload = useCallback(async () => {
     setError("");
     try {
-      const [nextAssets, nextPeople, nextSites] = await Promise.all([
+      const [nextAssets, nextPeople, nextSites, maintenanceOverview] = await Promise.all([
         request<OwnerAsset[]>("/api/v1/owner/assets"),
         request<OwnerPerson[]>("/api/v1/owner/people"),
         request<OwnerSite[]>("/api/v1/owner/sites"),
+        request<{ overdue: number; due: number; due_soon: number }>("/api/v1/owner/maintenance/overview")
+          .catch(() => ({ overdue: 0, due: 0, due_soon: 0 })),
       ]);
       setAssets(nextAssets);
       setPeople(nextPeople);
       setSites(nextSites);
+      setMaintenanceAlertCount(maintenanceOverview.overdue + maintenanceOverview.due + maintenanceOverview.due_soon);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load Owner management data.");
     } finally {
@@ -190,6 +197,7 @@ export function OwnerWorkspace() {
         <CommandMetric label="On duty" value={summary.onDuty} />
         <CommandMetric label="Unassigned" tone={summary.unassigned > 0 ? "attention" : "default"} value={summary.unassigned} />
         <CommandMetric label="Undeployed" tone={summary.undeployed > 0 ? "attention" : "default"} value={summary.undeployed} />
+        <CommandMetric label="Maintenance" tone={maintenanceAlertCount > 0 ? "attention" : "default"} value={maintenanceAlertCount} />
       </div>
       <div className="owner-topbar__actions">
         {pcRoleLabEnabled && <nav aria-label="PC test lab navigation" className="owner-role-nav"><a href="/lab">Test lab</a><a href="/driver-test">Driver</a><a href="/supervisor">Supervisor</a><a aria-current="page" href="/owner">Owner</a></nav>}
@@ -214,10 +222,11 @@ export function OwnerWorkspace() {
         {success && <div aria-live="polite" className="owner-feedback owner-feedback--success" role="status">{success}</div>}
         {initialLoading ? <WorkspaceSkeleton /> : <div className="owner-panel" key={tab}>
           {tab === "operations" && <>
-            <FleetOverview assets={assets} />
+            <FleetOverview assets={assets} maintenanceAlertCount={maintenanceAlertCount} />
             <div aria-label="Quick operations" className="owner-overview-shortcuts" role="group"><span>Quick operations</span><div className="owner-overview-actions"><button onClick={() => showTab("fleet")} type="button">Manage fleet</button><button className="secondary" onClick={() => showTab("people")} type="button">Manage people</button><button className="secondary" onClick={() => showTab("sites")} type="button">Manage sites</button></div></div>
           </>}
-          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} editAssetId={editAssetId} key={`fleet-${editAssetId ?? "list"}`} onEditHandled={() => setEditAssetId(null)} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
+          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} editAssetId={editAssetId} key={`fleet-${editAssetId ?? "list"}`} onEditHandled={() => setEditAssetId(null)} onConfigureMaintenance={(assetId) => { setMaintenanceAssetId(assetId); showTab("maintenance"); }} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
+          {tab === "maintenance" && <Maintenance apiRequest={request} assets={assets} initialAssetId={maintenanceAssetId} onInitialHandled={() => setMaintenanceAssetId(null)} />}
           {tab === "people" && <PeoplePanel people={people} assets={assets} sites={sites} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
           {tab === "sites" && <SitesPanel sites={sites} people={people} assets={assets} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
           {tab === "reports" && <OwnerOperations accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} />}

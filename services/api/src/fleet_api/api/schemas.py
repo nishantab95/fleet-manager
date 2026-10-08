@@ -161,6 +161,10 @@ class OwnerAssetCreateRequest(BaseModel):
     short_name: str | None = Field(default=None, max_length=100)
     manufacturer: str | None = Field(default=None, max_length=100)
     model: str | None = Field(default=None, max_length=100)
+    model_year: int | None = Field(default=None, ge=1900, le=2200)
+    is_wheeled: bool | None = None
+    supports_odometer_km: bool | None = None
+    supports_hour_meter: bool | None = None
     chassis_number: str | None = Field(default=None, max_length=100)
     engine_number: str | None = Field(default=None, max_length=100)
     rental_party_name: str | None = Field(default=None, max_length=200)
@@ -177,6 +181,10 @@ class OwnerAssetUpdateRequest(BaseModel):
     short_name: str | None = Field(default=None, max_length=100)
     manufacturer: str | None = Field(default=None, max_length=100)
     model: str | None = Field(default=None, max_length=100)
+    model_year: int | None = Field(default=None, ge=1900, le=2200)
+    is_wheeled: bool | None = None
+    supports_odometer_km: bool | None = None
+    supports_hour_meter: bool | None = None
     chassis_number: str | None = Field(default=None, max_length=100)
     engine_number: str | None = Field(default=None, max_length=100)
     rental_party_name: str | None = Field(default=None, max_length=200)
@@ -351,6 +359,10 @@ class OwnerAssetResponse(BaseModel):
     short_name: str | None
     manufacturer: str | None
     model: str | None
+    model_year: int | None
+    is_wheeled: bool
+    supports_odometer_km: bool
+    supports_hour_meter: bool
     chassis_number: str | None
     engine_number: str | None
     status: FleetAssetStatus
@@ -505,6 +517,8 @@ class DriverAssignmentResponse(BaseModel):
     tipper_id: UUID
     asset_code: str
     asset_type: FleetAssetType
+    supports_odometer_km: bool
+    supports_hour_meter: bool
     tipper_registration_number: str | None
     tipper_short_name: str | None
     site_id: UUID
@@ -568,6 +582,27 @@ class DriverEventResponse(BaseModel):
     verification_status: str
 
 
+class DriverMeterCaptureRequest(BaseModel):
+    capture_group_uuid: UUID
+    reading_type: KmReadingType
+    device_created_at: datetime
+    installation_identifier: str = Field(min_length=1, max_length=200)
+    platform: DevicePlatform
+    km_client_event_uuid: UUID | None = None
+    odometer_km: Decimal | str | None = None
+    km_object_reference: str | None = Field(default=None, max_length=500)
+    hmr_client_event_uuid: UUID | None = None
+    hour_meter: Decimal | str | None = None
+    hmr_object_reference: str | None = Field(default=None, max_length=500)
+
+
+class DriverMeterCaptureResponse(BaseModel):
+    capture_group_uuid: UUID
+    event_ids: list[UUID]
+    duty_session_id: UUID
+    status: Literal["accepted", "already_accepted"]
+
+
 class EvidenceUploadResponse(BaseModel):
     client_event_uuid: UUID
     object_reference: str
@@ -595,6 +630,7 @@ class SupervisorEventResponse(BaseModel):
     event_type: OperationalEventType
     assignment_id: UUID
     duty_session_id: UUID | None
+    capture_group_uuid: UUID | None
     driver_name: str
     driver_phone: str | None
     asset_code: str
@@ -697,6 +733,8 @@ class TipperDailyReportResponse(BaseModel):
     registration_number: str
     short_name: str | None
     asset_type: FleetAssetType
+    supports_odometer_km: bool
+    supports_hour_meter: bool
     site_id: UUID
     site_name: str
     driver_name: str
@@ -803,6 +841,8 @@ class DriverDutyReportResponse(BaseModel):
     site_name: str
     duty_start: datetime
     asset_type: FleetAssetType
+    supports_odometer_km: bool
+    supports_hour_meter: bool
     start_km: Decimal | None
     start_hmr: Decimal | None = None
     regular_duty_minutes: int

@@ -958,9 +958,14 @@ class ApiClient
     required PendingEvent event,
     required String installationIdentifier,
   }) async {
+    final meterCapture = event.eventType == DriverEventType.meterCapture;
     final payload = <String, dynamic>{
-      'client_event_uuid': event.clientEventUuid,
-      'event_type': event.eventType.wireName,
+      if (meterCapture)
+        'capture_group_uuid': event.clientEventUuid
+      else ...{
+        'client_event_uuid': event.clientEventUuid,
+        'event_type': event.eventType.wireName,
+      },
       'device_created_at': event.deviceCreatedAt.toUtc().toIso8601String(),
       'installation_identifier': installationIdentifier,
       'platform': 'ANDROID',
@@ -968,7 +973,7 @@ class ApiClient
     };
     await _request(
       'POST',
-      '/api/v1/driver/events',
+      meterCapture ? '/api/v1/driver/meter-captures' : '/api/v1/driver/events',
       authenticated: true,
       body: payload,
     );

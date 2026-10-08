@@ -134,9 +134,13 @@ class SyncEngine {
             startClientEventUuid: clientEventUuid,
             startKm: eventType == DriverEventType.kmReading
                 ? _readingValue(payload)
+                : eventType == DriverEventType.meterCapture
+                ? _optionalReadingValue(payload, 'odometer_km')
                 : null,
             startHmr: eventType == DriverEventType.hmrReading
                 ? _readingValue(payload)
+                : eventType == DriverEventType.meterCapture
+                ? _optionalReadingValue(payload, 'hour_meter')
                 : null,
             startedAt: now,
             endClientEventUuid: null,
@@ -157,9 +161,13 @@ class SyncEngine {
             endClientEventUuid: isEnd ? clientEventUuid : null,
             endKm: isEnd && eventType == DriverEventType.kmReading
                 ? _readingValue(payload)
+                : isEnd && eventType == DriverEventType.meterCapture
+                ? _optionalReadingValue(payload, 'odometer_km')
                 : null,
             endHmr: isEnd && eventType == DriverEventType.hmrReading
                 ? _readingValue(payload)
+                : isEnd && eventType == DriverEventType.meterCapture
+                ? _optionalReadingValue(payload, 'hour_meter')
                 : null,
             endedAt: isEnd ? now : null,
             state: isEnd
@@ -174,6 +182,42 @@ class SyncEngine {
       }
     });
     return clientEventUuid;
+  }
+
+  Future<String> enqueueMeterCapture({
+    required DriverAssignment assignment,
+    required KmReadingType readingType,
+    String? odometerKm,
+    String? hourMeter,
+    String? kmEvidencePath,
+    String? hmrEvidencePath,
+  }) {
+    final capabilities = assignment.capabilities;
+    final hasKm = odometerKm != null || kmEvidencePath != null;
+    final hasHmr = hourMeter != null || hmrEvidencePath != null;
+    final completeKm = odometerKm != null && kmEvidencePath != null;
+    final completeHmr = hourMeter != null && hmrEvidencePath != null;
+    if (hasKm != completeKm ||
+        hasHmr != completeHmr ||
+        completeKm != capabilities.supportsOdometer ||
+        completeHmr != capabilities.supportsHourMeter) {
+      throw ArgumentError(
+        'Meter values and evidence must exactly match the Asset capabilities.',
+      );
+    }
+    return enqueue(
+      assignment: assignment,
+      eventType: DriverEventType.meterCapture,
+      payload: {
+        'reading_type': readingType.wireName,
+        if (odometerKm != null) 'odometer_km': odometerKm,
+        if (odometerKm != null) 'km_client_event_uuid': _uuid.v4(),
+        if (kmEvidencePath != null) '_km_evidence_path': kmEvidencePath,
+        if (hourMeter != null) 'hour_meter': hourMeter,
+        if (hourMeter != null) 'hmr_client_event_uuid': _uuid.v4(),
+        if (hmrEvidencePath != null) '_hmr_evidence_path': hmrEvidencePath,
+      },
+    );
   }
 
   Future<String> correctStart({
@@ -210,6 +254,55 @@ class SyncEngine {
         session.copyWith(
           startKm: hourMeter ? null : parsed,
           startHmr: hourMeter ? parsed : null,
+          state: LocalDutyState.startPendingSync.name,
+          updatedAt: now,
+        ),
+      );
+    });
+    return session.startClientEventUuid;
+  }
+
+  Future<String> correctMeterCapture({
+    required String assignmentId,
+    required String odometerKm,
+    required String hourMeter,
+    required String kmEvidencePath,
+    required String hmrEvidencePath,
+  }) async {
+    final session = await database.latestLocalDutySession(
+      assignmentId: assignmentId,
+    );
+    if (session == null ||
+        session.state != LocalDutyState.needsAttention.name) {
+      throw StateError('There is no rejected START reading to correct.');
+    }
+    final start = await database.eventById(session.startClientEventUuid);
+    if (start == null ||
+        start.eventType != DriverEventType.meterCapture.wireName) {
+      throw StateError('The original START meter capture is missing.');
+    }
+    final parsedKm = double.tryParse(odometerKm);
+    final parsedHours = double.tryParse(hourMeter);
+    if (parsedKm == null || parsedHours == null) {
+      throw StateError('The corrected START readings are invalid.');
+    }
+    final payload = _decodeStoredPayload(start.payloadJson)
+      ..['reading_type'] = 'START_READING'
+      ..['odometer_km'] = odometerKm
+      ..['hour_meter'] = hourMeter
+      ..['_km_evidence_path'] = kmEvidencePath
+      ..['_hmr_evidence_path'] = hmrEvidencePath;
+    final now = DateTime.now().toUtc();
+    await database.transaction(() async {
+      await database.replaceCompoundEventForRetry(
+        clientEventUuid: session.startClientEventUuid,
+        payloadJson: jsonEncode(payload),
+      );
+      await database.unblockDutyDependentEvents(session.localSessionId);
+      await database.updateLocalDutySession(
+        session.copyWith(
+          startKm: parsedKm,
+          startHmr: parsedHours,
           state: LocalDutyState.startPendingSync.name,
           updatedAt: now,
         ),
@@ -594,6 +687,8 @@ class SyncEngine {
       eventType == DriverEventType.kmReading &&
           payload['reading_type'] == 'START_READING' ||
       eventType == DriverEventType.hmrReading &&
+          payload['reading_type'] == 'START_READING' ||
+      eventType == DriverEventType.meterCapture &&
           payload['reading_type'] == 'START_READING';
 
   static bool _isEndEvent(
@@ -603,10 +698,17 @@ class SyncEngine {
       eventType == DriverEventType.kmReading &&
           payload['reading_type'] == 'END_READING' ||
       eventType == DriverEventType.hmrReading &&
+          payload['reading_type'] == 'END_READING' ||
+      eventType == DriverEventType.meterCapture &&
           payload['reading_type'] == 'END_READING';
 
   static double _readingValue(Map<String, dynamic> payload) =>
       double.tryParse('${payload['reading_value']}') ?? 0;
+
+  static double? _optionalReadingValue(
+    Map<String, dynamic> payload,
+    String key,
+  ) => payload[key] == null ? null : double.tryParse('${payload[key]}');
 
   static Map<String, dynamic> _decodeStoredPayload(String payloadJson) {
     try {
@@ -792,6 +894,32 @@ class SyncEngine {
     while (true) {
       try {
         var payload = <String, dynamic>{...event.payload};
+        if (event.eventType == DriverEventType.meterCapture) {
+          final kmUuid = payload['km_client_event_uuid'] as String?;
+          final kmPath = payload.remove('_km_evidence_path') as String?;
+          if (kmUuid != null && kmPath != null) {
+            try {
+              payload['km_object_reference'] = await remote.uploadEvidence(
+                clientEventUuid: kmUuid,
+                evidencePath: kmPath,
+              );
+            } on ApiException catch (error) {
+              throw error.atSyncStage('KM_EVIDENCE_UPLOAD');
+            }
+          }
+          final hmrUuid = payload['hmr_client_event_uuid'] as String?;
+          final hmrPath = payload.remove('_hmr_evidence_path') as String?;
+          if (hmrUuid != null && hmrPath != null) {
+            try {
+              payload['hmr_object_reference'] = await remote.uploadEvidence(
+                clientEventUuid: hmrUuid,
+                evidencePath: hmrPath,
+              );
+            } on ApiException catch (error) {
+              throw error.atSyncStage('HMR_EVIDENCE_UPLOAD');
+            }
+          }
+        }
         if (event.evidencePath != null) {
           late final String objectReference;
           try {

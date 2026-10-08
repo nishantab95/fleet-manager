@@ -799,7 +799,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       );
       await _refreshQueue();
       if (eventType == DriverEventType.kmReading ||
-          eventType == DriverEventType.hmrReading) {
+          eventType == DriverEventType.hmrReading ||
+          eventType == DriverEventType.meterCapture) {
         await _refreshDuty();
       }
       if (mounted) {
@@ -810,6 +811,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             'Emergency saved on phone — not yet delivered',
           DriverEventType.kmReading => 'KM reading saved',
           DriverEventType.hmrReading => 'HMR saved',
+          DriverEventType.meterCapture => 'KM + HMR readings saved',
         };
         _showMessage(label);
       }
@@ -922,6 +924,61 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       },
       evidencePath: photo.path,
     );
+  }
+
+  Future<void> _showDualMeterDialog({KmReadingType? forcedType}) async {
+    final type = forcedType ?? await _chooseReadingType(hourMeter: false);
+    if (type == null || !mounted) return;
+    final result = await showDialog<_DualMeterCapture>(
+      context: context,
+      builder: (context) => _DualMeterDialog(type: type),
+    );
+    if (result == null) return;
+    final kmPhoto = await _pickEvidence(mustChoose: true);
+    if (kmPhoto == null) return;
+    final hmrPhoto = await _pickEvidence(mustChoose: true);
+    if (hmrPhoto == null) return;
+    final assignment = widget.assignment;
+    if (assignment == null) return;
+    if (_duty.canCorrectStart && type == KmReadingType.startReading) {
+      setState(() => _busy = true);
+      try {
+        await widget.dependencies.sync.correctMeterCapture(
+          assignmentId: assignment.assignmentId,
+          odometerKm: result.odometerKm,
+          hourMeter: result.hourMeter,
+          kmEvidencePath: kmPhoto.path,
+          hmrEvidencePath: hmrPhoto.path,
+        );
+        await _refreshQueue();
+        await _refreshDuty();
+        if (mounted) _showMessage('Corrected START KM + HMR saved on phone');
+        unawaited(_syncQueuedEvents());
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      return;
+    }
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.dependencies.sync.enqueueMeterCapture(
+        assignment: assignment,
+        readingType: type,
+        odometerKm: result.odometerKm,
+        hourMeter: result.hourMeter,
+        kmEvidencePath: kmPhoto.path,
+        hmrEvidencePath: hmrPhoto.path,
+      );
+      await _refreshQueue();
+      await _refreshDuty();
+      if (mounted) _showMessage('KM + HMR readings saved');
+      unawaited(_syncQueuedEvents());
+      _lastQueuedAt = DateTime.now();
+      _lastQueuedEventType = DriverEventType.meterCapture;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<KmReadingType?> _chooseReadingType({required bool hourMeter}) async {
@@ -1095,7 +1152,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final capabilities =
         assignment?.capabilities ?? DriverAssetCapabilities.tipper;
     final hourMeter = capabilities.supportsHourMeter;
-    final meterLabel = hourMeter ? 'HMR' : 'KM';
+    final odometer = capabilities.supportsOdometer;
+    final dualMeter = odometer && hourMeter;
+    final meterLabel = dualMeter
+        ? 'KM + HMR'
+        : hourMeter
+        ? 'HMR'
+        : 'KM';
     final canCapture = assignment != null;
     final dutyActive = _duty.isOperationallyActive;
     final canOperate = canCapture && !_busy && dutyActive;
@@ -1154,7 +1217,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 ? 'CORRECT START $meterLabel'
                 : null,
             onCorrectStart: _duty.canCorrectStart && canReadMeter
-                ? () => hourMeter
+                ? () => dualMeter
+                      ? _showDualMeterDialog(
+                          forcedType: KmReadingType.startReading,
+                        )
+                      : hourMeter
                       ? _showHmrDialog(forcedType: KmReadingType.startReading)
                       : _showKmDialog(forcedType: KmReadingType.startReading)
                 : null,
@@ -1163,9 +1230,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           if (!dutyActive) ...[
             _ActionButton(
               label: 'START DUTY',
-              icon: hourMeter ? Icons.timer_outlined : Icons.speed_outlined,
+              icon: dualMeter
+                  ? Icons.av_timer
+                  : hourMeter
+                  ? Icons.timer_outlined
+                  : Icons.speed_outlined,
               onPressed: canReadMeter
-                  ? () => hourMeter ? _showHmrDialog() : _showKmDialog()
+                  ? () => dualMeter
+                        ? _showDualMeterDialog()
+                        : hourMeter
+                        ? _showHmrDialog()
+                        : _showKmDialog()
                   : null,
             ),
             const SizedBox(height: 12),
@@ -1242,9 +1317,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             const SizedBox(height: 40),
             _ActionButton(
               label: 'END DUTY',
-              icon: hourMeter ? Icons.timer_outlined : Icons.speed_outlined,
+              icon: dualMeter
+                  ? Icons.av_timer
+                  : hourMeter
+                  ? Icons.timer_outlined
+                  : Icons.speed_outlined,
               onPressed: canReadMeter
-                  ? () => hourMeter
+                  ? () => dualMeter
+                        ? _showDualMeterDialog(
+                            forcedType: KmReadingType.endReading,
+                          )
+                        : hourMeter
                         ? _showHmrDialog(forcedType: KmReadingType.endReading)
                         : _showKmDialog(forcedType: KmReadingType.endReading)
                   : null,
@@ -1731,6 +1814,101 @@ class _KmCapture {
 
   final KmReadingType type;
   final String value;
+}
+
+class _DualMeterCapture {
+  const _DualMeterCapture(this.odometerKm, this.hourMeter);
+
+  final String odometerKm;
+  final String hourMeter;
+}
+
+class _DualMeterDialog extends StatefulWidget {
+  const _DualMeterDialog({required this.type});
+
+  final KmReadingType type;
+
+  @override
+  State<_DualMeterDialog> createState() => _DualMeterDialogState();
+}
+
+class _DualMeterDialogState extends State<_DualMeterDialog> {
+  final _km = TextEditingController();
+  final _hours = TextEditingController();
+  String? _error;
+
+  bool _valid(String raw, double maximum) {
+    final value = raw.trim();
+    if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(value)) return false;
+    final parsed = double.tryParse(value);
+    return parsed != null &&
+        parsed.isFinite &&
+        parsed >= 0 &&
+        parsed <= maximum;
+  }
+
+  @override
+  void dispose() {
+    _km.dispose();
+    _hours.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final prefix = widget.type == KmReadingType.startReading ? 'START' : 'END';
+    return AlertDialog(
+      title: Text('$prefix READINGS'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _km,
+            decoration: const InputDecoration(labelText: 'Odometer KM'),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => setState(() => _error = null),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _hours,
+            decoration: const InputDecoration(labelText: 'Hour Meter / HMR'),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => setState(() => _error = null),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('CANCEL'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_valid(_km.text, maxOdometerKm) ||
+                !_valid(_hours.text, maxHourMeterHours)) {
+              setState(
+                () => _error =
+                    'Enter both valid readings. Neither meter is optional for this asset.',
+              );
+              return;
+            }
+            Navigator.pop(
+              context,
+              _DualMeterCapture(_km.text.trim(), _hours.text.trim()),
+            );
+          },
+          child: const Text('CONTINUE'),
+        ),
+      ],
+    );
+  }
 }
 
 class _KmDialog extends StatefulWidget {

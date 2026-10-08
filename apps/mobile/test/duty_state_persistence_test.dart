@@ -116,6 +116,94 @@ void main() {
     },
   );
 
+  test(
+    'offline dual-meter start and end remain one durable capture each',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'fleet-manager-dual-meter-',
+      );
+      final databaseFile = File(
+        '${directory.path}${Platform.pathSeparator}driver.sqlite',
+      );
+      final remote = _RecordingRemote();
+      const assignment = DriverAssignment(
+        assignmentId: 'assignment-dual',
+        tipperId: 'asset-dual',
+        tipperRegistrationNumber: 'DUAL-01',
+        tipperShortName: 'Dual Meter',
+        assetType: 'TIPPER',
+        supportsOdometerKm: true,
+        supportsHourMeter: true,
+        siteId: 'pilot-site',
+        siteName: 'Pilot Site',
+        supervisorName: 'Pilot Supervisor',
+      );
+
+      var database = LocalDatabase(NativeDatabase(databaseFile));
+      var engine = SyncEngine(
+        database: database,
+        remote: remote,
+        installationIdentifier: 'pilot-device',
+      );
+      final startGroup = await engine.enqueueMeterCapture(
+        assignment: assignment,
+        readingType: KmReadingType.startReading,
+        odometerKm: '42150',
+        hourMeter: '8421.3',
+        kmEvidencePath: 'start-km.jpg',
+        hmrEvidencePath: 'start-hmr.jpg',
+      );
+      final endGroup = await engine.enqueueMeterCapture(
+        assignment: assignment,
+        readingType: KmReadingType.endReading,
+        odometerKm: '42280',
+        hourMeter: '8430.8',
+        kmEvidencePath: 'end-km.jpg',
+        hmrEvidencePath: 'end-hmr.jpg',
+      );
+      expect(startGroup, isNot(endGroup));
+      expect(await engine.pendingCount(), 2);
+      await database.close();
+
+      database = LocalDatabase(NativeDatabase(databaseFile));
+      engine = SyncEngine(
+        database: database,
+        remote: remote,
+        installationIdentifier: 'pilot-device',
+      );
+      final restored = await engine.localDutyState(assignment.assignmentId);
+      expect(restored.startKm, 42150);
+      expect(restored.startHmr, 8421.3);
+      expect(restored.endKm, 42280);
+      expect(restored.endHmr, 8430.8);
+      expect(restored.localState, LocalDutyState.endPendingSync);
+
+      expect(await engine.syncPending(), 2);
+      expect(remote.eventTypes, [
+        DriverEventType.meterCapture,
+        DriverEventType.meterCapture,
+      ]);
+      for (final payload in remote.payloads) {
+        expect(payload['km_client_event_uuid'], isNotNull);
+        expect(payload['hmr_client_event_uuid'], isNotNull);
+        expect(
+          payload['km_client_event_uuid'],
+          isNot(payload['hmr_client_event_uuid']),
+        );
+        expect(payload['km_object_reference'], isNotNull);
+        expect(payload['hmr_object_reference'], isNotNull);
+        expect(payload, isNot(contains('_km_evidence_path')));
+        expect(payload, isNot(contains('_hmr_evidence_path')));
+      }
+      expect(
+        (await engine.localDutyState(assignment.assignmentId)).localState,
+        LocalDutyState.closedConfirmed,
+      );
+      await database.close();
+      await directory.delete(recursive: true);
+    },
+  );
+
   test('deterministic START rejection blocks dependent events', () async {
     final database = LocalDatabase(NativeDatabase.memory());
     final remote = _RecordingRemote(rejectStart: true);

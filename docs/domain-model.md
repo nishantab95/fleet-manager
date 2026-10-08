@@ -267,6 +267,51 @@ append-only and requires an owner reason.
     distance or machine-hour value. Driver clients treat the server's current
     Assignment and active-duty result as authoritative during reconciliation.
 
+## Maintenance V2 and asset meter invariants
+
+`FleetAsset` has three independent operational facts:
+
+- `is_wheeled` classifies whether kilometre-based maintenance can apply;
+- `supports_odometer_km` determines whether duty start/end captures KM; and
+- `supports_hour_meter` determines whether duty start/end captures HMR.
+
+Every asset supports at least one operational meter. A non-wheeled asset cannot
+support odometer KM. Current Pilot defaults are dual KM/HMR for tippers,
+backhoe loaders, and graders; HMR-only for excavators; and HMR-only for rollers.
+The migration preserves legacy behaviour by backfilling existing tippers as
+KM-only and existing machinery as HMR-only. Changing classification or meter
+capabilities affects future capture requirements and never rewrites historical
+events.
+
+A Driver meter capture contains exactly the configured meter set. Dual-meter
+assets submit KM and HMR together with distinct evidence objects and client
+event UUIDs under one capture-group UUID. A transaction either persists the
+entire group or none of it. Each meter is validated against the latest prior
+END reading of the same type, so KM and HMR monotonicity remain independent.
+The group is the Supervisor-facing review unit; its member events remain the
+reporting and maintenance source values.
+
+Maintenance has four layers:
+
+- a versioned `MaintenanceTemplate` and its task/criterion definitions;
+- an asset-owned `MaintenancePlan` with copied, independently editable items;
+- mutable `MaintenanceWorkOrder` lifecycle state; and
+- append-only `MaintenanceHistoryRecord` completion facts.
+
+Each plan item has one or more criteria. `DATE`, `ODOMETER_KM`, and
+`HOUR_METER_HOURS` are allowed for wheeled assets; non-wheeled assets reject KM.
+Due state is the most urgent usable criterion (`OVERDUE`, `DUE_SOON`, `OK`). A
+criterion whose current meter or baseline is unavailable is `UNKNOWN`; that
+unknown criterion cannot conceal an overdue calendar criterion. An item is
+`UNKNOWN` only when none of its criteria has enough data.
+
+Completing a work order creates one immutable history record and resets only
+the service baselines actually supported by supplied completion values. The
+calendar baseline always becomes the completion date. Decimal costs remain
+decimal end to end. Template application and plan copy copy task definitions,
+not history; plan copy resets every baseline so another asset's readings and
+service dates cannot leak across assets or tenants.
+
 ## PC V1 emergency contract
 
 The PC V1 `EMERGENCY` action is a one-tap signal. New events do not require a

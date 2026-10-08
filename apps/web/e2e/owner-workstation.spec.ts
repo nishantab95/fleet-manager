@@ -327,8 +327,9 @@ test.describe("mocked Owner workstation", () => {
     await expect(rentedRow).toContainText("Primary: +91 98765 43210");
     await expect(rentedRow).toContainText("Alternate: +91 99887 76655");
     await expect(rentedRow.locator(".owner-fleet-rental")).toHaveCSS("border-top-style", "none");
-    await expect(rentedRow.getByRole("button")).toHaveCount(2);
+    await expect(rentedRow.getByRole("button")).toHaveCount(3);
     await expect(rentedRow.getByRole("button", { name: "Manage" })).toBeVisible();
+    await expect(rentedRow.getByRole("button", { name: "Maintenance" })).toBeVisible();
     await expect(rentedRow.getByRole("button", { name: "History" })).toBeVisible();
 
     const assignedRow = fleetTable.getByRole("row").filter({ hasText: "Green Tipper" });

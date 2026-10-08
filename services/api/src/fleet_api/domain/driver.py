@@ -21,13 +21,15 @@ from fleet_api.db.models import (
     EmergencyEvent,
     EvidenceObject,
     FleetAsset,
+    HourMeterReading,
+    KmReading,
     OperationalEvent,
     Site,
     SupervisorSiteAccess,
     User,
 )
 from fleet_api.db.models.common import utc_now
-from fleet_api.domain.assets import capabilities_for
+from fleet_api.domain.assets import capabilities_for_asset
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     DevicePlatform,
@@ -47,6 +49,7 @@ from fleet_api.domain.enums import (
 )
 from fleet_api.domain.errors import (
     AssignmentNotEffectiveError,
+    ConflictError,
     DeviceHandoverBlockedError,
     DeviceHandoverRequiredError,
     DomainError,
@@ -92,6 +95,14 @@ class DriverEventResult:
 @dataclass(frozen=True)
 class DriverDutyState:
     session: DutySession | None
+
+
+@dataclass(frozen=True)
+class DriverMeterCaptureResult:
+    capture_group_uuid: UUID
+    events: tuple[OperationalEvent, ...]
+    duty_session: DutySession
+    duplicate: bool
 
 
 def _require_driver(context: AuthContext) -> None:
@@ -225,13 +236,15 @@ def _previous_valid_end_km(
         VerificationStatus.AMENDED,
     }
     return session.scalar(
-        select(DutySession.end_km)
-        .join(OperationalEvent, OperationalEvent.id == DutySession.end_event_id)
+        select(KmReading.reading_value)
+        .join(OperationalEvent, OperationalEvent.id == KmReading.event_id)
+        .join(DutySession, DutySession.id == OperationalEvent.duty_session_id)
         .where(
             DutySession.company_id == company_id,
             DutySession.asset_id == asset_id,
             DutySession.status == DutySessionStatus.CLOSED,
             DutySession.ended_at < before,
+            KmReading.reading_type == KmReadingType.END_READING,
             OperationalEvent.verification_status.in_(valid_statuses),
         )
         .order_by(DutySession.ended_at.desc(), DutySession.id.desc())
@@ -252,14 +265,15 @@ def _previous_valid_end_hmr(
         VerificationStatus.AMENDED,
     }
     return session.scalar(
-        select(DutySession.end_hmr)
-        .join(OperationalEvent, OperationalEvent.id == DutySession.end_event_id)
+        select(HourMeterReading.reading_value)
+        .join(OperationalEvent, OperationalEvent.id == HourMeterReading.event_id)
+        .join(DutySession, DutySession.id == OperationalEvent.duty_session_id)
         .where(
             DutySession.company_id == company_id,
             DutySession.asset_id == asset_id,
             DutySession.status == DutySessionStatus.CLOSED,
             DutySession.ended_at < before,
-            DutySession.end_hmr.is_not(None),
+            HourMeterReading.reading_type == HourMeterReadingType.END_READING,
             OperationalEvent.verification_status.in_(valid_statuses),
         )
         .order_by(DutySession.ended_at.desc(), DutySession.id.desc())
@@ -530,7 +544,7 @@ def create_driver_event(
     asset = session.get(FleetAsset, assignment.asset_id)
     if asset is None or asset.company_id != context.company.id:
         raise TenantConsistencyError("assignment asset does not belong to this company")
-    capabilities = capabilities_for(asset.asset_type)
+    capabilities = capabilities_for_asset(asset)
     supported = {
         OperationalEventType.TRIP_COMPLETE: capabilities.supports_trip_complete,
         OperationalEventType.KM_READING: capabilities.supports_odometer,
@@ -821,6 +835,266 @@ def create_driver_event(
         event.duty_session_id = active_duty.id
         session.flush()
     return DriverEventResult(event=event, duplicate=False)
+
+
+def create_multi_meter_capture(
+    session: Session,
+    context: AuthContext,
+    settings: Settings,
+    *,
+    capture_group_uuid: UUID,
+    reading_type: KmReadingType,
+    device_created_at: datetime,
+    device: Device,
+    km_client_event_uuid: UUID | None,
+    odometer_km: Decimal | str | None,
+    km_object_reference: str | None,
+    hmr_client_event_uuid: UUID | None,
+    hour_meter: Decimal | str | None,
+    hmr_object_reference: str | None,
+) -> DriverMeterCaptureResult:
+    """Atomically persist every meter from one Driver START/END action."""
+
+    assignment = _assignment_at_event(
+        session,
+        context=context,
+        device_created_at=device_created_at,
+        settings=settings,
+        lock=True,
+    )
+    asset = session.get(FleetAsset, assignment.asset_id)
+    if asset is None or asset.company_id != context.company.id:
+        raise TenantConsistencyError("assignment asset does not belong to this company")
+    capabilities = capabilities_for_asset(asset)
+    submitted_km = odometer_km is not None or km_client_event_uuid is not None
+    submitted_hmr = hour_meter is not None or hmr_client_event_uuid is not None
+    if submitted_km != capabilities.supports_odometer:
+        raise DomainError("odometer reading must match this asset's meter capability")
+    if submitted_hmr != capabilities.supports_hour_meter:
+        raise DomainError("hour-meter reading must match this asset's meter capability")
+    if not submitted_km and not submitted_hmr:
+        raise DomainError("at least one meter reading is required")
+    if submitted_km and (odometer_km is None or km_client_event_uuid is None):
+        raise DomainError("odometer value and client event UUID are both required")
+    if submitted_hmr and (hour_meter is None or hmr_client_event_uuid is None):
+        raise DomainError("hour-meter value and client event UUID are both required")
+    if device.company_id != context.company.id or device.membership_id != context.membership.id:
+        raise TenantConsistencyError("device is not owned by the authenticated driver")
+
+    km_value = (
+        _validate_odometer_reading(settings, odometer_km) if odometer_km is not None else None
+    )
+    hmr_value = (
+        _validate_hour_meter_reading(settings, hour_meter) if hour_meter is not None else None
+    )
+
+    existing = list(
+        session.scalars(
+            select(OperationalEvent)
+            .where(
+                OperationalEvent.company_id == context.company.id,
+                OperationalEvent.capture_group_uuid == capture_group_uuid,
+            )
+            .order_by(OperationalEvent.event_type)
+        ).all()
+    )
+    expected_uuids = {
+        value for value in (km_client_event_uuid, hmr_client_event_uuid) if value is not None
+    }
+    if existing:
+        if {event.client_event_uuid for event in existing} != expected_uuids:
+            raise TenantConsistencyError("capture group UUID is already used by another submission")
+        expected_types = {
+            event_type
+            for event_type, submitted in (
+                (OperationalEventType.KM_READING, submitted_km),
+                (OperationalEventType.HMR_READING, submitted_hmr),
+            )
+            if submitted
+        }
+        if {event.event_type for event in existing} != expected_types:
+            raise TenantConsistencyError("capture group meter types do not match this submission")
+        if any(
+            event.device_id != device.id or event.assignment_id != assignment.id
+            for event in existing
+        ):
+            raise TenantConsistencyError("capture group is not owned by this device")
+        for event in existing:
+            if event.event_type == OperationalEventType.KM_READING:
+                persisted_km = session.get(KmReading, event.id)
+                if (
+                    persisted_km is None
+                    or persisted_km.reading_type != reading_type
+                    or persisted_km.reading_value != km_value
+                ):
+                    raise ConflictError(
+                        "capture group KM payload does not match the accepted event"
+                    )
+            elif event.event_type == OperationalEventType.HMR_READING:
+                persisted_hmr = session.get(HourMeterReading, event.id)
+                if (
+                    persisted_hmr is None
+                    or persisted_hmr.reading_type != HourMeterReadingType(reading_type.value)
+                    or persisted_hmr.reading_value != hmr_value
+                ):
+                    raise ConflictError(
+                        "capture group HMR payload does not match the accepted event"
+                    )
+        duty_ids = {event.duty_session_id for event in existing}
+        if len(duty_ids) != 1 or None in duty_ids:
+            raise ConflictError("meter capture exists without one shared duty session")
+        duty = session.get(DutySession, existing[0].duty_session_id)
+        if duty is None:
+            raise ConflictError("meter capture exists without its duty session")
+        return DriverMeterCaptureResult(capture_group_uuid, tuple(existing), duty, True)
+
+    reused = session.scalar(
+        select(OperationalEvent.id).where(
+            OperationalEvent.company_id == context.company.id,
+            OperationalEvent.client_event_uuid.in_(expected_uuids),
+        )
+    )
+    if reused is not None:
+        raise ConflictError("client event UUID is already used by another submission")
+    if km_client_event_uuid is not None:
+        _evidence_for_event(
+            session,
+            context=context,
+            client_event_uuid=km_client_event_uuid,
+            object_reference=km_object_reference,
+            required=True,
+        )
+    if hmr_client_event_uuid is not None:
+        _evidence_for_event(
+            session,
+            context=context,
+            client_event_uuid=hmr_client_event_uuid,
+            object_reference=hmr_object_reference,
+            required=True,
+        )
+
+    active = _active_duty_session(session, context=context, lock=True)
+    is_start = reading_type == KmReadingType.START_READING
+    if is_start:
+        if active is not None:
+            raise DutyAlreadyStartedError("an active duty session already exists")
+        if km_value is not None:
+            previous_km = _previous_valid_end_km(
+                session,
+                company_id=context.company.id,
+                asset_id=assignment.asset_id,
+                before=device_created_at,
+            )
+            if previous_km is not None and km_value < previous_km:
+                raise DutyOdometerContinuityError(
+                    "START KM cannot be lower than the previous END KM "
+                    f"({_format_odometer_km(previous_km)}). Please check the odometer.",
+                    previous_end_km=previous_km,
+                )
+        if hmr_value is not None:
+            previous_hmr = _previous_valid_end_hmr(
+                session,
+                company_id=context.company.id,
+                asset_id=assignment.asset_id,
+                before=device_created_at,
+            )
+            if previous_hmr is not None and hmr_value < previous_hmr:
+                raise DutyHourMeterContinuityError(
+                    "START HMR cannot be lower than the previous END HMR "
+                    f"({_format_odometer_km(previous_hmr)}). Please check the hour meter.",
+                    previous_end_hmr=previous_hmr,
+                )
+    else:
+        active = _require_active_duty(
+            session,
+            context=context,
+            assignment=assignment,
+            device_created_at=device_created_at,
+        )
+        if km_value is not None and (active.start_km is None or km_value < active.start_km):
+            raise DutyKmValidationError(
+                "END_READING must be greater than or equal to START_READING"
+            )
+        if hmr_value is not None and (active.start_hmr is None or hmr_value < active.start_hmr):
+            raise DutyHourMeterValidationError("END HMR must be greater than or equal to START HMR")
+
+    event_ids: list[UUID] = []
+    if km_client_event_uuid is not None and km_value is not None:
+        km = create_km_reading(
+            session,
+            company_id=context.company.id,
+            assignment_id=assignment.id,
+            client_event_uuid=km_client_event_uuid,
+            device_created_at=device_created_at,
+            reading_type=reading_type,
+            reading_value=km_value,
+            object_reference=km_object_reference,
+            device_id=device.id,
+            capture_group_uuid=capture_group_uuid,
+        )
+        event_ids.append(km.event_id)
+    if hmr_client_event_uuid is not None and hmr_value is not None:
+        hmr = create_hour_meter_reading(
+            session,
+            company_id=context.company.id,
+            assignment_id=assignment.id,
+            client_event_uuid=hmr_client_event_uuid,
+            device_created_at=device_created_at,
+            reading_type=HourMeterReadingType(reading_type.value),
+            reading_value=hmr_value,
+            object_reference=hmr_object_reference,
+            device_id=device.id,
+            capture_group_uuid=capture_group_uuid,
+        )
+        event_ids.append(hmr.event_id)
+    if not event_ids:
+        raise DomainError("meter capture did not create an event")
+
+    if is_start:
+        regular_minutes = assignment.regular_duty_minutes
+        duty = DutySession(
+            company_id=context.company.id,
+            assignment_id=assignment.id,
+            driver_membership_id=context.membership.id,
+            asset_id=assignment.asset_id,
+            site_id=assignment.site_id,
+            operational_date=_operational_date(context, device_created_at),
+            start_event_id=event_ids[0],
+            start_km=km_value,
+            start_hmr=hmr_value,
+            started_at=device_created_at,
+            configured_regular_duty_minutes=regular_minutes,
+            regular_duty_ends_at=device_created_at + timedelta(minutes=regular_minutes),
+            status=DutySessionStatus.ACTIVE,
+        )
+        session.add(duty)
+        try:
+            with session.begin_nested():
+                session.flush()
+        except IntegrityError as exc:
+            raise DutyAlreadyStartedError("an active duty session already exists") from exc
+    else:
+        assert active is not None
+        duty = active
+        duty.end_event_id = event_ids[0]
+        duty.end_km = km_value
+        duty.end_hmr = hmr_value
+        duty.ended_at = device_created_at
+        duty.status = DutySessionStatus.CLOSED
+        duty.final_overtime_minutes = max(
+            0, int((device_created_at - duty.regular_duty_ends_at).total_seconds() // 60)
+        )
+    for event_id in event_ids:
+        loaded_event = session.get(OperationalEvent, event_id)
+        if loaded_event is not None:
+            loaded_event.duty_session_id = duty.id
+    session.flush()
+    events = tuple(
+        loaded_event
+        for event_id in event_ids
+        if (loaded_event := session.get(OperationalEvent, event_id)) is not None
+    )
+    return DriverMeterCaptureResult(capture_group_uuid, events, duty, False)
 
 
 def upload_evidence(

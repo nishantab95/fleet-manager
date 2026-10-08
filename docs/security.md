@@ -162,6 +162,29 @@ controls.
   removed before workbook serialization. Excel sheet names are separately
   sanitized, length-bounded, and made unique.
 
+## Maintenance V2 security and integrity controls
+
+- Every maintenance route requires `OWNER_ADMIN`; company scope is derived
+  from the authenticated membership and never accepted from request payloads.
+- Asset, template, plan, work-order, and history lookups include company scope.
+  Cross-company identifiers resolve through the normal tenant-safe not-found
+  boundary.
+- Template application and asset-plan copy copy only definitions compatible
+  with the target asset. Neither path copies service history or another asset's
+  meter/date baselines.
+- Maintenance history has no update or delete API. Completion appends a history
+  row in the same transaction as the work-order transition and plan baseline
+  update.
+- KM criteria are rejected for non-wheeled assets and for assets without an
+  odometer capability. Driver submissions must exactly match the asset's
+  operational meter capabilities, including evidence for every required meter.
+- Dual-meter Driver submissions are atomic and idempotent. Their child events
+  retain company/client UUID uniqueness, and their common capture-group UUID
+  prevents a partially rendered Supervisor review unit.
+- Costs use fixed-precision decimal storage. Notes, references, and attachment
+  metadata are tenant-owned data; private object keys are never exposed as
+  public URLs.
+
 ## PC Role Lab controls
 
 - Browser access tokens remain in React runtime memory only; no access or

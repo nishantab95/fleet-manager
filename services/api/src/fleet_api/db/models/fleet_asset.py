@@ -3,12 +3,53 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy.engine.default import DefaultExecutionContext
 from sqlalchemy.orm import Mapped, mapped_column
 
 from fleet_api.db.models.common import UpdatedTimestampModel
 from fleet_api.domain.enums import AssetOwnershipType, FleetAssetStatus, FleetAssetType
+
+
+def _default_supports_odometer(context: DefaultExecutionContext) -> bool:
+    asset_type = context.get_current_parameters().get(  # type: ignore[no-untyped-call]
+        "asset_type"
+    )
+    return asset_type in {
+        FleetAssetType.TIPPER,
+        FleetAssetType.BACKHOE_LOADER,
+        FleetAssetType.GRADER,
+        FleetAssetType.TIPPER.value,
+        FleetAssetType.BACKHOE_LOADER.value,
+        FleetAssetType.GRADER.value,
+    }
+
+
+def _default_is_wheeled(context: DefaultExecutionContext) -> bool:
+    asset_type = context.get_current_parameters().get(  # type: ignore[no-untyped-call]
+        "asset_type"
+    )
+    return asset_type in {
+        FleetAssetType.TIPPER,
+        FleetAssetType.BACKHOE_LOADER,
+        FleetAssetType.ROLLER,
+        FleetAssetType.GRADER,
+        FleetAssetType.TIPPER.value,
+        FleetAssetType.BACKHOE_LOADER.value,
+        FleetAssetType.ROLLER.value,
+        FleetAssetType.GRADER.value,
+    }
 
 
 class FleetAsset(UpdatedTimestampModel):
@@ -35,6 +76,22 @@ class FleetAsset(UpdatedTimestampModel):
     short_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     manufacturer: Mapped[str | None] = mapped_column(String(100), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    model_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_wheeled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=_default_is_wheeled,
+        server_default=text("false"),
+    )
+    supports_odometer_km: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=_default_supports_odometer,
+        server_default=text("false"),
+    )
+    supports_hour_meter: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     chassis_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     engine_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[FleetAssetStatus] = mapped_column(
@@ -65,5 +122,17 @@ class FleetAsset(UpdatedTimestampModel):
             "rental_end_date IS NULL OR rental_start_date IS NULL "
             "OR rental_end_date >= rental_start_date",
             name="rental_dates_ordered",
+        ),
+        CheckConstraint(
+            "model_year IS NULL OR model_year BETWEEN 1900 AND 2200",
+            name="model_year_range",
+        ),
+        CheckConstraint(
+            "supports_odometer_km OR supports_hour_meter",
+            name="at_least_one_meter",
+        ),
+        CheckConstraint(
+            "is_wheeled OR NOT supports_odometer_km",
+            name="non_wheeled_without_odometer",
         ),
     )

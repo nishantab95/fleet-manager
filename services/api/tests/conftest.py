@@ -177,6 +177,8 @@ def tenant_records(db_session: Session) -> dict[str, object]:
         asset_code="ALPHA-ONE",
         registration_number="KA01AB1234",
         short_name="Alpha One",
+        supports_odometer_km=True,
+        supports_hour_meter=False,
         status=FleetAssetStatus.ACTIVE,
     )
     tipper_b = FleetAsset(
@@ -186,6 +188,8 @@ def tenant_records(db_session: Session) -> dict[str, object]:
         asset_code="BETA-ONE",
         registration_number="KA02BC5678",
         short_name="Beta One",
+        supports_odometer_km=True,
+        supports_hour_meter=False,
         status=FleetAssetStatus.ACTIVE,
     )
     db_session.add_all([site_a, site_b, tipper_a, tipper_b])

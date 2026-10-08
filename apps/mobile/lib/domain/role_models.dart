@@ -76,6 +76,7 @@ class SupervisorEvent {
     this.assetCode,
     this.assetType = 'TIPPER',
     this.dutySessionId,
+    this.captureGroupUuid,
     this.driverPhone,
     this.readingType,
     this.readingValue,
@@ -91,6 +92,7 @@ class SupervisorEvent {
   final String eventType;
   final String assignmentId;
   final String? dutySessionId;
+  final String? captureGroupUuid;
   final String driverName;
   final String? driverPhone;
   final String? assetCode;
@@ -128,6 +130,7 @@ class SupervisorEvent {
       eventType: '${json['event_type'] ?? ''}',
       assignmentId: '${json['assignment_id']}',
       dutySessionId: json['duty_session_id']?.toString(),
+      captureGroupUuid: json['capture_group_uuid']?.toString(),
       driverName: '${json['driver_name'] ?? 'Driver'}',
       driverPhone: json['driver_phone'] as String?,
       assetCode: json['asset_code'] as String?,
@@ -334,6 +337,8 @@ class OwnerDutyReport {
     required this.driverName,
     required this.assetCode,
     required this.assetType,
+    required this.supportsOdometerKm,
+    required this.supportsHourMeter,
     required this.tipperRegistration,
     required this.siteName,
     required this.dutyStart,
@@ -355,6 +360,8 @@ class OwnerDutyReport {
   final String driverName;
   final String assetCode;
   final String assetType;
+  final bool supportsOdometerKm;
+  final bool supportsHourMeter;
   final String tipperRegistration;
   final String siteName;
   final DateTime? dutyStart;
@@ -372,8 +379,17 @@ class OwnerDutyReport {
   final int overtimeMinutes;
   final String status;
 
-  DriverAssetCapabilities get capabilities =>
-      DriverAssetCapabilities.forType(assetType);
+  DriverAssetCapabilities get capabilities {
+    final base = DriverAssetCapabilities.forType(assetType);
+    return DriverAssetCapabilities(
+      supportsTripComplete: base.supportsTripComplete,
+      supportsOdometer: supportsOdometerKm,
+      supportsHourMeter: supportsHourMeter,
+      supportsDiesel: base.supportsDiesel,
+      supportsEmergency: base.supportsEmergency,
+      supportsDutySession: base.supportsDutySession,
+    );
+  }
 
   double? get distanceKm =>
       startKm != null && endKm != null ? endKm! - startKm! : null;
@@ -384,6 +400,16 @@ class OwnerDutyReport {
         assetCode:
             '${json['asset_code'] ?? json['tipper_registration_number'] ?? ''}',
         assetType: '${json['asset_type'] ?? 'TIPPER'}',
+        supportsOdometerKm:
+            json['supports_odometer_km'] as bool? ??
+            DriverAssetCapabilities.forType(
+              '${json['asset_type'] ?? 'TIPPER'}',
+            ).supportsOdometer,
+        supportsHourMeter:
+            json['supports_hour_meter'] as bool? ??
+            DriverAssetCapabilities.forType(
+              '${json['asset_type'] ?? 'TIPPER'}',
+            ).supportsHourMeter,
         tipperRegistration: '${json['tipper_registration_number'] ?? ''}',
         siteName: '${json['site_name'] ?? 'Site'}',
         dutyStart: _date(json['duty_start']),

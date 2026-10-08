@@ -31,7 +31,7 @@ from fleet_api.db.models import (
     User,
 )
 from fleet_api.db.models.common import utc_now
-from fleet_api.domain.assets import capabilities_for
+from fleet_api.domain.assets import capabilities_for_asset
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     EmergencyStatus,
@@ -697,19 +697,21 @@ class ReportingService:
             first_trip_completed_at = first_trip_completed_at.astimezone(reporting_zone)
         if last_trip_completed_at is not None:
             last_trip_completed_at = last_trip_completed_at.astimezone(reporting_zone)
-        capabilities = capabilities_for(asset.asset_type)
+        capabilities = capabilities_for_asset(asset)
         start_km: Decimal | None = None
         end_km: Decimal | None = None
         start_hmr: Decimal | None = None
         end_hmr: Decimal | None = None
-        conflicting_start = False
-        conflicting_end = False
+        conflicting_start_km = False
+        conflicting_end_km = False
+        conflicting_start_hmr = False
+        conflicting_end_hmr = False
         if capabilities.supports_odometer:
-            start_km, conflicting_start = self._reading_value(events, "START_READING")
-            end_km, conflicting_end = self._reading_value(events, "END_READING")
-        elif capabilities.supports_hour_meter:
-            start_hmr, conflicting_start = self._hour_meter_value(events, "START_READING")
-            end_hmr, conflicting_end = self._hour_meter_value(events, "END_READING")
+            start_km, conflicting_start_km = self._reading_value(events, "START_READING")
+            end_km, conflicting_end_km = self._reading_value(events, "END_READING")
+        if capabilities.supports_hour_meter:
+            start_hmr, conflicting_start_hmr = self._hour_meter_value(events, "START_READING")
+            end_hmr, conflicting_end_hmr = self._hour_meter_value(events, "END_READING")
         exceptions: list[ReportException] = []
 
         def add_exception(code: str, description: str, event_id: UUID | None = None) -> None:
@@ -725,18 +727,20 @@ class ReportingService:
                 )
             )
 
-        if conflicting_start:
-            add_exception("CONFLICTING_START_READING", "More than one valid START reading exists")
+        if conflicting_start_km:
+            add_exception("CONFLICTING_START_READING", "More than one valid START KM exists")
         elif capabilities.supports_odometer and start_km is None:
             if self._has_status(
                 events, OperationalEventType.KM_READING, VerificationStatus.PENDING_VERIFICATION
             ):
                 add_exception("KM_PENDING", "A KM reading is pending verification")
             add_exception("MISSING_START_READING", "No approved START reading exists")
+        if conflicting_start_hmr:
+            add_exception("CONFLICTING_START_HMR", "More than one valid START HMR exists")
         elif capabilities.supports_hour_meter and start_hmr is None:
             add_exception("MISSING_START_HMR", "No valid START HMR exists")
-        if conflicting_end:
-            add_exception("CONFLICTING_END_READING", "More than one valid END reading exists")
+        if conflicting_end_km:
+            add_exception("CONFLICTING_END_READING", "More than one valid END KM exists")
         elif capabilities.supports_odometer and end_km is None:
             if self._has_status(
                 events, OperationalEventType.KM_READING, VerificationStatus.PENDING_VERIFICATION
@@ -744,6 +748,8 @@ class ReportingService:
                 if not any(item.code == "KM_PENDING" for item in exceptions):
                     add_exception("KM_PENDING", "A KM reading is pending verification")
             add_exception("MISSING_END_READING", "No approved END reading exists")
+        if conflicting_end_hmr:
+            add_exception("CONFLICTING_END_HMR", "More than one valid END HMR exists")
         elif capabilities.supports_hour_meter and end_hmr is None:
             add_exception("MISSING_END_HMR", "No valid END HMR exists")
         distance_km: Decimal | None = None
@@ -821,6 +827,8 @@ class ReportingService:
         review_codes = {
             "CONFLICTING_START_READING",
             "CONFLICTING_END_READING",
+            "CONFLICTING_START_HMR",
+            "CONFLICTING_END_HMR",
             "END_BELOW_START",
         }
         status = (
@@ -835,11 +843,11 @@ class ReportingService:
         missing_start = (
             (capabilities.supports_odometer and start_km is None)
             or (capabilities.supports_hour_meter and start_hmr is None)
-        ) and not conflicting_start
+        ) and not (conflicting_start_km or conflicting_start_hmr)
         missing_end = (
             (capabilities.supports_odometer and end_km is None)
             or (capabilities.supports_hour_meter and end_hmr is None)
-        ) and not conflicting_end
+        ) and not (conflicting_end_km or conflicting_end_hmr)
         trips_state = (
             ReportMetricState.NOT_APPLICABLE
             if not capabilities.supports_trip_complete

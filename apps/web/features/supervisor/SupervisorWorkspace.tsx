@@ -39,7 +39,7 @@ type TipperReviewGroup = {
   pendingCount: number;
 };
 
-const normalEventTypes = new Set(["TRIP_COMPLETE", "KM_READING", "DIESEL"]);
+const normalEventTypes = new Set(["TRIP_COMPLETE", "KM_READING", "HMR_READING", "DIESEL"]);
 
 function eventTime(value: string) {
   return new Date(value).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
@@ -104,7 +104,11 @@ export function SupervisorShell(props: SupervisorShellProps) {
   }, [completeness, normalEvents]);
 
   const pendingTrips = normalEvents.filter((event) => event.event_type === "TRIP_COMPLETE" && event.verification_status === "PENDING_VERIFICATION").length;
-  const pendingKm = normalEvents.filter((event) => event.event_type === "KM_READING" && event.verification_status === "PENDING_VERIFICATION").length;
+  const pendingMeters = new Set(
+    normalEvents
+      .filter((event) => (event.event_type === "KM_READING" || event.event_type === "HMR_READING") && event.verification_status === "PENDING_VERIFICATION")
+      .map((event) => event.capture_group_uuid ?? event.event_id),
+  ).size;
   const pendingDiesel = normalEvents.filter((event) => event.event_type === "DIESEL" && event.verification_status === "PENDING_VERIFICATION").length;
 
   useEffect(() => {
@@ -200,20 +204,32 @@ export function SupervisorShell(props: SupervisorShellProps) {
 
   const renderReviewRow = (event: SupervisorEvent, label: string, detail: string) => <article className="table-card supervisor-event-card" key={event.event_id}>
     <div className="table-row"><div><strong>{label}</strong><span>{detail}</span></div><span>{eventTime(event.device_created_at)}</span><span>{event.verification_status}</span>{event.verification_status === "PENDING_VERIFICATION" && <label className="row-check"><input checked={selectedEventIds.includes(event.event_id)} onChange={() => toggleSelection(event.event_id)} type="checkbox" /> Select</label>}</div>
-    <div className="table-row">{event.event_type === "KM_READING" && <span>{event.reading_value ?? "Unavailable"} km</span>}{event.event_type === "DIESEL" && <span>{event.litres ?? "Unavailable"} L</span>}<span>{event.duty_session_id ? `Session ${event.duty_session_id.slice(0, 8)}` : "Outside duty session"}</span>{event.evidence_available && <button className="secondary" onClick={() => void viewEvidence(event)} type="button">View Photo</button>}</div>
+    <div className="table-row">{event.event_type === "KM_READING" && <span>{event.reading_value ?? "Unavailable"} km</span>}{event.event_type === "HMR_READING" && <span>{event.reading_value ?? "Unavailable"} h</span>}{event.event_type === "DIESEL" && <span>{event.litres ?? "Unavailable"} L</span>}<span>{event.duty_session_id ? `Session ${event.duty_session_id.slice(0, 8)}` : "Outside duty session"}</span>{event.evidence_available && <button className="secondary" onClick={() => void viewEvidence(event)} type="button">View Photo</button>}</div>
     {renderVerificationControls(event)}
     {renderHistory(event)}
   </article>;
 
+  const renderMeterGroup = (meterEvents: SupervisorEvent[]) => {
+    const first = meterEvents[0]!;
+    const km = meterEvents.find((event) => event.event_type === "KM_READING");
+    const hmr = meterEvents.find((event) => event.event_type === "HMR_READING");
+    return <article className="table-card supervisor-event-card" key={first.capture_group_uuid ?? first.event_id}>
+      <div className="table-row"><div><strong>{first.reading_type === "START_READING" ? "START" : "END"} READINGS</strong><span>{first.driver_name}</span></div><span>{eventTime(first.device_created_at)}</span><span>{meterEvents.every((event) => event.verification_status === "APPROVED") ? "APPROVED" : meterEvents.some((event) => event.verification_status === "PENDING_VERIFICATION") ? "PENDING VERIFICATION" : "REVIEWED"}</span></div>
+      <div className="table-row">{km && <strong>KM&nbsp;&nbsp; {km.reading_value ?? "Unavailable"}</strong>}{hmr && <strong>HMR&nbsp;&nbsp; {hmr.reading_value ?? "Unavailable"}</strong>}<span>{first.duty_session_id ? `Session ${first.duty_session_id.slice(0, 8)}` : "Outside duty session"}</span></div>
+      {meterEvents.map((event) => <div className="stack compact-stack" key={event.event_id}><div className="table-row"><span>{event.event_type === "KM_READING" ? "Odometer KM" : "Hour Meter / HMR"} · {event.verification_status}</span>{event.evidence_available && <button className="secondary" onClick={() => void viewEvidence(event)} type="button">View Photo</button>}</div>{renderVerificationControls(event)}{renderHistory(event)}</div>)}
+    </article>;
+  };
+
   const renderTipperGroup = (group: TipperReviewGroup, index: number) => {
     const trips = group.events.filter((event) => event.event_type === "TRIP_COMPLETE").sort(sortByTime);
-    const km = group.events.filter((event) => event.event_type === "KM_READING").sort(sortByTime);
+    const meters = group.events.filter((event) => event.event_type === "KM_READING" || event.event_type === "HMR_READING").sort(sortByTime);
+    const meterGroups = [...meters.reduce((result, event) => { const key = event.capture_group_uuid ?? event.event_id; result.set(key, [...(result.get(key) ?? []), event]); return result; }, new Map<string, SupervisorEvent[]>()).values()];
     const diesel = group.events.filter((event) => event.event_type === "DIESEL").sort(sortByTime);
     return <details className="tipper-review-group" key={group.assignmentId} open={index === 0}>
       <summary><span><strong>{group.tipperRegistrationNumber}</strong> · {group.driverName}</span><span className={group.pendingCount ? "badge" : "badge active"}>{group.pendingCount} pending</span></summary>
       <div className="tipper-review-body">
         <section className="review-section"><h3>TRIPS</h3>{trips.length ? trips.map((event, tripIndex) => renderReviewRow(event, `Trip ${tripIndex + 1}`, event.driver_name)) : <p className="muted">No Trip Complete events.</p>}</section>
-        <section className="review-section"><h3>KM READINGS</h3>{km.length ? km.map((event) => renderReviewRow(event, event.reading_type === "START_READING" ? "START KM" : "END KM", event.reading_type === "START_READING" ? "Start odometer reading" : "End odometer reading")) : <p className="muted">No KM readings.</p>}</section>
+        <section className="review-section"><h3>METER READINGS</h3>{meterGroups.length ? meterGroups.map(renderMeterGroup) : <p className="muted">No meter readings.</p>}</section>
         <section className="review-section"><h3>DIESEL</h3>{diesel.length ? diesel.map((event) => renderReviewRow(event, "Diesel issued / recorded", event.driver_name)) : <p className="muted">No Diesel events.</p>}</section>
       </div>
     </details>;
@@ -227,7 +243,7 @@ export function SupervisorShell(props: SupervisorShellProps) {
       {!props.sites.length && <div className="notice">No SupervisorSiteAccess assignment is available for this membership.</div>}
       {emergencyNotice && <div className="notice error emergency-toast" role="status"><strong>{emergencyNotice}</strong></div>}
       {openEmergencies.length > 0 && <section className="emergency-panel" aria-labelledby="supervisor-emergency-heading"><div className="content-heading"><div><h2 id="supervisor-emergency-heading">EMERGENCY <span className="badge">{openEmergencies.length} open</span></h2><p className="muted">Contact the driver immediately. Emergency alerts use their own lifecycle and are not verification records.</p></div></div>{openEmergencies.map((event) => <article className="emergency-alert" key={event.event_id} role="alert"><div className="emergency-alert-details"><strong>{event.driver_name}</strong><span>Tipper {event.tipper_registration_number}</span><span>{event.site_name}</span><span>{event.emergency_status} · {eventClock(event.device_created_at)}</span></div><div className="inline-form emergency-actions">{event.driver_phone && <a className="call-driver" href={`tel:${event.driver_phone}`}>CALL DRIVER</a>}{event.emergency_status === "OPEN" && <button className="secondary" disabled={busyEventId !== null} onClick={() => void acknowledgeEmergency(event)} type="button">ACKNOWLEDGE</button>}{event.emergency_status === "ACKNOWLEDGED" && <button className="secondary" disabled={busyEventId !== null} onClick={() => void resolveEmergency(event)} type="button">RESOLVE</button>}</div></article>)}</section>}
-      {selectedSite && <><div className="metric-grid supervisor-qa-summary"><Metric label="Pending Trips" value={pendingTrips} /><Metric label="Pending KM" value={pendingKm} /><Metric label="Pending Diesel" value={pendingDiesel} /><Metric label="Open Emergencies" value={openEmergencies.length} /></div><h2>{selectedSite.name} · daily completeness</h2><p className="muted">Review only the assigned site and date. Verification history is append-only.</p><div className="table-card">{completeness.length ? completeness.map((item) => <div className="table-row" key={item.assignment_id}><strong>{item.tipper_registration_number}</strong><span>{item.driver_name}</span><span>{item.has_start_reading ? `START ${item.start_reading_value ?? "✓"}` : "No START"}</span><span>{item.has_end_reading ? `END ${item.end_reading_value ?? "✓"}` : "No END"}</span>{item.odometer_regression && <span>KM exception: END &lt; START</span>}<span>{item.pending_trip_verification ? "Pending trip" : "Trip clear"}</span><span>{item.pending_diesel_verification ? "Pending diesel" : "Diesel clear"}</span><span>{item.unresolved_emergency ? "Emergency review" : "No unresolved emergency"}</span></div>) : <div className="table-row"><span>No assignments found for this date.</span></div>}</div>
+      {selectedSite && <><div className="metric-grid supervisor-qa-summary"><Metric label="Pending Trips" value={pendingTrips} /><Metric label="Pending Meters" value={pendingMeters} /><Metric label="Pending Diesel" value={pendingDiesel} /><Metric label="Open Emergencies" value={openEmergencies.length} /></div><h2>{selectedSite.name} · daily completeness</h2><p className="muted">Review only the assigned site and date. Verification history is append-only.</p><div className="table-card">{completeness.length ? completeness.map((item) => <div className="table-row" key={item.assignment_id}><strong>{item.tipper_registration_number}</strong><span>{item.driver_name}</span><span>{item.has_start_reading ? `START ${item.start_reading_value ?? "✓"}` : "No START"}</span><span>{item.has_end_reading ? `END ${item.end_reading_value ?? "✓"}` : "No END"}</span>{item.odometer_regression && <span>KM exception: END &lt; START</span>}<span>{item.pending_trip_verification ? "Pending trip" : "Trip clear"}</span><span>{item.pending_diesel_verification ? "Pending diesel" : "Diesel clear"}</span><span>{item.unresolved_emergency ? "Emergency review" : "No unresolved emergency"}</span></div>) : <div className="table-row"><span>No assignments found for this date.</span></div>}</div>
       <div className="content-heading"><div><h2>Operations by tipper</h2><p className="muted">{normalEvents.length} operational event{normalEvents.length === 1 ? "" : "s"} · {normalEvents.filter((event) => event.verification_status === "PENDING_VERIFICATION").length} actionable pending</p></div><button disabled={!selectedEventIds.length || busyEventId !== null} onClick={() => void approveSelected()} type="button">Approve selected ({selectedEventIds.length})</button></div>
       <div className="stack">{groups.length ? groups.map(renderTipperGroup) : <div className="notice">No operational events were captured for this site and date.</div>}</div>
       </>}

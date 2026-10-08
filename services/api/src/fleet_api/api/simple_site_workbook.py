@@ -16,7 +16,7 @@ from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from openpyxl.worksheet.worksheet import Worksheet  # type: ignore[import-untyped]
 
 from fleet_api.db.models import DutySession, FleetAsset
-from fleet_api.domain.assets import capabilities_for
+from fleet_api.domain.assets import capabilities_for_asset
 from fleet_api.domain.enums import FleetAssetType, OperationalEventType, VerificationStatus
 from fleet_api.domain.reporting import AssetDailyReport, ReportMetricState, SitePeriodReport
 
@@ -320,7 +320,7 @@ def _write_summary(
         rows = rows_by_asset.get(asset.id, [])
         metrics = _metrics(rows)
         all_metrics[asset.id] = metrics
-        capabilities = capabilities_for(asset.asset_type)
+        capabilities = capabilities_for_asset(asset)
         _append_row(
             worksheet,
             [
@@ -367,18 +367,22 @@ def _write_summary(
     machinery_assets = [
         asset for asset in report.assets if asset.asset_type != FleetAssetType.TIPPER
     ]
-    distance_values = sum(all_metrics[asset.id].distance_values for asset in tipper_assets)
+    distance_assets = [
+        asset for asset in report.assets if capabilities_for_asset(asset).supports_odometer
+    ]
+    hour_assets = [
+        asset for asset in report.assets if capabilities_for_asset(asset).supports_hour_meter
+    ]
+    distance_values = sum(all_metrics[asset.id].distance_values for asset in distance_assets)
     distance_incomplete = any(
         all_metrics[asset.id].distance_incomplete or all_metrics[asset.id].distance_values == 0
-        for asset in tipper_assets
+        for asset in distance_assets
     )
-    machine_hour_values = sum(
-        all_metrics[asset.id].machine_hour_values for asset in machinery_assets
-    )
+    machine_hour_values = sum(all_metrics[asset.id].machine_hour_values for asset in hour_assets)
     machine_hours_incomplete = any(
         all_metrics[asset.id].machine_hours_incomplete
         or all_metrics[asset.id].machine_hour_values == 0
-        for asset in machinery_assets
+        for asset in hour_assets
     )
     total_rows: list[tuple[str, object]] = [
         ("Total Assets", len(report.assets)),
@@ -397,23 +401,23 @@ def _write_summary(
         (
             "Total Distance KM",
             sum(
-                (all_metrics[asset.id].total_distance_km for asset in tipper_assets),
+                (all_metrics[asset.id].total_distance_km for asset in distance_assets),
                 Decimal("0"),
             )
             if distance_values and not distance_incomplete
             else "MISSING"
-            if tipper_assets
+            if distance_assets
             else "N/A",
         ),
         (
             "Total Machine Hours",
             sum(
-                (all_metrics[asset.id].total_machine_hours for asset in machinery_assets),
+                (all_metrics[asset.id].total_machine_hours for asset in hour_assets),
                 Decimal("0"),
             )
             if machine_hour_values and not machine_hours_incomplete
             else "MISSING"
-            if machinery_assets
+            if hour_assets
             else "N/A",
         ),
         (
@@ -461,9 +465,15 @@ def _write_asset_sheet(
     *,
     zone: ZoneInfo,
 ) -> None:
-    capabilities = capabilities_for(asset.asset_type)
+    capabilities = capabilities_for_asset(asset)
     metrics = _metrics(rows)
-    end_column = 11 if capabilities.supports_odometer else 10
+    end_column = (
+        15
+        if capabilities.supports_odometer and capabilities.supports_hour_meter
+        else 11
+        if capabilities.supports_odometer
+        else 10
+    )
     _set_cell(worksheet["A1"], "ASSET DETAILS")
     _set_cell(worksheet["A2"], asset_label)
     _style_title(worksheet, end_column)
@@ -485,74 +495,98 @@ def _write_asset_sheet(
     worksheet.cell(period_header, 1, "PERIOD SUMMARY")
     worksheet.cell(period_header, 1).fill = _SECTION_FILL
     worksheet.cell(period_header, 1).font = _SECTION_FONT
-    if capabilities.supports_odometer:
-        summary_rows: list[tuple[str, object]] = [
-            ("Working Days", metrics.working_days),
-            ("Approved Trips", metrics.approved_trips),
-            (
-                "Total Distance KM",
-                _applicable_metric(
-                    metrics.total_distance_km,
-                    metrics.distance_values,
-                    applicable=True,
-                    incomplete=metrics.distance_incomplete,
-                ),
-            ),
-            ("Diesel Recorded L", metrics.diesel_recorded_l),
-            (
-                "Average Trips / Working Day",
-                Decimal(metrics.approved_trips) / Decimal(metrics.working_days)
-                if metrics.working_days
-                else "N/A",
-            ),
-            (
-                "Average Distance / Working Day",
-                "N/A"
-                if not metrics.working_days
-                else "MISSING"
-                if metrics.distance_incomplete or not metrics.distance_values
-                else metrics.total_distance_km / Decimal(metrics.working_days),
-            ),
-            (
-                "Distance per Litre Recorded",
-                "N/A"
-                if metrics.diesel_recorded_l <= 0
-                else "MISSING"
-                if metrics.distance_incomplete or not metrics.distance_values
-                else _ratio(metrics.total_distance_km, metrics.diesel_recorded_l)
-                if metrics.distance_values
-                else "MISSING",
-            ),
-        ]
+    trip_average = (
+        Decimal(metrics.approved_trips) / Decimal(metrics.working_days)
+        if metrics.working_days
+        else "N/A"
+    )
+    distance_total = _applicable_metric(
+        metrics.total_distance_km,
+        metrics.distance_values,
+        applicable=True,
+        incomplete=metrics.distance_incomplete,
+    )
+    distance_average = (
+        "N/A"
+        if not metrics.working_days
+        else "MISSING"
+        if metrics.distance_incomplete or not metrics.distance_values
+        else metrics.total_distance_km / Decimal(metrics.working_days)
+    )
+    distance_per_litre = (
+        "N/A"
+        if metrics.diesel_recorded_l <= 0
+        else "MISSING"
+        if metrics.distance_incomplete or not metrics.distance_values
+        else _ratio(metrics.total_distance_km, metrics.diesel_recorded_l)
+    )
+    hours_total = _applicable_metric(
+        metrics.total_machine_hours,
+        metrics.machine_hour_values,
+        applicable=True,
+        incomplete=metrics.machine_hours_incomplete,
+    )
+    hours_average = (
+        "N/A"
+        if not metrics.working_days
+        else "MISSING"
+        if metrics.machine_hours_incomplete or not metrics.machine_hour_values
+        else metrics.total_machine_hours / Decimal(metrics.working_days)
+    )
+    litres_per_hour = (
+        "N/A"
+        if metrics.machine_hours_incomplete
+        or not metrics.machine_hour_values
+        or metrics.total_machine_hours <= 0
+        else _ratio(metrics.diesel_recorded_l, metrics.total_machine_hours)
+    )
+    summary_rows: list[tuple[str, object]]
+    if capabilities.supports_odometer and capabilities.supports_hour_meter:
+        summary_rows = [("Working Days", metrics.working_days)]
+        if capabilities.supports_trip_complete:
+            summary_rows.append(("Approved Trips", metrics.approved_trips))
+        summary_rows.extend(
+            [
+                ("Total Distance KM", distance_total),
+                ("Total Machine Hours", hours_total),
+                ("Diesel Recorded L", metrics.diesel_recorded_l),
+            ]
+        )
+        if capabilities.supports_trip_complete:
+            summary_rows.append(("Average Trips / Working Day", trip_average))
+        summary_rows.extend(
+            [
+                ("Average Distance / Working Day", distance_average),
+                ("Average Machine Hours / Working Day", hours_average),
+                ("Distance per Litre Recorded", distance_per_litre),
+                ("Litres Recorded / Machine Hour", litres_per_hour),
+            ]
+        )
+    elif capabilities.supports_odometer:
+        summary_rows = [("Working Days", metrics.working_days)]
+        if capabilities.supports_trip_complete:
+            summary_rows.append(("Approved Trips", metrics.approved_trips))
+        summary_rows.extend(
+            [
+                ("Total Distance KM", distance_total),
+                ("Diesel Recorded L", metrics.diesel_recorded_l),
+            ]
+        )
+        if capabilities.supports_trip_complete:
+            summary_rows.append(("Average Trips / Working Day", trip_average))
+        summary_rows.extend(
+            [
+                ("Average Distance / Working Day", distance_average),
+                ("Distance per Litre Recorded", distance_per_litre),
+            ]
+        )
     else:
         summary_rows = [
             ("Working Days", metrics.working_days),
-            (
-                "Total Machine Hours",
-                _applicable_metric(
-                    metrics.total_machine_hours,
-                    metrics.machine_hour_values,
-                    applicable=True,
-                    incomplete=metrics.machine_hours_incomplete,
-                ),
-            ),
+            ("Total Machine Hours", hours_total),
             ("Diesel Recorded L", metrics.diesel_recorded_l),
-            (
-                "Average Machine Hours / Working Day",
-                "N/A"
-                if not metrics.working_days
-                else "MISSING"
-                if metrics.machine_hours_incomplete or not metrics.machine_hour_values
-                else metrics.total_machine_hours / Decimal(metrics.working_days),
-            ),
-            (
-                "Litres Recorded / Machine Hour",
-                "N/A"
-                if metrics.machine_hours_incomplete
-                or not metrics.machine_hour_values
-                or metrics.total_machine_hours <= 0
-                else _ratio(metrics.diesel_recorded_l, metrics.total_machine_hours),
-            ),
+            ("Average Machine Hours / Working Day", hours_average),
+            ("Litres Recorded / Machine Hour", litres_per_hour),
         ]
     for offset, (label, value) in enumerate(summary_rows, start=1):
         label_cell = worksheet.cell(period_header + offset, 1)
@@ -585,90 +619,77 @@ def _write_asset_sheet(
     header_row = daily_title_row + 1
     headers: tuple[str, ...]
     widths: tuple[float, ...]
+    actor_header = "Driver" if capabilities.supports_trip_complete else "Operator"
+    header_list = ["Date", actor_header, "Duty Start", "Duty End"]
+    width_list = [34.0, 24.0, 13.0, 13.0]
     if capabilities.supports_odometer:
-        headers = (
-            "Date",
-            "Driver",
-            "Duty Start",
-            "Duty End",
-            "Start KM",
-            "End KM",
-            "Distance KM",
-            "Approved Trips",
-            "Diesel Recorded L",
-            "Distance per Litre Recorded",
-            "Pending / Exception Status",
-        )
-        widths = (34, 24, 13, 13, 14, 14, 15, 16, 18, 23, 42)
-    else:
-        headers = (
-            "Date",
-            "Operator",
-            "Duty Start",
-            "Duty End",
-            "Start HMR",
-            "End HMR",
-            "Machine Hours",
-            "Diesel Recorded L",
-            "Litres Recorded / Machine Hour",
-            "Pending / Exception Status",
-        )
-        widths = (34, 24, 13, 13, 14, 14, 16, 18, 27, 42)
+        header_list.extend(["Start KM", "End KM", "Distance KM"])
+        width_list.extend([14.0, 14.0, 15.0])
+    if capabilities.supports_hour_meter:
+        header_list.extend(["Start HMR", "End HMR", "Machine Hours"])
+        width_list.extend([14.0, 14.0, 16.0])
+    if capabilities.supports_trip_complete:
+        header_list.append("Approved Trips")
+        width_list.append(16.0)
+    header_list.append("Diesel Recorded L")
+    width_list.append(18.0)
+    if capabilities.supports_odometer:
+        header_list.append("Distance per Litre Recorded")
+        width_list.append(23.0)
+    if capabilities.supports_hour_meter:
+        header_list.append("Litres Recorded / Machine Hour")
+        width_list.append(27.0)
+    header_list.append("Pending / Exception Status")
+    width_list.append(42.0)
+    headers = tuple(header_list)
+    widths = tuple(width_list)
     _write_row(worksheet, header_row, headers)
 
     for item in rows:
         duty_start, duty_end = _duty_bounds(item.duty_sessions, zone)
+        values: list[object] = [
+            item.operational_date,
+            item.report.driver_name,
+            duty_start or "",
+            duty_end or "",
+        ]
         if capabilities.supports_odometer:
-            _append_row(
-                worksheet,
+            values.extend(
                 [
-                    item.operational_date,
-                    item.report.driver_name,
-                    duty_start or "",
-                    duty_end or "",
                     item.report.start_km if item.report.start_km is not None else "MISSING",
                     item.report.end_km if item.report.end_km is not None else "MISSING",
                     item.report.distance_km if item.report.distance_km is not None else "MISSING",
-                    item.report.approved_trip_count,
-                    item.report.verified_diesel_issued,
-                    (
-                        "N/A"
-                        if item.report.verified_diesel_issued <= 0
-                        else "MISSING"
-                        if item.report.distance_km is None
-                        else _ratio(
-                            item.report.distance_km,
-                            item.report.verified_diesel_issued,
-                        )
-                    ),
-                    _daily_status(item.report),
-                ],
+                ]
             )
-        else:
-            _append_row(
-                worksheet,
+        if capabilities.supports_hour_meter:
+            values.extend(
                 [
-                    item.operational_date,
-                    item.report.driver_name,
-                    duty_start or "",
-                    duty_end or "",
                     item.report.start_hmr if item.report.start_hmr is not None else "MISSING",
                     item.report.end_hmr if item.report.end_hmr is not None else "MISSING",
                     item.report.machine_hours
                     if item.report.machine_hours is not None
                     else "MISSING",
-                    item.report.verified_diesel_issued,
-                    (
-                        _ratio(
-                            item.report.verified_diesel_issued,
-                            item.report.machine_hours,
-                        )
-                        if item.report.machine_hours is not None
-                        else "N/A"
-                    ),
-                    _daily_status(item.report),
-                ],
+                ]
             )
+        if capabilities.supports_trip_complete:
+            values.append(item.report.approved_trip_count)
+        values.append(item.report.verified_diesel_issued)
+        if capabilities.supports_odometer:
+            values.append(
+                "N/A"
+                if item.report.verified_diesel_issued <= 0
+                else "MISSING"
+                if item.report.distance_km is None
+                else _ratio(item.report.distance_km, item.report.verified_diesel_issued)
+            )
+        if capabilities.supports_hour_meter:
+            values.append(
+                _ratio(item.report.verified_diesel_issued, item.report.machine_hours)
+                if item.report.machine_hours is not None and item.report.machine_hours > 0
+                else "N/A"
+            )
+        values.append(_daily_status(item.report))
+        _append_row(worksheet, values)
 
     last_row = header_row + len(rows)
     _style_table(

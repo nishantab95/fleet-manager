@@ -4,6 +4,7 @@ from typing import Annotated, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import (
@@ -18,6 +19,8 @@ from fleet_api.api.schemas import (
     DriverDutyStateResponse,
     DriverEventRequest,
     DriverEventResponse,
+    DriverMeterCaptureRequest,
+    DriverMeterCaptureResponse,
     EvidenceUploadResponse,
 )
 from fleet_api.auth.service import AuthContext
@@ -25,6 +28,7 @@ from fleet_api.core.config import Settings
 from fleet_api.db.session import get_db
 from fleet_api.domain.driver import (
     create_driver_event,
+    create_multi_meter_capture,
     get_current_assignment,
     get_current_duty_state,
     register_device,
@@ -33,6 +37,7 @@ from fleet_api.domain.driver import (
 )
 from fleet_api.domain.errors import (
     AssignmentNotEffectiveError,
+    ConflictError,
     DeviceHandoverBlockedError,
     DeviceHandoverRequiredError,
     DomainError,
@@ -141,14 +146,14 @@ def current_assignment(
         tipper_id=current.asset.id,
         asset_code=current.asset.asset_code,
         asset_type=current.asset.asset_type,
+        supports_odometer_km=current.asset.supports_odometer_km,
+        supports_hour_meter=current.asset.supports_hour_meter,
         tipper_registration_number=current.asset.registration_number,
         tipper_short_name=current.asset.short_name,
         site_id=current.site.id,
         site_name=current.site.name,
         supervisor_name=(
-            current.supervisor_names[0]
-            if len(current.supervisor_names) == 1
-            else None
+            current.supervisor_names[0] if len(current.supervisor_names) == 1 else None
         ),
         supervisor_names=current.supervisor_names,
         regular_duty_minutes=current.assignment.regular_duty_minutes,
@@ -259,6 +264,56 @@ def submit_driver_event(
     except DomainError as exc:
         db.rollback()
         _fail(exc)
+
+
+@router.post("/meter-captures", response_model=DriverMeterCaptureResponse)
+def submit_meter_capture(
+    payload: DriverMeterCaptureRequest,
+    context: Annotated[AuthContext, Depends(require_driver)],
+    settings: Annotated[Settings, Depends(get_app_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DriverMeterCaptureResponse:
+    try:
+        for client_uuid in (
+            payload.km_client_event_uuid,
+            payload.hmr_client_event_uuid,
+        ):
+            if client_uuid is not None:
+                validate_driver_event_uuid(db, context, client_event_uuid=client_uuid)
+        device, _ = register_device(
+            db,
+            context,
+            installation_identifier=payload.installation_identifier,
+            platform=payload.platform,
+        )
+        result = create_multi_meter_capture(
+            db,
+            context,
+            settings,
+            capture_group_uuid=payload.capture_group_uuid,
+            reading_type=payload.reading_type,
+            device_created_at=payload.device_created_at,
+            device=device,
+            km_client_event_uuid=payload.km_client_event_uuid,
+            odometer_km=payload.odometer_km,
+            km_object_reference=payload.km_object_reference,
+            hmr_client_event_uuid=payload.hmr_client_event_uuid,
+            hour_meter=payload.hour_meter,
+            hmr_object_reference=payload.hmr_object_reference,
+        )
+        db.commit()
+        return DriverMeterCaptureResponse(
+            capture_group_uuid=result.capture_group_uuid,
+            event_ids=[event.id for event in result.events],
+            duty_session_id=result.duty_session.id,
+            status="already_accepted" if result.duplicate else "accepted",
+        )
+    except DomainError as exc:
+        db.rollback()
+        _fail(exc)
+    except IntegrityError:
+        db.rollback()
+        _fail(ConflictError("meter capture was submitted concurrently"))
 
 
 @router.post("/evidence", response_model=EvidenceUploadResponse)

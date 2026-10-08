@@ -23,7 +23,7 @@ from fleet_api.db.models import (
     SupervisorSiteAccess,
     User,
 )
-from fleet_api.domain.assets import capabilities_for
+from fleet_api.domain.assets import capabilities_for_asset
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
     DutySessionStatus,
@@ -850,7 +850,7 @@ class OwnerOperationPlanner:
             partial_changes = []
             if asset.status != FleetAssetStatus.ACTIVE:
                 partial_blocked.append("Only an active asset can receive a Driver / Operator.")
-            if not capabilities_for(asset.asset_type).supports_duty_session:
+            if not capabilities_for_asset(asset).supports_duty_session:
                 partial_blocked.append(
                     "This asset type is not supported by the current Driver workflow."
                 )
@@ -940,7 +940,7 @@ class OwnerOperationPlanner:
         changes: list[str] = []
         if asset.status != FleetAssetStatus.ACTIVE:
             blocked.append("Only an active asset can receive a Driver / Operator.")
-        if not capabilities_for(asset.asset_type).supports_duty_session:
+        if not capabilities_for_asset(asset).supports_duty_session:
             blocked.append("This asset type is not supported by the current Driver workflow.")
         if assignment is not None:
             blocked.append("Asset already has a current Driver / Operator.")
@@ -1449,7 +1449,7 @@ class OwnerOperationPlanner:
         current, dependencies = self._asset_items(
             asset, deployment, site, assignment, membership, user, duty
         )
-        capabilities = capabilities_for(asset.asset_type)
+        capabilities = capabilities_for_asset(asset)
         if capabilities.supports_odometer:
             missing_meter_label = "END KM"
             missing_exception_code = "MISSING_END_READING"
@@ -1648,7 +1648,7 @@ class OwnerOperationPlanner:
             assert selected_driver_user is not None
             if target_site is None:
                 blocked.append("Choose a Site before assigning a Driver / Operator.")
-            if not capabilities_for(asset.asset_type).supports_duty_session:
+            if not capabilities_for_asset(asset).supports_duty_session:
                 blocked.append("This asset type is not supported by the current Driver workflow.")
             if (
                 selected_driver.role != MembershipRole.DRIVER
@@ -2397,7 +2397,7 @@ class OwnerOperationPlanner:
         duty = self._duty(asset.id, lock=True)
         assignment = self._assignment(asset.id, at=now, lock=True)
         deployment = self._deployment(asset.id, lock=True)
-        capabilities = capabilities_for(asset.asset_type)
+        capabilities = capabilities_for_asset(asset)
 
         duty_id = duty.id if duty is not None else None
         driver_membership_id = (
