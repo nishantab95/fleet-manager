@@ -35,10 +35,14 @@ class FleetAsset(UpdatedTimestampModel):
     short_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     manufacturer: Mapped[str | None] = mapped_column(String(100), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    chassis_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    engine_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[FleetAssetStatus] = mapped_column(
         SAEnum(FleetAssetStatus, name="fleet_asset_status_enum"), nullable=False
     )
     rental_party_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    rental_owner_phone_primary: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rental_owner_phone_secondary: Mapped[str | None] = mapped_column(String(32), nullable=True)
     rental_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     rental_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 

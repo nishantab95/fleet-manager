@@ -78,7 +78,11 @@ function assetSearchText(asset: OwnerAsset) {
     asset.ownership_type,
     asset.manufacturer,
     asset.model,
+    asset.chassis_number,
+    asset.engine_number,
     asset.rental_party_name,
+    asset.rental_owner_phone_primary,
+    asset.rental_owner_phone_secondary,
     asset.current_deployment?.site_name,
     asset.active_assignment?.driver_name,
   ].filter(Boolean).join(" ").toLowerCase();
@@ -95,6 +99,11 @@ function personForAsset(asset: OwnerAsset, people: OwnerPerson[]) {
 
 function dateTime(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function phoneDisplay(value: string) {
+  const india = value.match(/^\+91(\d{5})(\d{5})$/);
+  return india ? `+91 ${india[1]} ${india[2]}` : value;
 }
 
 function toggleSort<T extends string>(selected: T, next: T, direction: SortDirection) {
@@ -136,27 +145,66 @@ type AssetDraft = {
   short_name: string;
   manufacturer: string;
   model: string;
+  chassis_number: string;
+  engine_number: string;
   rental_party_name: string;
+  rental_owner_phone_primary: string;
+  rental_owner_phone_secondary: string;
   rental_start_date: string;
   rental_end_date: string;
 };
 
 const blankAsset: AssetDraft = {
   asset_type: "TIPPER", ownership_type: "OWNED", registration_number: "", short_name: "",
-  manufacturer: "", model: "", rental_party_name: "", rental_start_date: "", rental_end_date: "",
+  manufacturer: "", model: "", chassis_number: "", engine_number: "", rental_party_name: "",
+  rental_owner_phone_primary: "", rental_owner_phone_secondary: "", rental_start_date: "", rental_end_date: "",
 };
+
+function draftForAsset(asset: OwnerAsset): AssetDraft {
+  return {
+    asset_type: asset.asset_type,
+    ownership_type: asset.ownership_type,
+    registration_number: asset.registration_number ?? "",
+    short_name: asset.short_name ?? "",
+    manufacturer: asset.manufacturer ?? "",
+    model: asset.model ?? "",
+    chassis_number: asset.chassis_number ?? "",
+    engine_number: asset.engine_number ?? "",
+    rental_party_name: asset.rental_party_name ?? "",
+    rental_owner_phone_primary: asset.rental_owner_phone_primary ?? "",
+    rental_owner_phone_secondary: asset.rental_owner_phone_secondary ?? "",
+    rental_start_date: asset.rental_start_date ?? "",
+    rental_end_date: asset.rental_end_date ?? "",
+  };
+}
 
 function AssetFields({ draft, editing, setDraft }: { draft: AssetDraft; editing: boolean; setDraft: (draft: AssetDraft) => void }) {
   const machinery = draft.asset_type !== "TIPPER";
   return (
-    <div className="owner-form-grid">
-      <label>Asset type<select aria-label="Asset type" disabled={editing} onChange={(event) => setDraft({ ...draft, asset_type: event.target.value as FleetAssetType })} value={draft.asset_type}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
-      <label>Ownership<select aria-label="Ownership" onChange={(event) => setDraft({ ...draft, ownership_type: event.target.value as AssetOwnershipType })} value={draft.ownership_type}><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label>
-      {!machinery && <label>Registration<input aria-label="Registration" onChange={(event) => setDraft({ ...draft, registration_number: event.target.value })} required value={draft.registration_number} /></label>}
-      <label>Short name<input aria-label="Short name" onChange={(event) => setDraft({ ...draft, short_name: event.target.value })} placeholder={machinery ? "e.g. North excavator" : "e.g. BENZ-1"} required={machinery} value={draft.short_name} /></label>
-      <label>Manufacturer<input aria-label="Manufacturer" onChange={(event) => setDraft({ ...draft, manufacturer: event.target.value })} value={draft.manufacturer} /></label>
-      <label>Model<input aria-label="Model" onChange={(event) => setDraft({ ...draft, model: event.target.value })} value={draft.model} /></label>
-      {draft.ownership_type === "RENTED" && <><label>Rental party<input aria-label="Rental party" onChange={(event) => setDraft({ ...draft, rental_party_name: event.target.value })} required value={draft.rental_party_name} /></label><label>Rental start<input aria-label="Rental start" onChange={(event) => setDraft({ ...draft, rental_start_date: event.target.value })} type="date" value={draft.rental_start_date} /></label><label>Rental end<input aria-label="Rental end" onChange={(event) => setDraft({ ...draft, rental_end_date: event.target.value })} type="date" value={draft.rental_end_date} /></label></>}
+    <div className="owner-asset-form-sections">
+      <fieldset className="owner-form-section">
+        <legend>Basic details</legend>
+        <div className="owner-form-grid">
+          <label>Short name *<input aria-label="Short name" onChange={(event) => setDraft({ ...draft, short_name: event.target.value })} placeholder={machinery ? "e.g. North excavator" : "e.g. BENZ-1"} required value={draft.short_name} /></label>
+          {!machinery && <label>Registration *<input aria-label="Registration" onChange={(event) => setDraft({ ...draft, registration_number: event.target.value })} required value={draft.registration_number} /></label>}
+          <label>Asset type *<select aria-label="Asset type" disabled={editing} onChange={(event) => setDraft({ ...draft, asset_type: event.target.value as FleetAssetType })} value={draft.asset_type}>{assetTypes.map((type) => <option key={type} value={type}>{title(type)}</option>)}</select></label>
+          <label>Ownership *<select aria-label="Ownership" onChange={(event) => setDraft({ ...draft, ownership_type: event.target.value as AssetOwnershipType })} value={draft.ownership_type}><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label>
+          <label>Manufacturer<input aria-label="Manufacturer" onChange={(event) => setDraft({ ...draft, manufacturer: event.target.value })} value={draft.manufacturer} /></label>
+          <label>Model<input aria-label="Model" onChange={(event) => setDraft({ ...draft, model: event.target.value })} value={draft.model} /></label>
+          <label>Chassis number <small>Optional</small><input aria-label="Chassis number" onChange={(event) => setDraft({ ...draft, chassis_number: event.target.value })} value={draft.chassis_number} /></label>
+          <label>Engine number <small>Optional</small><input aria-label="Engine number" onChange={(event) => setDraft({ ...draft, engine_number: event.target.value })} value={draft.engine_number} /></label>
+        </div>
+      </fieldset>
+      {draft.ownership_type === "RENTED" && <fieldset className="owner-form-section">
+        <legend>Rental Owner / Supplier</legend>
+        <div className="owner-form-grid">
+          <label>Name *<input aria-label="Rental Owner / Supplier name" onChange={(event) => setDraft({ ...draft, rental_party_name: event.target.value })} required value={draft.rental_party_name} /></label>
+          <label>Primary phone *<input aria-label="Primary phone" inputMode="tel" onChange={(event) => setDraft({ ...draft, rental_owner_phone_primary: event.target.value })} required type="tel" value={draft.rental_owner_phone_primary} /></label>
+          <label>Alternate phone<input aria-label="Alternate phone" inputMode="tel" onChange={(event) => setDraft({ ...draft, rental_owner_phone_secondary: event.target.value })} type="tel" value={draft.rental_owner_phone_secondary} /></label>
+          <label>Rental start<input aria-label="Rental start" onChange={(event) => setDraft({ ...draft, rental_start_date: event.target.value })} type="date" value={draft.rental_start_date} /></label>
+          <label>Rental end<input aria-label="Rental end" onChange={(event) => setDraft({ ...draft, rental_end_date: event.target.value })} type="date" value={draft.rental_end_date} /></label>
+        </div>
+      </fieldset>}
     </div>
   );
 }
@@ -169,25 +217,30 @@ function assetPayload(draft: AssetDraft, includeType: boolean) {
     short_name: draft.short_name || null,
     manufacturer: draft.manufacturer || null,
     model: draft.model || null,
+    chassis_number: draft.chassis_number || null,
+    engine_number: draft.engine_number || null,
     rental_party_name: draft.ownership_type === "RENTED" ? draft.rental_party_name || null : null,
+    rental_owner_phone_primary: draft.ownership_type === "RENTED" ? draft.rental_owner_phone_primary || null : null,
+    rental_owner_phone_secondary: draft.ownership_type === "RENTED" ? draft.rental_owner_phone_secondary || null : null,
     rental_start_date: draft.ownership_type === "RENTED" ? draft.rental_start_date || null : null,
     rental_end_date: draft.ownership_type === "RENTED" ? draft.rental_end_date || null : null,
   };
 }
 
-type FleetSort = "name" | "registration" | "type" | "ownership" | "manufacturer" | "site" | "operator" | "duty" | "status";
+type FleetSort = "asset" | "setup" | "operator";
 
-export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError, openRelationshipManager }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[] }) {
+export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError, openRelationshipManager, editAssetId = null, onEditHandled }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[]; editAssetId?: string | null; onEditHandled?: () => void }) {
   const mutation = useOwnerAction({ reload, setError });
-  const [draft, setDraft] = useState<AssetDraft>(blankAsset);
-  const [editingId, setEditingId] = useState("");
-  const [formOpen, setFormOpen] = useState(false);
+  const requestedEditAsset = editAssetId ? assets.find((asset) => asset.id === editAssetId) : undefined;
+  const [draft, setDraft] = useState<AssetDraft>(() => requestedEditAsset ? draftForAsset(requestedEditAsset) : blankAsset);
+  const [editingId, setEditingId] = useState(requestedEditAsset?.id ?? "");
+  const [formOpen, setFormOpen] = useState(Boolean(requestedEditAsset));
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [ownershipFilter, setOwnershipFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [siteFilter, setSiteFilter] = useState("");
-  const [sortKey, setSortKey] = useState<FleetSort>("name");
+  const [sortKey, setSortKey] = useState<FleetSort>("asset");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [historyAsset, setHistoryAsset] = useState<OwnerAsset | null>(null);
   const [deploymentHistory, setDeploymentHistory] = useState<AssetSiteDeployment[]>([]);
@@ -198,17 +251,12 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
   const shown = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = assets.filter((asset) => (!normalizedQuery || assetSearchText(asset).includes(normalizedQuery)) && (!typeFilter || asset.asset_type === typeFilter) && (!ownershipFilter || asset.ownership_type === ownershipFilter) && (!statusFilter || asset.status === statusFilter) && (!siteFilter || asset.current_deployment?.site_id === siteFilter));
-    const value = (asset: OwnerAsset) => sortKey === "name" ? assetLabel(asset) : sortKey === "registration" ? asset.registration_number : sortKey === "type" ? asset.asset_type : sortKey === "ownership" ? asset.ownership_type : sortKey === "manufacturer" ? `${asset.manufacturer ?? ""} ${asset.model ?? ""}` : sortKey === "site" ? asset.current_deployment?.site_name : sortKey === "operator" ? asset.active_assignment?.driver_name : sortKey === "duty" ? (personForAsset(asset, people)?.has_active_duty ? "ON_DUTY" : asset.has_active_assignment ? "OFF_DUTY" : "UNASSIGNED") : asset.status;
+    const value = (asset: OwnerAsset) => sortKey === "asset" ? assetLabel(asset) : sortKey === "setup" ? `${asset.current_deployment?.site_name ?? ""} ${personForAsset(asset, people)?.has_active_duty ? "ON_DUTY" : asset.has_active_assignment ? "OFF_DUTY" : "UNASSIGNED"} ${asset.status}` : asset.active_assignment?.driver_name;
     return [...filtered].sort((left, right) => { const result = compareText(value(left), value(right)); return sortDirection === "asc" ? result : -result; });
   }, [assets, ownershipFilter, people, query, siteFilter, sortDirection, sortKey, statusFilter, typeFilter]);
 
   const changeSort = (next: FleetSort) => { const value = toggleSort(sortKey, next, sortDirection); setSortKey(value.key); setSortDirection(value.direction); };
-  const edit = (asset: OwnerAsset) => {
-    setEditingId(asset.id);
-    setDraft({ asset_type: asset.asset_type, ownership_type: asset.ownership_type, registration_number: asset.registration_number ?? "", short_name: asset.short_name ?? "", manufacturer: asset.manufacturer ?? "", model: asset.model ?? "", rental_party_name: asset.rental_party_name ?? "", rental_start_date: asset.rental_start_date ?? "", rental_end_date: asset.rental_end_date ?? "" });
-    setFormOpen(true);
-  };
-  const closeForm = () => { setDraft(blankAsset); setEditingId(""); setFormOpen(false); };
+  const closeForm = () => { setDraft(blankAsset); setEditingId(""); setFormOpen(false); onEditHandled?.(); };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const endpoint = editingId ? `/api/v1/owner/assets/${editingId}` : "/api/v1/owner/assets";
@@ -247,24 +295,20 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
         <label>Status<select aria-label="Filter status" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
         <label>Site<select aria-label="Filter site" onChange={(event) => setSiteFilter(event.target.value)} value={siteFilter}><option value="">All sites</option>{sites.filter((site) => site.status === "ACTIVE").map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>
       </FilterToolbar>
-      <OperationsTable label="Fleet assets">
+      <OperationsTable label="Fleet assets" variant="fleet">
         <thead><tr>
-          <th aria-sort={sortKey === "name" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "name"} direction={sortDirection} label="Short name" onClick={() => changeSort("name")} /></th>
-          <th aria-sort={sortKey === "registration" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "registration"} direction={sortDirection} label="Registration" onClick={() => changeSort("registration")} /></th>
-          <th aria-sort={sortKey === "type" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "type"} direction={sortDirection} label="Type" onClick={() => changeSort("type")} /></th>
-          <th aria-sort={sortKey === "ownership" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "ownership"} direction={sortDirection} label="Ownership" onClick={() => changeSort("ownership")} /></th>
-          <th aria-sort={sortKey === "manufacturer" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "manufacturer"} direction={sortDirection} label="Manufacturer / model" onClick={() => changeSort("manufacturer")} /></th><th aria-sort={sortKey === "site" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "site"} direction={sortDirection} label="Current site" onClick={() => changeSort("site")} /></th><th aria-sort={sortKey === "operator" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "operator"} direction={sortDirection} label="Driver / Operator" onClick={() => changeSort("operator")} /></th><th aria-sort={sortKey === "duty" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "duty"} direction={sortDirection} label="Duty" onClick={() => changeSort("duty")} /></th>
-          <th aria-sort={sortKey === "status" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "status"} direction={sortDirection} label="Asset status" onClick={() => changeSort("status")} /></th><th scope="col">Actions</th>
+          <th aria-sort={sortKey === "asset" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "asset"} direction={sortDirection} label="Asset" onClick={() => changeSort("asset")} /></th>
+          <th aria-sort={sortKey === "setup" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "setup"} direction={sortDirection} label="Current setup" onClick={() => changeSort("setup")} /></th>
+          <th aria-sort={sortKey === "operator" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "operator"} direction={sortDirection} label="Driver / Operator" onClick={() => changeSort("operator")} /></th>
+          <th scope="col">Actions</th>
         </tr></thead>
         <tbody>
-          {shown.length === 0 && <EmptyTableRow colSpan={10} detail="Adjust the search or filters, or add the first asset." title="No fleet assets match" />}
-          {shown.map((asset) => { const person = personForAsset(asset, people); return <tr key={asset.id}>
-            <td data-label="Short name"><strong>{assetLabel(asset)}</strong></td>
-            <td data-label="Registration"><strong>{asset.registration_number || "—"}</strong></td><td data-label="Type">{title(asset.asset_type)}</td>
-            <td data-label="Ownership"><StatusChip status={asset.ownership_type} />{asset.ownership_type === "RENTED" && <small>{asset.rental_party_name || "Rental party not set"}</small>}</td>
-            <td data-label="Manufacturer / model">{[asset.manufacturer, asset.model].filter(Boolean).join(" ") || "—"}</td><td data-label="Current site">{asset.current_deployment?.site_name || <span className="owner-dim">Undeployed</span>}</td><td data-label="Driver / Operator">{asset.active_assignment?.driver_name || <span className="owner-dim">Unassigned</span>}</td>
-            <td data-label="Duty">{person?.has_active_duty ? <StatusChip label="On duty" status="ON_DUTY" /> : <StatusChip label={asset.has_active_assignment ? "Off duty" : "Not assigned"} status="AVAILABLE" />}</td><td data-label="Asset status"><StatusChip status={asset.status} /></td>
-            <td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => edit(asset)} type="button">Edit</button><button className="owner-text-button" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: asset.status === "INACTIVE" ? "lifecycle" : undefined, initialAction: asset.status === "INACTIVE" ? "REACTIVATE_ASSET" : undefined })} type="button">{asset.status === "ACTIVE" ? "Manage" : "Reactivate"}</button><button className="owner-text-button" onClick={() => void openRelationshipHistory(asset)} type="button">History</button></div></td>
+          {shown.length === 0 && <EmptyTableRow colSpan={4} detail="Adjust the search or filters, or add the first asset." title="No fleet assets match" />}
+          {shown.map((asset) => { const person = personForAsset(asset, people); const dutyStatus = person?.has_active_duty ? "ON_DUTY" : asset.has_active_assignment ? "OFF_DUTY" : "UNASSIGNED"; return <tr key={asset.id}>
+            <td data-label="Asset"><div className="owner-fleet-cell owner-fleet-asset"><strong>{assetLabel(asset)}</strong><span>{asset.registration_number || "No registration"}</span><span>{title(asset.asset_type)} · {title(asset.ownership_type)}</span><span>{[asset.manufacturer, asset.model].filter(Boolean).join(" ") || "Make / model not provided"}</span>{asset.ownership_type === "RENTED" && <div className="owner-fleet-rental"><span>Owner: {asset.rental_party_name || "Not provided"}</span><span>{asset.rental_owner_phone_primary ? phoneDisplay(asset.rental_owner_phone_primary) : "Primary phone not provided"}</span>{asset.rental_owner_phone_secondary && <span>{phoneDisplay(asset.rental_owner_phone_secondary)}</span>}</div>}</div></td>
+            <td data-label="Current setup"><div className="owner-fleet-cell"><strong>{asset.current_deployment?.site_name || "Undeployed"}</strong><div className="owner-fleet-statuses"><StatusChip label={dutyStatus === "ON_DUTY" ? "On duty" : dutyStatus === "OFF_DUTY" ? "Off duty" : "Not assigned"} status={dutyStatus === "ON_DUTY" ? "ON_DUTY" : dutyStatus === "OFF_DUTY" ? "AVAILABLE" : "UNDEPLOYED"} /><StatusChip status={asset.status} /></div></div></td>
+            <td data-label="Driver / Operator"><div className="owner-fleet-cell"><strong>{asset.active_assignment?.driver_name || "Unassigned"}</strong><span>{asset.active_assignment ? phoneDisplay(asset.active_assignment.driver_phone || person?.phone || "—") : "—"}</span></div></td>
+            <td data-label="Actions"><div className="owner-row-actions owner-row-actions--fleet"><button className="owner-text-button" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: asset.status === "INACTIVE" ? "lifecycle" : undefined, initialAction: asset.status === "INACTIVE" ? "REACTIVATE_ASSET" : undefined })} type="button">Manage</button><button className="owner-text-button" onClick={() => void openRelationshipHistory(asset)} type="button">History</button></div></td>
           </tr>; })}
         </tbody>
       </OperationsTable>
@@ -376,60 +420,6 @@ export function SitesPanel({ sites, people, assets = [], apiRequest, reload, set
         </div>}
       </DetailsDialog>
       <OwnerRelationshipWizard apiRequest={apiRequest} assets={assets} initialIntent={operation} onClose={() => setOperation(null)} onComplete={reload} open={Boolean(operation)} people={people} sites={sites} />
-    </section>
-  );
-}
-
-type DeploymentSort = "asset" | "registration" | "type" | "ownership" | "site" | "operator" | "duty" | "date";
-
-export function DeploymentsPanel({ assets, sites, people = [], apiRequest, reload, setError, openRelationshipManager }: Common & { assets: OwnerAsset[]; sites: OwnerSite[]; people?: OwnerPerson[] }) {
-  const mutation = useOwnerAction({ reload, setError });
-  const selectable = assets.filter((asset) => asset.status === "ACTIVE" && !asset.current_deployment);
-  const deployed = assets.filter((asset) => asset.current_deployment);
-  const activeSites = sites.filter((site) => site.status === "ACTIVE");
-  const [assetId, setAssetId] = useState(""); const [siteId, setSiteId] = useState(""); const [query, setQuery] = useState(""); const [historyAsset, setHistoryAsset] = useState<OwnerAsset | null>(null); const [history, setHistory] = useState<AssetSiteDeployment[]>([]); const [historyLoading, setHistoryLoading] = useState(false); const [historyError, setHistoryError] = useState(""); const [sortKey, setSortKey] = useState<DeploymentSort>("asset"); const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const selectedAsset = assets.find((asset) => asset.id === assetId);
-  const changeSort = (next: DeploymentSort) => { const value = toggleSort(sortKey, next, sortDirection); setSortKey(value.key); setSortDirection(value.direction); };
-  const shown = useMemo(() => { const value = (asset: OwnerAsset) => sortKey === "asset" ? assetLabel(asset) : sortKey === "registration" ? asset.registration_number : sortKey === "type" ? asset.asset_type : sortKey === "ownership" ? asset.ownership_type : sortKey === "site" ? asset.current_deployment?.site_name : sortKey === "operator" ? asset.active_assignment?.driver_name : sortKey === "duty" ? (personForAsset(asset, people)?.has_active_duty ? "ON_DUTY" : asset.has_active_assignment ? "OFF_DUTY" : "UNASSIGNED") : asset.current_deployment?.starts_at; return deployed.filter((asset) => !query.trim() || assetSearchText(asset).includes(query.trim().toLowerCase())).sort((left, right) => (sortDirection === "asc" ? 1 : -1) * compareText(value(left), value(right))); }, [deployed, people, query, sortDirection, sortKey]);
-  const deploy = (event: FormEvent) => { event.preventDefault(); openRelationshipManager({ kind: "asset", assetId, focus: "site", presetSiteId: siteId, initialAction: "DEPLOY_ASSET" }); };
-  const openHistory = async (asset: OwnerAsset) => { setHistoryAsset(asset); setHistory([]); setHistoryError(""); setHistoryLoading(true); try { setHistory(await apiRequest<AssetSiteDeployment[]>(`/api/v1/owner/assets/${asset.id}/deployments`)); } catch (caught) { setHistoryError(caught instanceof Error ? caught.message : "Could not load deployment history."); } finally { setHistoryLoading(false); } };
-  return (
-    <section className="owner-panel">
-      <PanelHeading description="Deploy available assets, then manage current site placement from the table." eyebrow="Fleet management" title="Deployments" />
-      <InlineFeedback error={mutation.localError} success={mutation.success} />
-      <form className="owner-operation-strip" onSubmit={(event) => void deploy(event)}><div><p className="owner-section-eyebrow">New deployment</p><h3>Deploy asset</h3><p>Only active, currently undeployed assets are available.</p></div><label>Asset<select aria-label="Asset" onChange={(event) => setAssetId(event.target.value)} required value={assetId}><option value="">Choose undeployed asset…</option>{selectable.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset)} · {title(asset.asset_type)}</option>)}</select></label><label>Destination site<select aria-label="Destination site" onChange={(event) => setSiteId(event.target.value)} required value={siteId}><option value="">Choose site…</option>{activeSites.map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label><button disabled={mutation.busy || !selectedAsset} type="submit">Deploy asset</button></form>
-      <FilterToolbar><label className="owner-search-field"><span>Search deployed assets</span><input aria-label="Search deployed assets" onChange={(event) => setQuery(event.target.value)} placeholder="Asset, registration, site or operator" type="search" value={query} /></label></FilterToolbar>
-      <OperationsTable label="Current deployments"><thead><tr>{([['asset', 'Asset'], ['registration', 'Registration'], ['type', 'Type'], ['ownership', 'Ownership'], ['site', 'Current site'], ['operator', 'Driver / Operator'], ['duty', 'Duty'], ['date', 'Deployment date']] as [DeploymentSort, string][]).map(([key, label]) => <th aria-sort={sortKey === key ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} key={key} scope="col"><SortButton active={sortKey === key} direction={sortDirection} label={label} onClick={() => changeSort(key)} /></th>)}<th scope="col">Actions</th></tr></thead><tbody>
-        {shown.length === 0 && <EmptyTableRow colSpan={9} detail="Use Deploy asset above when an active asset and site are ready." title="No current deployments" />}
-        {shown.map((asset) => { const person = personForAsset(asset, people); return <tr key={asset.id}><td data-label="Asset"><strong>{assetLabel(asset)}</strong></td><td data-label="Registration">{asset.registration_number || "—"}</td><td data-label="Type">{title(asset.asset_type)}</td><td data-label="Ownership"><StatusChip status={asset.ownership_type} /></td><td data-label="Current site"><strong>{asset.current_deployment?.site_name}</strong></td><td data-label="Driver / Operator">{asset.active_assignment?.driver_name || <span className="owner-dim">Unassigned</span>}</td><td data-label="Duty">{person?.has_active_duty ? <StatusChip label="On duty" status="ON_DUTY" /> : <StatusChip label={asset.has_active_assignment ? "Off duty" : "Not assigned"} status="AVAILABLE" />}</td><td data-label="Deployment date">{asset.current_deployment ? dateTime(asset.current_deployment.starts_at) : "—"}</td><td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: "site", initialAction: "MOVE_DEPLOYMENT" })} type="button">Move</button><button className="owner-text-button owner-text-button--danger" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: "site", presetSiteId: null, presetDriverId: null, initialAction: "REMOVE_DEPLOYMENT" })} type="button">Remove deployment</button><button className="owner-text-button" onClick={() => void openHistory(asset)} type="button">View history</button></div></td></tr>; })}
-      </tbody></OperationsTable>
-      <DetailsDialog onClose={() => setHistoryAsset(null)} open={Boolean(historyAsset)} title={`${historyAsset ? assetLabel(historyAsset) : "Asset"} deployment history`}><InlineFeedback error={historyError} />{historyLoading ? <div aria-busy="true" className="owner-skeleton-list"><span /><span /><span /></div> : <OperationsTable label="Deployment history"><thead><tr><th scope="col">Site</th><th scope="col">Started</th><th scope="col">Ended</th><th scope="col">Status</th></tr></thead><tbody>{history.length === 0 && <EmptyTableRow colSpan={4} title="No deployment history" />}{history.map((item) => <tr key={item.id}><td data-label="Site"><strong>{item.site_name}</strong></td><td data-label="Started">{dateTime(item.starts_at)}</td><td data-label="Ended">{item.ends_at ? dateTime(item.ends_at) : "—"}</td><td data-label="Status"><StatusChip label={item.ends_at ? "Completed" : "Current"} status={item.ends_at ? "INACTIVE" : "DEPLOYED"} /></td></tr>)}</tbody></OperationsTable>}</DetailsDialog>
-    </section>
-  );
-}
-
-type AssignmentSort = "asset" | "registration" | "type" | "ownership" | "site" | "operator" | "phone" | "regularDuty" | "duty" | "date";
-
-export function AssignmentsPanel({ assets, people = [], sites = [], apiRequest, openRelationshipManager }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[] }) {
-  const selectable = assets.filter((asset) => asset.status === "ACTIVE" && !asset.has_active_assignment);
-  const assigned = assets.filter((asset) => asset.active_assignment);
-  const availableDrivers = people.filter((person) => person.role === "DRIVER" && !person.has_active_assignment);
-  const [assetId, setAssetId] = useState(""); const [driverId, setDriverId] = useState(""); const [siteId, setSiteId] = useState(""); const [minutes, setMinutes] = useState("600"); const [query, setQuery] = useState(""); const [historyAsset, setHistoryAsset] = useState<OwnerAsset | null>(null); const [history, setHistory] = useState<DriverAssetAssignment[]>([]); const [historyLoading, setHistoryLoading] = useState(false); const [historyError, setHistoryError] = useState(""); const [sortKey, setSortKey] = useState<AssignmentSort>("asset"); const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const selected = assets.find((asset) => asset.id === assetId);
-  const changeSort = (next: AssignmentSort) => { const value = toggleSort(sortKey, next, sortDirection); setSortKey(value.key); setSortDirection(value.direction); };
-  const shown = useMemo(() => { const value = (asset: OwnerAsset) => { const assignment = asset.active_assignment; const person = personForAsset(asset, people); return sortKey === "asset" ? assetLabel(asset) : sortKey === "registration" ? asset.registration_number : sortKey === "type" ? asset.asset_type : sortKey === "ownership" ? asset.ownership_type : sortKey === "site" ? assignment?.site_name : sortKey === "operator" ? assignment?.driver_name : sortKey === "phone" ? person?.phone : sortKey === "regularDuty" ? String(assignment?.regular_duty_minutes ?? 0).padStart(8, "0") : sortKey === "duty" ? (person?.has_active_duty ? "ON_DUTY" : "OFF_DUTY") : assignment?.starts_at; }; return assigned.filter((asset) => !query.trim() || assetSearchText(asset).includes(query.trim().toLowerCase())).sort((left, right) => (sortDirection === "asc" ? 1 : -1) * compareText(value(left), value(right))); }, [assigned, people, query, sortDirection, sortKey]);
-  const assign = (event: FormEvent) => { event.preventDefault(); openRelationshipManager({ kind: "asset", assetId, focus: "driver", presetDriverId: driverId, presetSiteId: selected?.current_deployment ? selected.current_deployment.site_id : siteId || null, presetRegularDutyMinutes: Number(minutes), initialAction: "ASSIGN_DRIVER" }); };
-  const openHistory = async (asset: OwnerAsset) => { setHistoryAsset(asset); setHistory([]); setHistoryError(""); setHistoryLoading(true); try { setHistory(await apiRequest<DriverAssetAssignment[]>(`/api/v1/owner/assets/${asset.id}/assignments`)); } catch (caught) { setHistoryError(caught instanceof Error ? caught.message : "Could not load assignment history."); } finally { setHistoryLoading(false); } };
-  return (
-    <section className="owner-panel">
-      <PanelHeading description="Pre-assign invited or active Drivers / Operators to deployed assets. Ownership does not change eligibility." eyebrow="Fleet management" title="Assignments" />
-      <form className="owner-operation-strip" onSubmit={assign}><div><p className="owner-section-eyebrow">New assignment</p><h3>Assign Driver / Operator</h3><p>Choose an available asset. Undeployed assets can be deployed and assigned in one operation.</p></div><label>Asset<select aria-label="Assignment asset" onChange={(event) => { setAssetId(event.target.value); setSiteId(""); }} required value={assetId}><option value="">Choose available asset…</option>{selectable.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset)} · {asset.current_deployment?.site_name || "Undeployed"}</option>)}</select></label><label>Driver / Operator<select aria-label="Driver / Operator" disabled={!assetId} onChange={(event) => setDriverId(event.target.value)} required value={driverId}><option value="">Choose eligible person…</option>{availableDrivers.map((candidate) => <option key={candidate.membership_id} value={candidate.membership_id}>{candidate.display_name} · {candidate.phone} · {candidate.status}</option>)}</select></label>{selected && !selected.current_deployment && <label>Deploy to<select aria-label="Assignment Site" onChange={(event) => setSiteId(event.target.value)} required value={siteId}><option value="">Choose Site…</option>{sites.filter((site) => site.status === "ACTIVE").map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>}<label>Regular duty<select aria-label="Regular duty" onChange={(event) => setMinutes(event.target.value)} value={minutes}><option value="480">8 hours</option><option value="600">10 hours</option><option value="720">12 hours</option></select></label><button disabled={!selected || !driverId || (!selected.current_deployment && !siteId)} type="submit">Set up assignment</button></form>
-      <FilterToolbar><label className="owner-search-field"><span>Search assignments</span><input aria-label="Search assignments" onChange={(event) => setQuery(event.target.value)} placeholder="Asset, registration, site or operator" type="search" value={query} /></label></FilterToolbar>
-      <OperationsTable label="Current assignments"><thead><tr>{([['asset', 'Asset'], ['registration', 'Registration'], ['type', 'Type'], ['ownership', 'Ownership'], ['site', 'Site'], ['operator', 'Driver / Operator'], ['phone', 'Phone'], ['regularDuty', 'Regular duty'], ['duty', 'Duty status'], ['date', 'Assignment since']] as [AssignmentSort, string][]).map(([key, label]) => <th aria-sort={sortKey === key ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} key={key} scope="col"><SortButton active={sortKey === key} direction={sortDirection} label={label} onClick={() => changeSort(key)} /></th>)}<th scope="col">Actions</th></tr></thead><tbody>
-        {shown.length === 0 && <EmptyTableRow colSpan={11} detail="Assign an eligible Driver / Operator using the form above." title="No current assignments" />}
-        {shown.map((asset) => { const assignment = asset.active_assignment!; const person = personForAsset(asset, people); return <tr key={asset.id}><td data-label="Asset"><strong>{assetLabel(asset)}</strong></td><td data-label="Registration">{asset.registration_number || "—"}</td><td data-label="Type">{title(asset.asset_type)}</td><td data-label="Ownership"><StatusChip status={asset.ownership_type} /></td><td data-label="Site">{assignment.site_name}</td><td data-label="Driver / Operator"><strong>{assignment.driver_name}</strong>{person?.status === "INVITED" && <small>Invited · first login pending</small>}</td><td data-label="Phone">{person?.phone || "—"}</td><td data-label="Regular duty">{(assignment.regular_duty_minutes ?? 600) / 60} hours</td><td data-label="Duty status">{person?.has_active_duty ? <StatusChip label="On duty" status="ON_DUTY" /> : <StatusChip label="Off duty" status="AVAILABLE" />}</td><td data-label="Assignment since">{dateTime(assignment.starts_at)}</td><td data-label="Actions"><div className="owner-row-actions"><button className="owner-text-button" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: "driver", initialAction: "REASSIGN_DRIVER" })} type="button">Change Driver / Operator</button><button className="owner-text-button owner-text-button--danger" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: "driver", presetDriverId: null, initialAction: "END_ASSIGNMENT" })} type="button">End assignment</button><button className="owner-text-button" onClick={() => void openHistory(asset)} type="button">View history</button></div></td></tr>; })}
-      </tbody></OperationsTable>
-      <DetailsDialog onClose={() => setHistoryAsset(null)} open={Boolean(historyAsset)} title={`${historyAsset ? assetLabel(historyAsset) : "Asset"} assignment history`}><InlineFeedback error={historyError} />{historyLoading ? <div aria-busy="true" className="owner-skeleton-list"><span /><span /><span /></div> : <OperationsTable label="Assignment history"><thead><tr><th scope="col">Driver / Operator</th><th scope="col">Site</th><th scope="col">Regular duty</th><th scope="col">Started</th><th scope="col">Ended</th></tr></thead><tbody>{history.length === 0 && <EmptyTableRow colSpan={5} title="No assignment history" />}{history.map((item) => <tr key={item.assignment_id}><td data-label="Driver / Operator"><strong>{item.driver_name}</strong></td><td data-label="Site">{item.site_name}</td><td data-label="Regular duty">{item.regular_duty_minutes / 60} hours</td><td data-label="Started">{dateTime(item.starts_at)}</td><td data-label="Ended">{item.ends_at ? dateTime(item.ends_at) : <StatusChip label="Current" status="ACTIVE" />}</td></tr>)}</tbody></OperationsTable>}</DetailsDialog>
     </section>
   );
 }

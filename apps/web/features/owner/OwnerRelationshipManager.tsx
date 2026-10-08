@@ -49,6 +49,7 @@ export type OwnerRelationshipManagerProps = {
   apiRequest: WebRequest;
   onClose: () => void;
   onComplete: (message: string) => void;
+  onEditAsset?: (assetId: string) => void;
   onViewActiveDuty?: (assetId: string) => void;
   onViewAssetHistory?: (assetId: string) => void;
   onForceCloseDutyAndDeactivate?: (assetId: string, reason: string) => Promise<string>;
@@ -234,7 +235,7 @@ function ConfirmationView({ runner }: { runner: ReturnType<typeof useOperationRu
 }
 
 function AssetManager(props: OwnerRelationshipManagerProps & { target: Extract<OwnerRelationshipTarget, { kind: "asset" }> }) {
-  const { target, assets, people, sites, apiRequest, onClose, onComplete, onForceCloseDutyAndDeactivate, onViewActiveDuty, onViewAssetHistory } = props;
+  const { target, assets, people, sites, apiRequest, onClose, onComplete, onEditAsset, onForceCloseDutyAndDeactivate, onViewActiveDuty, onViewAssetHistory } = props;
   const asset = assets.find((item) => item.id === target.assetId);
   const [siteId, setSiteId] = useState(() => initialAssetSite(target, asset));
   const [driverId, setDriverId] = useState(() => initialAssetDriver(target, asset));
@@ -531,6 +532,13 @@ function AssetManager(props: OwnerRelationshipManagerProps & { target: Extract<O
         {onDuty && <div><dt>Duty started</dt><dd>{dateTime(dutyStartedAt)}</dd></div>}
       </dl>
       {onDuty && <div className="owner-manager-duty-lock"><p>Changes are unavailable while this duty is active.</p>{onViewActiveDuty && <button className="secondary" onClick={() => { onClose(); onViewActiveDuty(asset.id); }} type="button">VIEW ACTIVE DUTY</button>}</div>}
+    </section>
+    <section aria-label="Technical details" className="owner-manager-details">
+      <div><p className="owner-section-eyebrow">Technical details</p>{onEditAsset && <button className="owner-text-button" onClick={() => onEditAsset(asset.id)} type="button">Edit asset details</button>}</div>
+      <dl className="owner-detail-list">
+        <div><dt>Chassis No.</dt><dd>{asset.chassis_number || "Not provided"}</dd></div>
+        <div><dt>Engine No.</dt><dd>{asset.engine_number || "Not provided"}</dd></div>
+      </dl>
     </section>
     <div className="owner-dialog-form owner-manager-fields">
       <label>Driver / Operator<select aria-label="Driver / Operator" autoFocus={focus === "driver"} disabled={runner.busy || onDuty} onChange={(event) => { setDriverId(event.target.value); setActivateDriverRole(false); setDriverError(""); }} value={driverId}><option value="">No Driver / Operator</option>{driverOptions.map((driver) => <option key={driver.membership_id} value={driver.membership_id}>{driver.display_name} · {driver.membership_id === currentDriverId ? "Current" : `${title(driver.status)} · Unassigned`}</option>)}</select>{driverError && <span className="owner-field-error" role="alert">{driverError}</span>}</label>

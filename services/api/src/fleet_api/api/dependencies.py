@@ -128,11 +128,13 @@ def get_owner_asset_service(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     context: Annotated[AuthContext, Depends(require_owner_admin)],
+    settings: Annotated[Settings, Depends(get_app_settings)],
 ) -> OwnerAssetService:
     return OwnerAssetService(
         db,
         context,
         request_id=request.headers.get("x-request-id"),
+        phone_default_region=settings.phone_default_region,
     )
 
 

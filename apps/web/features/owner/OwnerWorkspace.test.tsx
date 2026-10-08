@@ -26,6 +26,7 @@ beforeEach(() => {
   requestMock.mockClear();
   logoutMock.mockClear();
   window.localStorage.clear();
+  window.history.replaceState({}, "", "/owner");
   window.scrollTo = vi.fn();
   window.requestAnimationFrame = (callback: FrameRequestCallback) => {
     callback(0);
@@ -55,17 +56,19 @@ describe("Owner sidebar", () => {
     await screen.findByRole("heading", { name: "Operations overview" });
     const navigation = screen.getByRole("navigation", { name: "Owner sections" });
     const layout = layoutFor(navigation);
-    const deployments = screen.getByRole("button", { name: "Deployments" });
+    const fleet = screen.getByRole("button", { name: "Fleet" });
 
     fireEvent.mouseEnter(navigation);
-    fireEvent.mouseDown(deployments);
-    fireEvent.focus(deployments);
-    fireEvent.click(deployments);
+    fireEvent.mouseDown(fleet);
+    fireEvent.focus(fleet);
+    fireEvent.click(fleet);
     fireEvent.mouseLeave(navigation);
 
-    expect(await screen.findByRole("heading", { name: "Deployments" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Fleet" })).toBeInTheDocument();
     expect(layout).toHaveAttribute("data-sidebar-expanded", "false");
-    expect(deployments).toHaveAttribute("aria-current", "page");
+    expect(fleet).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: "Deployments" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Assignments" })).not.toBeInTheDocument();
   });
 
   it("keeps a pinned sidebar expanded across navigation and unpin restores hover behavior", async () => {
@@ -76,9 +79,9 @@ describe("Owner sidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Pin sidebar" }));
     expect(layout).toHaveAttribute("data-sidebar-pinned", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Assignments" }));
+    fireEvent.click(screen.getByRole("button", { name: "People" }));
     fireEvent.mouseLeave(navigation);
-    expect(await screen.findByRole("heading", { name: "Assignments" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "People" })).toBeInTheDocument();
     expect(layout).toHaveAttribute("data-sidebar-expanded", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Unpin sidebar" }));
@@ -91,11 +94,20 @@ describe("Owner sidebar", () => {
     await screen.findByRole("heading", { name: "Operations overview" });
     const navigation = screen.getByRole("navigation", { name: "Owner sections" });
     const layout = layoutFor(navigation);
-    const assignments = screen.getByRole("button", { name: "Assignments" });
+    const sites = screen.getByRole("button", { name: "Sites" });
 
-    fireEvent.focus(assignments);
+    fireEvent.focus(sites);
     expect(layout).toHaveAttribute("data-sidebar-expanded", "true");
-    fireEvent.blur(assignments, { relatedTarget: null });
+    fireEvent.blur(sites, { relatedTarget: null });
     await waitFor(() => expect(layout).toHaveAttribute("data-sidebar-expanded", "false"));
+  });
+
+  it.each(["deployments", "assignments"])("redirects the legacy %s tab to Fleet", async (legacyTab) => {
+    window.history.replaceState({}, "", `/owner?tab=${legacyTab}`);
+    render(<OwnerWorkspace />);
+
+    expect(await screen.findByRole("heading", { name: "Fleet" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fleet" })).toHaveAttribute("aria-current", "page");
+    expect(window.location.search).toBe("?tab=fleet");
   });
 });

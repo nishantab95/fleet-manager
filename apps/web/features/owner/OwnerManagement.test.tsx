@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { WebRequest } from "../../lib/api/client";
 import type { OwnerAsset, OwnerPerson, OwnerSite } from "../../lib/types";
-import { AssignmentsPanel, DeploymentsPanel, FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
+import { FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
 
 const siteOne: OwnerSite = {
   id: "site-1",
@@ -85,8 +85,12 @@ const deployedMachine: OwnerAsset = {
   short_name: "Big digger",
   manufacturer: "CAT",
   model: "320",
+  chassis_number: "CAT-CHASSIS-320",
+  engine_number: "CAT-ENGINE-320",
   status: "ACTIVE",
   rental_party_name: "Rental Co",
+  rental_owner_phone_primary: "+919876543210",
+  rental_owner_phone_secondary: "+919988776655",
   rental_start_date: "2026-01-01",
   rental_end_date: null,
   current_deployment: {
@@ -109,6 +113,8 @@ const undeployedGrader: OwnerAsset = {
   ownership_type: "OWNED",
   short_name: "Road grader",
   rental_party_name: null,
+  rental_owner_phone_primary: null,
+  rental_owner_phone_secondary: null,
   rental_start_date: null,
   current_deployment: null,
 };
@@ -132,6 +138,7 @@ const assignedTipper: OwnerAsset = {
     site_name: "Quarry",
     driver_membership_id: activeDriver.membership_id,
     driver_name: activeDriver.display_name,
+    driver_phone: activeDriver.phone,
     starts_at: "2026-01-02T00:00:00Z",
     regular_duty_minutes: 600,
   },
@@ -183,7 +190,7 @@ describe("Owner management panels", () => {
     expect(payload).not.toHaveProperty("code");
   });
 
-  it("routes Fleet Manage and Reactivate actions to the same relationship manager", () => {
+  it("routes every Fleet Manage action to the same relationship manager", () => {
     const props = common();
     render(<FleetPanel assets={[deployedMachine, inactiveGrader]} people={[]} sites={[siteOne]} {...props} />);
 
@@ -193,61 +200,63 @@ describe("Owner management panels", () => {
     expect(props.openRelationshipManager).toHaveBeenLastCalledWith({ kind: "asset", assetId: deployedMachine.id, focus: undefined, initialAction: undefined });
 
     const inactiveRow = within(fleet).getByRole("row", { name: /Road grader/ });
-    fireEvent.click(within(inactiveRow).getByRole("button", { name: "Reactivate" }));
+    fireEvent.click(within(inactiveRow).getByRole("button", { name: "Manage" }));
     expect(props.openRelationshipManager).toHaveBeenLastCalledWith({ kind: "asset", assetId: inactiveGrader.id, focus: "lifecycle", initialAction: "REACTIVATE_ASSET" });
   });
 
-  it("routes deployment create, move, and removal through the asset manager", () => {
+  it("renders the four composite Fleet columns with contacts, setup, Driver phone, and minimal actions", () => {
     const props = common();
-    render(<DeploymentsPanel assets={[deployedMachine, undeployedGrader]} people={[]} sites={[siteOne, siteTwo]} {...props} />);
+    render(<FleetPanel assets={[deployedMachine, assignedTipper]} people={[activeDriver]} sites={[siteOne, siteTwo]} {...props} />);
 
-    fireEvent.change(screen.getByLabelText("Asset"), { target: { value: undeployedGrader.id } });
-    fireEvent.change(screen.getByLabelText("Destination site"), { target: { value: siteTwo.id } });
-    fireEvent.click(screen.getByRole("button", { name: "Deploy asset" }));
-    expect(props.openRelationshipManager).toHaveBeenLastCalledWith({
-      kind: "asset",
-      assetId: undeployedGrader.id,
-      focus: "site",
-      presetSiteId: siteTwo.id,
-      initialAction: "DEPLOY_ASSET",
-    });
-
-    const row = within(screen.getByRole("table", { name: "Current deployments" })).getByRole("row", { name: /Big digger/ });
-    fireEvent.click(within(row).getByRole("button", { name: "Move" }));
-    expect(props.openRelationshipManager).toHaveBeenLastCalledWith({ kind: "asset", assetId: deployedMachine.id, focus: "site", initialAction: "MOVE_DEPLOYMENT" });
-    fireEvent.click(within(row).getByRole("button", { name: "Remove deployment" }));
-    expect(props.openRelationshipManager).toHaveBeenLastCalledWith({
-      kind: "asset",
-      assetId: deployedMachine.id,
-      focus: "site",
-      presetSiteId: null,
-      presetDriverId: null,
-      initialAction: "REMOVE_DEPLOYMENT",
-    });
+    const fleet = screen.getByRole("table", { name: "Fleet assets" });
+    expect(within(fleet).getAllByRole("columnheader").map((header) => header.textContent?.replace(/[↕↑↓]/g, "").trim())).toEqual([
+      "Asset",
+      "Current setup",
+      "Driver / Operator",
+      "Actions",
+    ]);
+    expect(within(fleet).queryByRole("columnheader", { name: "Registration" })).not.toBeInTheDocument();
+    const rentedRow = within(fleet).getByRole("row", { name: /Big digger/ });
+    expect(rentedRow).toHaveTextContent("EXCAVATOR · RENTED");
+    expect(rentedRow).toHaveTextContent("Owner: Rental Co");
+    expect(rentedRow).toHaveTextContent("+91 98765 43210");
+    expect(rentedRow).toHaveTextContent("+91 99887 76655");
+    expect(within(rentedRow).getAllByRole("button").map((button) => button.textContent)).toEqual(["Manage", "History"]);
+    const assignedRow = within(fleet).getByRole("row", { name: /BENZ-1/ });
+    expect(assignedRow).toHaveTextContent("Quarry");
+    expect(assignedRow).toHaveTextContent("Off duty");
+    expect(assignedRow).toHaveTextContent("Operator Active");
+    expect(assignedRow).toHaveTextContent("+91 91000 00002");
+    expect(assignedRow).not.toHaveTextContent("Owner:");
   });
 
-  it("routes assignment setup, Driver change, and assignment end through the asset manager", () => {
+  it("shows and submits rented contacts plus optional technical identifiers", async () => {
     const props = common();
-    render(<AssignmentsPanel assets={[deployedMachine, assignedTipper]} people={[invitedDriver, activeDriver]} sites={[siteOne]} {...props} />);
+    render(<FleetPanel assets={[]} people={[]} sites={[]} {...props} />);
 
-    fireEvent.change(screen.getByLabelText("Assignment asset"), { target: { value: deployedMachine.id } });
-    fireEvent.change(screen.getByLabelText("Driver / Operator"), { target: { value: invitedDriver.membership_id } });
-    fireEvent.click(screen.getByRole("button", { name: "Set up assignment" }));
-    expect(props.openRelationshipManager).toHaveBeenLastCalledWith({
-      kind: "asset",
-      assetId: deployedMachine.id,
-      focus: "driver",
-      presetDriverId: invitedDriver.membership_id,
-      presetSiteId: siteOne.id,
-      presetRegularDutyMinutes: 600,
-      initialAction: "ASSIGN_DRIVER",
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
+    expect(screen.getByLabelText("Chassis number")).not.toBeRequired();
+    expect(screen.getByLabelText("Engine number")).not.toBeRequired();
+    expect(screen.queryByLabelText("Primary phone")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: /^Ownership$/ }), { target: { value: "RENTED" } });
+    fireEvent.change(screen.getByLabelText("Registration"), { target: { value: "MH01AM5678" } });
+    fireEvent.change(screen.getByLabelText("Short name"), { target: { value: "SUBI-BENZ" } });
+    fireEvent.change(screen.getByLabelText("Chassis number"), { target: { value: "MA1XXXXXXXX" } });
+    fireEvent.change(screen.getByLabelText("Engine number"), { target: { value: "E4XXXXXX" } });
+    fireEvent.change(screen.getByLabelText("Rental Owner / Supplier name"), { target: { value: "Suresh Transport" } });
+    fireEvent.change(screen.getByLabelText("Primary phone"), { target: { value: "98765 43210" } });
+    fireEvent.change(screen.getByLabelText("Alternate phone"), { target: { value: "99887 76655" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create asset" }));
 
-    const row = within(screen.getByRole("table", { name: "Current assignments" })).getByRole("row", { name: /BENZ-1/ });
-    fireEvent.click(within(row).getByRole("button", { name: "Change Driver / Operator" }));
-    expect(props.openRelationshipManager).toHaveBeenLastCalledWith({ kind: "asset", assetId: assignedTipper.id, focus: "driver", initialAction: "REASSIGN_DRIVER" });
-    fireEvent.click(within(row).getByRole("button", { name: "End assignment" }));
-    expect(props.openRelationshipManager).toHaveBeenLastCalledWith({ kind: "asset", assetId: assignedTipper.id, focus: "driver", presetDriverId: null, initialAction: "END_ASSIGNMENT" });
+    await waitFor(() => expect(props.apiRequest).toHaveBeenCalled());
+    const payload = JSON.parse(vi.mocked(props.apiRequest).mock.calls[0][1]?.body as string);
+    expect(payload).toEqual(expect.objectContaining({
+      chassis_number: "MA1XXXXXXXX",
+      engine_number: "E4XXXXXX",
+      rental_party_name: "Suresh Transport",
+      rental_owner_phone_primary: "98765 43210",
+      rental_owner_phone_secondary: "99887 76655",
+    }));
   });
 
   it("groups one identity's memberships and preserves the invited lifecycle explanation", () => {

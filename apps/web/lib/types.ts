@@ -117,6 +117,7 @@ export type OwnerAssetAssignment = {
   site_name: string;
   driver_membership_id: string;
   driver_name: string;
+  driver_phone: string;
   starts_at: string;
   regular_duty_minutes?: number;
 };
@@ -129,8 +130,12 @@ export type OwnerAsset = {
   short_name: string | null;
   manufacturer: string | null;
   model: string | null;
+  chassis_number: string | null;
+  engine_number: string | null;
   status: Status;
   rental_party_name: string | null;
+  rental_owner_phone_primary: string | null;
+  rental_owner_phone_secondary: string | null;
   rental_start_date: string | null;
   rental_end_date: string | null;
   current_deployment: AssetSiteDeployment | null;

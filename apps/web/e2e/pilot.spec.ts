@@ -19,7 +19,7 @@ test.describe(
     await expect(page.getByLabel("Live fleet readiness")).toBeVisible();
     await page.getByRole("button", { name: "Reports", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Owner operations" })).toBeVisible();
-    for (const name of ["Operations", "Fleet", "People", "Sites", "Deployments", "Assignments", "Reports", "Report templates"]) {
+    for (const name of ["Operations", "Fleet", "People", "Sites", "Reports", "Report Templates"]) {
       await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
     }
 

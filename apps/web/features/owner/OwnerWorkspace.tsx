@@ -5,23 +5,19 @@ import { pcRoleLabEnabled } from "../../lib/auth/config";
 import type { OwnerAsset, OwnerOperationIntent, OwnerOperationPlan, OwnerOperationResult, OwnerPerson, OwnerSite } from "../../lib/types";
 import { useAuth } from "../auth/AuthProvider";
 import { FleetAmbientScene } from "./FleetAmbientScene";
-import { AssignmentsPanel, DeploymentsPanel, FleetOverview, FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
+import { FleetOverview, FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
 import { OwnerOperations } from "./OwnerOperations";
 import { OwnerRelationshipManager, type OwnerRelationshipTarget } from "./OwnerRelationshipManager";
 import { ReportTemplates } from "./ReportTemplates";
 
-type Tab = "operations" | "fleet" | "deployments" | "assignments" | "people" | "sites" | "reports" | "templates";
-type NavIcon = "operations" | "fleet" | "deployments" | "assignments" | "people" | "sites" | "reports" | "templates";
+type Tab = "operations" | "fleet" | "people" | "sites" | "reports" | "templates";
+type NavIcon = Tab;
 
 const navigation: { label: string; items: { id: Tab; label: string; icon: NavIcon }[] }[] = [
   { label: "Overview", items: [{ id: "operations", label: "Operations", icon: "operations" }] },
   {
     label: "Fleet management",
-    items: [
-      { id: "fleet", label: "Fleet", icon: "fleet" },
-      { id: "deployments", label: "Deployments", icon: "deployments" },
-      { id: "assignments", label: "Assignments", icon: "assignments" },
-    ],
+    items: [{ id: "fleet", label: "Fleet", icon: "fleet" }],
   },
   {
     label: "Organization",
@@ -34,7 +30,7 @@ const navigation: { label: string; items: { id: Tab; label: string; icon: NavIco
     label: "Reporting",
     items: [
       { id: "reports", label: "Reports", icon: "reports" },
-      { id: "templates", label: "Report templates", icon: "templates" },
+      { id: "templates", label: "Report Templates", icon: "templates" },
     ],
   },
 ];
@@ -43,8 +39,6 @@ function NavGlyph({ icon }: { icon: NavIcon }) {
   const paths: Record<NavIcon, ReactNode> = {
     operations: <><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z" /></>,
     fleet: <><path d="M3 7.5h12.5l3 4.5H21v5h-2.2a3 3 0 0 1-5.6 0H9.8a3 3 0 0 1-5.6 0H3V7.5Z" /><path d="M6 7.5 8 4h6l1.5 3.5M6.8 18a1.2 1.2 0 1 0 0-2.4A1.2 1.2 0 0 0 6.8 18Zm9.2 0a1.2 1.2 0 1 0 0-2.4A1.2 1.2 0 0 0 16 18Z" /></>,
-    deployments: <><path d="M12 3v12m0 0-4-4m4 4 4-4" /><path d="M5 15v5h14v-5" /></>,
-    assignments: <><path d="M9 5h10v15H5V5h4Zm0 0V3h6v2" /><path d="m8 12 2 2 5-5" /></>,
     people: <><path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M18 8a3 3 0 0 1 0 6m4 6v-2a4 4 0 0 0-3-3.87" /></>,
     sites: <><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.5" /></>,
     reports: <><path d="M4 20V10m6 10V4m6 16v-7m4 7H2" /></>,
@@ -72,6 +66,7 @@ export function OwnerWorkspace() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [relationshipTarget, setRelationshipTarget] = useState<OwnerRelationshipTarget | null>(null);
+  const [editAssetId, setEditAssetId] = useState<string | null>(null);
   const [assets, setAssets] = useState<OwnerAsset[]>([]);
   const [people, setPeople] = useState<OwnerPerson[]>([]);
   const [sites, setSites] = useState<OwnerSite[]>([]);
@@ -134,6 +129,15 @@ export function OwnerWorkspace() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const legacyTab = url.searchParams.get("tab") ?? url.hash.slice(1);
+    if (legacyTab !== "deployments" && legacyTab !== "assignments") return;
+    void Promise.resolve().then(() => setTab("fleet"));
+    url.searchParams.set("tab", "fleet");
+    url.hash = "";
+    window.history.replaceState(window.history.state, "", url);
+  }, []);
 
   const toggleSidebarPin = () => {
     setSidebarPinned((current) => {
@@ -166,6 +170,12 @@ export function OwnerWorkspace() {
     setSuccess("");
     setTab(nextTab);
     window.scrollTo({ top: 0 });
+  };
+
+  const editAsset = (assetId: string) => {
+    setRelationshipTarget(null);
+    setEditAssetId(assetId);
+    showTab("fleet");
   };
 
   return <main className="admin-shell owner-shell" data-page-visible={pageVisible ? "true" : "false"}>
@@ -205,13 +215,11 @@ export function OwnerWorkspace() {
         {initialLoading ? <WorkspaceSkeleton /> : <div className="owner-panel" key={tab}>
           {tab === "operations" && <>
             <FleetOverview assets={assets} />
-            <div aria-label="Quick operations" className="owner-overview-shortcuts" role="group"><span>Quick operations</span><div className="owner-overview-actions"><button className="secondary" onClick={() => showTab("fleet")} type="button">Review fleet</button><button className="secondary" onClick={() => showTab("deployments")} type="button">Deploy assets</button><button onClick={() => showTab("assignments")} type="button">Assign operators</button></div></div>
+            <div aria-label="Quick operations" className="owner-overview-shortcuts" role="group"><span>Quick operations</span><div className="owner-overview-actions"><button onClick={() => showTab("fleet")} type="button">Manage fleet</button><button className="secondary" onClick={() => showTab("people")} type="button">Manage people</button><button className="secondary" onClick={() => showTab("sites")} type="button">Manage sites</button></div></div>
           </>}
-          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
+          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} editAssetId={editAssetId} key={`fleet-${editAssetId ?? "list"}`} onEditHandled={() => setEditAssetId(null)} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
           {tab === "people" && <PeoplePanel people={people} assets={assets} sites={sites} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
           {tab === "sites" && <SitesPanel sites={sites} people={people} assets={assets} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
-          {tab === "deployments" && <DeploymentsPanel assets={assets} sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
-          {tab === "assignments" && <AssignmentsPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
           {tab === "reports" && <OwnerOperations accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} />}
           {tab === "templates" && <ReportTemplates accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} sites={sites} />}
         </div>}
@@ -223,6 +231,7 @@ export function OwnerWorkspace() {
       onClose={() => setRelationshipTarget(null)}
       onComplete={(message) => { setSuccess(message); void reload(); }}
       onForceCloseDutyAndDeactivate={forceCloseDutyAndDeactivate}
+      onEditAsset={editAsset}
       onViewActiveDuty={() => showTab("reports")}
       people={people}
       sites={sites}

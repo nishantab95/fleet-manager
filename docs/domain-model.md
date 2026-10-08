@@ -17,7 +17,7 @@ without adding a new persistence boundary.
 | `User` | Global application identity with normalized phone number and display name. |
 | `CompanyMembership` | Company-scoped role (`OWNER_ADMIN`, `SUPERVISOR`, or `DRIVER`) and status. |
 | `Site` | Company-scoped work location with company-scoped name/code uniqueness. |
-| `FleetAsset` | Canonical company fleet record with type, ownership, stable asset code, optional road registration, status, and optional rental metadata. |
+| `FleetAsset` | Canonical company fleet record with type, ownership, stable asset code, optional road registration, optional chassis/engine identifiers, status, and rental contact metadata. |
 | `SupervisorSiteAccess` | Explicit company-consistent supervisor-to-site grant. |
 | `Assignment` | Effective-dated Driver/Operator-to-FleetAsset relationship linked to its deployment; Site is an immutable history snapshot. |
 | `Device` | Minimal installation identifier, platform, membership association, and active/revoked state. |
@@ -160,9 +160,13 @@ append-only and requires an owner reason.
 23. Only an authenticated `OWNER_ADMIN` may create, edit, deactivate, or
     reactivate Fleet Assets. Phase 1B.1 creation accepts only `TIPPER`, and
     company scope always comes from the authenticated membership.
-24. A rented tipper requires `rental_party_name`. An owned tipper carries no
-    rental-only values; `RENTED -> OWNED` clears party and rental dates, while
-    `OWNED -> RENTED` requires an explicit party.
+24. A rented Fleet Asset requires `rental_party_name` and a normalized primary
+    Owner/Supplier phone; a normalized alternate phone remains optional. An
+    owned asset carries no rental-only values. `RENTED -> OWNED` clears the
+    party, both phones, and rental dates, while `OWNED -> RENTED` requires an
+    explicit party and primary phone. Existing migrated rows remain valid
+    because the added contact columns are nullable at the database boundary.
+    Optional `chassis_number` and `engine_number` apply to every Asset type.
 25. Fleet Asset edits preserve the asset UUID. Direct lifecycle deactivation is
     rejected while an effective assignment or active duty session exists. The
     Owner relationship orchestrator may perform only the documented atomic

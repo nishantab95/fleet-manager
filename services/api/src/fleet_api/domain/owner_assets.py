@@ -9,6 +9,7 @@ from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
+from fleet_api.auth.phone import normalize_phone
 from fleet_api.auth.service import AuthContext
 from fleet_api.db.models import (
     AssetSiteDeployment,
@@ -41,6 +42,7 @@ class ActiveAssetAssignment:
     site_name: str
     driver_membership_id: UUID
     driver_name: str
+    driver_phone: str
     starts_at: datetime
     regular_duty_minutes: int
 
@@ -73,11 +75,13 @@ class OwnerAssetService:
         context: AuthContext,
         *,
         request_id: str | None = None,
+        phone_default_region: str | None = None,
     ) -> None:
         self.session = session
         self.company_id = context.company.id
         self.actor_membership_id = context.membership.id
         self.request_id = request_id
+        self.phone_default_region = phone_default_region
 
     def _audit(
         self,
@@ -109,8 +113,12 @@ class OwnerAssetService:
             "short_name": asset.short_name,
             "manufacturer": asset.manufacturer,
             "model": asset.model,
+            "chassis_number": asset.chassis_number,
+            "engine_number": asset.engine_number,
             "status": asset.status.value,
             "rental_party_name": asset.rental_party_name,
+            "rental_owner_phone_primary": asset.rental_owner_phone_primary,
+            "rental_owner_phone_secondary": asset.rental_owner_phone_secondary,
             "rental_start_date": (
                 asset.rental_start_date.isoformat() if asset.rental_start_date else None
             ),
@@ -219,6 +227,7 @@ class OwnerAssetService:
                 site_name=assignment_site.short_name,
                 driver_membership_id=membership.id,
                 driver_name=membership.display_name or user.display_name,
+                driver_phone=user.phone_number,
                 starts_at=assignment.starts_at,
                 regular_duty_minutes=assignment.regular_duty_minutes,
             )
@@ -284,9 +293,7 @@ class OwnerAssetService:
                 FleetAsset.registration_number == registration_number,
             )
             if exclude_asset_id is not None:
-                registration_query = registration_query.where(
-                    FleetAsset.id != exclude_asset_id
-                )
+                registration_query = registration_query.where(FleetAsset.id != exclude_asset_id)
             if self.session.scalar(registration_query) is not None:
                 raise ConflictError("registration number is already used by this company")
 
@@ -295,14 +302,24 @@ class OwnerAssetService:
         *,
         ownership_type: AssetOwnershipType,
         rental_party_name: str | None,
+        rental_owner_phone_primary: str | None,
+        rental_owner_phone_secondary: str | None,
         rental_start_date: date | None,
         rental_end_date: date | None,
     ) -> None:
         if ownership_type == AssetOwnershipType.RENTED and rental_party_name is None:
-            raise DomainError("Rental party is required for a rented asset.")
+            raise DomainError("Rental Owner / Supplier name is required for a rented asset.")
+        if ownership_type == AssetOwnershipType.RENTED and rental_owner_phone_primary is None:
+            raise DomainError("Primary rental contact phone is required for a rented asset.")
         if ownership_type == AssetOwnershipType.OWNED and any(
             value is not None
-            for value in (rental_party_name, rental_start_date, rental_end_date)
+            for value in (
+                rental_party_name,
+                rental_owner_phone_primary,
+                rental_owner_phone_secondary,
+                rental_start_date,
+                rental_end_date,
+            )
         ):
             raise DomainError("Owned assets cannot contain rental details.")
         if (
@@ -322,7 +339,11 @@ class OwnerAssetService:
         short_name: str | None,
         manufacturer: str | None,
         model: str | None,
+        chassis_number: str | None,
+        engine_number: str | None,
         rental_party_name: str | None,
+        rental_owner_phone_primary: str | None,
+        rental_owner_phone_secondary: str | None,
         rental_start_date: date | None,
         rental_end_date: date | None,
     ) -> OwnerAssetView:
@@ -337,9 +358,29 @@ class OwnerAssetService:
         if asset_type != FleetAssetType.TIPPER and _clean_optional(short_name) is None:
             raise DomainError("Short name is required for machinery.")
         clean_rental_party = _clean_optional(rental_party_name)
+        clean_primary_phone = _clean_optional(rental_owner_phone_primary)
+        normalized_primary_phone = (
+            normalize_phone(
+                clean_primary_phone,
+                default_region=self.phone_default_region,
+            )
+            if clean_primary_phone is not None
+            else None
+        )
+        clean_secondary_phone = _clean_optional(rental_owner_phone_secondary)
+        normalized_secondary_phone = (
+            normalize_phone(
+                clean_secondary_phone,
+                default_region=self.phone_default_region,
+            )
+            if clean_secondary_phone is not None
+            else None
+        )
         self._validate_rental(
             ownership_type=ownership_type,
             rental_party_name=clean_rental_party,
+            rental_owner_phone_primary=normalized_primary_phone,
+            rental_owner_phone_secondary=normalized_secondary_phone,
             rental_start_date=rental_start_date,
             rental_end_date=rental_end_date,
         )
@@ -358,24 +399,24 @@ class OwnerAssetService:
                 short_name=short_name,
                 manufacturer=manufacturer,
                 model=model,
+                chassis_number=chassis_number,
+                engine_number=engine_number,
                 rental_party_name=clean_rental_party,
+                rental_owner_phone_primary=normalized_primary_phone,
+                rental_owner_phone_secondary=normalized_secondary_phone,
                 rental_start_date=rental_start_date,
                 rental_end_date=rental_end_date,
             )
         except DomainError as exc:
             if "already used" in str(exc):
-                raise ConflictError(
-                    "asset code or registration number is already used"
-                ) from exc
+                raise ConflictError("asset code or registration number is already used") from exc
             raise
         self._audit(
             action="OWNER_ASSET_CREATED",
             asset=asset,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(
-            asset=asset, current_deployment=None, active_assignment=None
-        )
+        return OwnerAssetView(asset=asset, current_deployment=None, active_assignment=None)
 
     def update_asset(
         self,
@@ -386,8 +427,12 @@ class OwnerAssetService:
         short_name: str | None,
         manufacturer: str | None,
         model: str | None,
+        chassis_number: str | None,
+        engine_number: str | None,
         ownership_type: AssetOwnershipType | None,
         rental_party_name: str | None,
+        rental_owner_phone_primary: str | None,
+        rental_owner_phone_secondary: str | None,
         rental_start_date: date | None,
         rental_end_date: date | None,
         fields_set: set[str],
@@ -415,6 +460,10 @@ class OwnerAssetService:
             asset.manufacturer = _clean_optional(manufacturer)
         if "model" in fields_set:
             asset.model = _clean_optional(model)
+        if "chassis_number" in fields_set:
+            asset.chassis_number = _clean_optional(chassis_number)
+        if "engine_number" in fields_set:
+            asset.engine_number = _clean_optional(engine_number)
         if "ownership_type" in fields_set:
             if ownership_type is None:
                 raise DomainError("Ownership is required.")
@@ -423,12 +472,16 @@ class OwnerAssetService:
         if asset.ownership_type == AssetOwnershipType.OWNED:
             if "ownership_type" in fields_set:
                 asset.rental_party_name = None
+                asset.rental_owner_phone_primary = None
+                asset.rental_owner_phone_secondary = None
                 asset.rental_start_date = None
                 asset.rental_end_date = None
             elif any(
                 field in fields_set and value is not None
                 for field, value in (
                     ("rental_party_name", rental_party_name),
+                    ("rental_owner_phone_primary", rental_owner_phone_primary),
+                    ("rental_owner_phone_secondary", rental_owner_phone_secondary),
                     ("rental_start_date", rental_start_date),
                     ("rental_end_date", rental_end_date),
                 )
@@ -437,6 +490,26 @@ class OwnerAssetService:
         else:
             if "rental_party_name" in fields_set:
                 asset.rental_party_name = _clean_optional(rental_party_name)
+            if "rental_owner_phone_primary" in fields_set:
+                clean_primary_phone = _clean_optional(rental_owner_phone_primary)
+                asset.rental_owner_phone_primary = (
+                    normalize_phone(
+                        clean_primary_phone,
+                        default_region=self.phone_default_region,
+                    )
+                    if clean_primary_phone is not None
+                    else None
+                )
+            if "rental_owner_phone_secondary" in fields_set:
+                clean_secondary_phone = _clean_optional(rental_owner_phone_secondary)
+                asset.rental_owner_phone_secondary = (
+                    normalize_phone(
+                        clean_secondary_phone,
+                        default_region=self.phone_default_region,
+                    )
+                    if clean_secondary_phone is not None
+                    else None
+                )
             if "rental_start_date" in fields_set:
                 asset.rental_start_date = rental_start_date
             if "rental_end_date" in fields_set:
@@ -445,6 +518,8 @@ class OwnerAssetService:
         self._validate_rental(
             ownership_type=asset.ownership_type,
             rental_party_name=asset.rental_party_name,
+            rental_owner_phone_primary=asset.rental_owner_phone_primary,
+            rental_owner_phone_secondary=asset.rental_owner_phone_secondary,
             rental_start_date=asset.rental_start_date,
             rental_end_date=asset.rental_end_date,
         )
@@ -475,9 +550,7 @@ class OwnerAssetService:
         if asset.status == FleetAssetStatus.INACTIVE:
             return view
         if view.active_assignment is not None:
-            raise ConflictError(
-                "Asset cannot be deactivated while it has an active assignment."
-            )
+            raise ConflictError("Asset cannot be deactivated while it has an active assignment.")
         active_duty = self.session.scalar(
             select(DutySession.id).where(
                 DutySession.company_id == self.company_id,
@@ -486,9 +559,7 @@ class OwnerAssetService:
             )
         )
         if active_duty is not None:
-            raise ConflictError(
-                "Asset cannot be deactivated while it has an active duty session."
-            )
+            raise ConflictError("Asset cannot be deactivated while it has an active duty session.")
         if view.current_deployment is not None:
             raise ConflictError("Asset must be removed from its Site before deactivation.")
         old_values = self._values(asset)
@@ -500,9 +571,7 @@ class OwnerAssetService:
             old_values=old_values,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(
-            asset=asset, current_deployment=None, active_assignment=None
-        )
+        return OwnerAssetView(asset=asset, current_deployment=None, active_assignment=None)
 
     def reactivate_asset(self, asset_id: UUID) -> OwnerAssetView:
         view = self.get_asset(asset_id)
@@ -518,6 +587,4 @@ class OwnerAssetService:
             old_values=old_values,
             new_values=self._values(asset),
         )
-        return OwnerAssetView(
-            asset=asset, current_deployment=None, active_assignment=None
-        )
+        return OwnerAssetView(asset=asset, current_deployment=None, active_assignment=None)

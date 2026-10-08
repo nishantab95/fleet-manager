@@ -41,7 +41,9 @@ copied history exists.
 The model declares `TIPPER`, `EXCAVATOR`, `BACKHOE_LOADER`, `ROLLER`, and
 `GRADER`, with `OWNED` and `RENTED` ownership. Registration is nullable for
 non-road machinery, while company-scoped `asset_code` is the stable required
-identifier. Status-based deactivation preserves assignment and event history.
+identifier. Optional chassis and engine identifiers apply to every Asset type;
+they are technical detail fields rather than primary list columns. Status-based
+deactivation preserves assignment and event history.
 Composite `(company_id, asset_id)` foreign keys retain the database tenant
 boundary.
 
@@ -335,8 +337,9 @@ services.
 Creation is intentionally limited to `TIPPER` in this phase. Owned and rented
 tippers share the same canonical `FleetAsset` record and operational
 capabilities; ownership never selects a different Driver workflow. Rented
-assets require a rental party, while changing an asset to owned clears all
-rental-only fields. Edits update the existing UUID so assignments, duty
+assets require a rental Owner/Supplier name and normalized primary phone; an
+alternate phone is optional. Changing an asset to owned clears all rental-only
+fields. Edits update the existing UUID so assignments, duty
 sessions, events, evidence, verification history, and reports remain linked.
 
 Deactivation is a status transition, never a delete. The direct Fleet lifecycle
@@ -441,7 +444,11 @@ new rows that have no legacy supervisor value.
 ## Owner relationship orchestration boundary
 
 `OwnerOperationPlanner` is the shared application service for contextual Owner
-changes launched from People, Fleet, Deployments, Assignments, and Sites. The
+changes launched from People, Fleet, and Sites. Normal deployment and Driver
+assignment work is consolidated into Fleet's Manage Asset surface; the
+effective-dated deployment and assignment domains, APIs, and history remain
+unchanged. Legacy browser tab identifiers for Deployments and Assignments are
+redirected to Fleet. The
 browser submits a business intent and explicit resolution choices to
 `/api/v1/owner/operations/preview`; the service reloads the company-scoped
 membership, asset, deployment, assignment, duty, Site, and Supervisor-access

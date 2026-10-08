@@ -10,13 +10,17 @@ const assets = [
     short_name: "Green Tipper",
     manufacturer: "BharatBenz",
     model: "2823C",
+    chassis_number: "MA1GREEN",
+    engine_number: "E4GREEN",
     status: "ACTIVE",
     rental_party_name: null,
+    rental_owner_phone_primary: null,
+    rental_owner_phone_secondary: null,
     rental_start_date: null,
     rental_end_date: null,
     current_deployment: { id: "deployment-1", asset_id: "asset-assigned", site_id: "site-1", site_name: "North Pit", starts_at: "2026-09-01T04:00:00Z", ends_at: null },
     has_active_assignment: true,
-    active_assignment: { assignment_id: "assignment-1", site_id: "site-1", site_name: "North Pit", driver_membership_id: "driver-active", driver_name: "Ravi Kumar", starts_at: "2026-09-02T04:00:00Z", regular_duty_minutes: 600 },
+    active_assignment: { assignment_id: "assignment-1", site_id: "site-1", site_name: "North Pit", driver_membership_id: "driver-active", driver_name: "Ravi Kumar", driver_phone: "+919900000001", starts_at: "2026-09-02T04:00:00Z", regular_duty_minutes: 600 },
   },
   {
     id: "asset-unassigned",
@@ -27,8 +31,12 @@ const assets = [
     short_name: "North Excavator",
     manufacturer: "Komatsu",
     model: "PC210",
+    chassis_number: "LONG-CHASSIS-NUMBER-THAT-WRAPS-CLEANLY-1234567890",
+    engine_number: "PC210-ENGINE",
     status: "ACTIVE",
     rental_party_name: "Metro Plant Hire",
+    rental_owner_phone_primary: "+919876543210",
+    rental_owner_phone_secondary: "+919988776655",
     rental_start_date: "2026-09-01",
     rental_end_date: "2027-03-01",
     current_deployment: { id: "deployment-2", asset_id: "asset-unassigned", site_id: "site-1", site_name: "North Pit", starts_at: "2026-09-03T04:00:00Z", ends_at: null },
@@ -44,8 +52,12 @@ const assets = [
     short_name: "Yard Roller",
     manufacturer: "CASE",
     model: "1107 EX",
+    chassis_number: null,
+    engine_number: null,
     status: "ACTIVE",
     rental_party_name: null,
+    rental_owner_phone_primary: null,
+    rental_owner_phone_secondary: null,
     rental_start_date: null,
     rental_end_date: null,
     current_deployment: null,
@@ -61,8 +73,12 @@ const assets = [
     short_name: "Inactive Grader",
     manufacturer: "Komatsu",
     model: "GD655",
+    chassis_number: null,
+    engine_number: null,
     status: "INACTIVE",
     rental_party_name: null,
+    rental_owner_phone_primary: null,
+    rental_owner_phone_secondary: null,
     rental_start_date: null,
     rental_end_date: null,
     current_deployment: null,
@@ -273,73 +289,64 @@ async function openOwner(page: Page, options: { ownerOperationsAvailable?: boole
 }
 
 test.describe("mocked Owner workstation", () => {
-  test("desktop tables and operational selectors expose the right records", async ({ page }) => {
-    await page.setViewportSize({ width: 1366, height: 768 });
+  test("consolidates fleet navigation and keeps the compact Fleet table within laptop widths", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
     await openOwner(page);
 
     await expect(page.getByLabel("Current fleet summary")).toContainText("Active assets3");
-    await expect(page.getByLabel("Current fleet summary")).toContainText("On duty1");
-    for (const name of ["Operations", "Fleet", "Deployments", "Assignments", "People", "Sites", "Reports", "Report templates"]) {
+    for (const name of ["Operations", "Fleet", "People", "Sites", "Reports", "Report Templates"]) {
       await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
     }
+    await expect(page.getByRole("button", { name: "Deployments", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Assignments", exact: true })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Fleet", exact: true }).click();
     const fleetTable = page.getByRole("table", { name: "Fleet assets" });
     await expect(fleetTable).toBeVisible();
-    await expect(fleetTable.getByRole("row")).toHaveCount(5);
-    await expect(fleetTable.getByText("Green Tipper")).toBeVisible();
-    await expect(page.getByText(assets[0].asset_code)).toBeHidden();
-    await page.getByLabel("Search fleet").fill("excavator");
-    await expect(fleetTable.getByText("North Excavator")).toBeVisible();
-    await expect(fleetTable.getByText("Green Tipper")).toHaveCount(0);
+    await expect(fleetTable.getByRole("columnheader")).toHaveCount(4);
+    await expect(fleetTable.getByRole("columnheader", { name: /Asset/ })).toBeVisible();
+    await expect(fleetTable.getByRole("columnheader", { name: /Current setup/ })).toBeVisible();
+    await expect(fleetTable.getByRole("columnheader", { name: /Driver \/ Operator/ })).toBeVisible();
+    await expect(fleetTable.getByRole("columnheader", { name: "Actions" })).toBeVisible();
+    await expect(fleetTable.getByRole("columnheader", { name: "Registration" })).toHaveCount(0);
+
+    const rentedRow = fleetTable.getByRole("row").filter({ hasText: "North Excavator" });
+    await expect(rentedRow).toContainText("EXCAVATOR · RENTED");
+    await expect(rentedRow).toContainText("Owner: Metro Plant Hire");
+    await expect(rentedRow).toContainText("+91 98765 43210");
+    await expect(rentedRow).toContainText("+91 99887 76655");
+    await expect(rentedRow.getByRole("button")).toHaveCount(2);
+    await expect(rentedRow.getByRole("button", { name: "Manage" })).toBeVisible();
+    await expect(rentedRow.getByRole("button", { name: "History" })).toBeVisible();
+
+    const assignedRow = fleetTable.getByRole("row").filter({ hasText: "Green Tipper" });
+    await expect(assignedRow).toContainText("North Pit");
+    await expect(assignedRow).toContainText("On duty");
+    await expect(assignedRow).toContainText("Ravi Kumar");
+    await expect(assignedRow).toContainText("+91 99000 00001");
+    await rentedRow.getByRole("button", { name: "Manage" }).click();
+    const manager = page.getByRole("dialog", { name: "North Excavator" });
+    await expect(manager.getByRole("region", { name: "Technical details" })).toContainText("LONG-CHASSIS-NUMBER-THAT-WRAPS-CLEANLY-1234567890");
+    await manager.getByRole("button", { name: "Edit asset details" }).click();
+    await expect(page.getByRole("heading", { name: "Edit asset" })).toBeVisible();
+    await expect(page.getByLabel("Chassis number")).toHaveValue("LONG-CHASSIS-NUMBER-THAT-WRAPS-CLEANLY-1234567890");
+    await expect(page.getByLabel("Primary phone")).toHaveValue("+919876543210");
+    await page.getByRole("button", { name: "Cancel" }).click();
+
+    for (const width of [1280, 1366, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 800 });
+      const dimensions = await page.locator(".owner-table-shell--fleet").evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+      expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
+      const wrappedCellsFit = await rentedRow.locator(".owner-fleet-cell").evaluateAll((cells) => cells.every((cell) => cell.scrollWidth <= cell.clientWidth + 1));
+      expect(wrappedCellsFit).toBe(true);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(1);
+    }
 
     await page.getByRole("button", { name: "People", exact: true }).click();
-    const peopleTable = page.getByRole("table", { name: "People" });
-    await expect(peopleTable.getByText("Asha Singh")).toBeVisible();
-    await expect(peopleTable.getByText("INVITED")).toBeVisible();
-
+    await expect(page.getByRole("table", { name: "People" }).getByText("Asha Singh")).toBeVisible();
     await page.getByRole("button", { name: "Sites", exact: true }).click();
-    const sitesTable = page.getByRole("table", { name: "Sites" });
-    await expect(sitesTable.getByText("North Pit", { exact: true })).toBeVisible();
-    await expect(sitesTable.getByText("Northern Bypass Earthworks")).toBeVisible();
-    await expect(page.getByText(sites[0].code)).toHaveCount(0);
-
-    await page.getByRole("button", { name: "Deployments", exact: true }).click();
-    await expect(page.getByLabel("Asset").locator("option")).toHaveCount(2);
-    await expect(page.getByLabel("Asset").locator('option[value="asset-undeployed"]')).toContainText("Yard Roller");
-    const deploymentRow = page.getByRole("table", { name: "Current deployments" }).getByRole("row").filter({ hasText: "North Excavator" });
-    await deploymentRow.getByRole("button", { name: "Move", exact: true }).click();
-    const moveDialog = page.getByRole("dialog", { name: "North Excavator" });
-    await expect(moveDialog).toBeVisible();
-    await expect(moveDialog.getByRole("region", { name: "Asset activity" })).toContainText("Off duty");
-    await expect(moveDialog.getByRole("list", { name: "Operation progress" })).toHaveCount(0);
-    await expect(moveDialog.getByRole("button", { name: "Continue" })).toHaveCount(0);
-    await expect(moveDialog.getByLabel("Site").locator('option[value="site-2"]')).toContainText("River Yard");
-    await moveDialog.getByLabel("Site").selectOption("site-2");
-    await moveDialog.getByRole("button", { name: "Save changes" }).click();
-    const moveConfirmation = page.getByRole("dialog", { name: "Move North Excavator?" });
-    await expect(moveConfirmation).toContainText("new historical deployment");
-    await moveConfirmation.getByRole("button", { name: "Cancel" }).click();
-    await page.getByRole("dialog", { name: "North Excavator" }).getByRole("button", { name: "Close management form" }).click();
-
-    await page.getByRole("button", { name: "Assignments", exact: true }).click();
-    await page.getByLabel("Assignment asset").selectOption("asset-unassigned");
-    const candidate = page.getByLabel("Driver / Operator").locator('option[value="driver-invited"]');
-    await expect(candidate).toContainText("Asha Singh · +919900000002 · INVITED");
-    const assignmentRow = page.getByRole("table", { name: "Current assignments" }).getByRole("row").filter({ hasText: "Green Tipper" });
-    await expect(assignmentRow).toContainText("Ravi Kumar");
-    await expect(assignmentRow).toContainText("+919900000001");
-    await expect(assignmentRow).toContainText("10 hours");
-    await assignmentRow.getByRole("button", { name: "End assignment" }).click();
-    const endDialog = page.getByRole("dialog", { name: "Green Tipper" });
-    await expect(endDialog).toContainText("Ravi Kumar");
-    await expect(endDialog.getByRole("region", { name: "Asset activity" })).toContainText("On duty");
-    await expect(endDialog.getByLabel("Driver / Operator")).toBeDisabled();
-    await expect(endDialog.getByRole("button", { name: "Save changes" })).toBeDisabled();
-    await endDialog.getByRole("button", { name: "Close management form" }).click();
-
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    expect(overflow).toBeLessThanOrEqual(1);
+    await expect(page.getByRole("table", { name: "Sites" }).getByText("North Pit", { exact: true })).toBeVisible();
   });
 
   test("reactivates an inactive asset with simple Site and Driver setup", async ({ page }) => {
@@ -348,7 +355,7 @@ test.describe("mocked Owner workstation", () => {
 
     await page.getByRole("button", { name: "Fleet", exact: true }).click();
     const assetRow = page.getByRole("table", { name: "Fleet assets" }).getByRole("row").filter({ hasText: "Inactive Grader" });
-    await assetRow.getByRole("button", { name: "Reactivate", exact: true }).click();
+    await assetRow.getByRole("button", { name: "Manage", exact: true }).click();
 
     const dialog = page.getByRole("dialog", { name: "Inactive Grader" });
     await expect(dialog.getByRole("region", { name: "Asset activity" })).toContainText("Inactive");
@@ -435,7 +442,7 @@ test.describe("mocked Owner workstation", () => {
     await page.getByRole("button", { name: "Fleet", exact: true }).click();
     const table = page.getByRole("table", { name: "Fleet assets" });
     await expect(table).toBeVisible();
-    await expect(table.locator('td[data-label="Short name"]').first()).toContainText("Green Tipper");
+    await expect(table.locator('td[data-label="Asset"]').first()).toContainText("Green Tipper");
     const search = await page.getByLabel("Search fleet").boundingBox();
     const typeFilter = await page.getByLabel("Filter asset type").boundingBox();
     expect(search?.height).toBeLessThanOrEqual(48);
@@ -449,11 +456,12 @@ test.describe("mocked Owner workstation", () => {
   test("explains when the configured backend lacks Owner relationship operations", async ({ page }) => {
     await openOwner(page, { ownerOperationsAvailable: false });
 
-    await page.getByRole("button", { name: "Deployments", exact: true }).click();
-    const deploymentRow = page.getByRole("table", { name: "Current deployments" }).getByRole("row").filter({ hasText: "North Excavator" });
-    await deploymentRow.getByRole("button", { name: "Remove deployment" }).click();
+    await page.getByRole("button", { name: "Fleet", exact: true }).click();
+    const assetRow = page.getByRole("table", { name: "Fleet assets" }).getByRole("row").filter({ hasText: "North Excavator" });
+    await assetRow.getByRole("button", { name: "Manage" }).click();
 
     const dialog = page.getByRole("dialog", { name: "North Excavator" });
+    await dialog.getByLabel("Site").selectOption("");
     await dialog.getByRole("button", { name: "Save changes" }).click();
     await expect(dialog.getByRole("alert")).toContainText("Fleet Manager server must be updated");
     await expect(dialog.getByText("Not Found", { exact: true })).toHaveCount(0);

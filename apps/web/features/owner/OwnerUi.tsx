@@ -66,13 +66,15 @@ export function FilterToolbar({ children }: { children: ReactNode }) {
 export function OperationsTable({
   label,
   children,
+  variant = "default",
 }: {
   label: string;
   children: ReactNode;
+  variant?: "default" | "fleet";
 }) {
   return (
-    <div className="owner-table-shell">
-      <table aria-label={label} className="owner-table">
+    <div className={`owner-table-shell ${variant === "fleet" ? "owner-table-shell--fleet" : ""}`}>
+      <table aria-label={label} className={`owner-table ${variant === "fleet" ? "owner-table--fleet" : ""}`}>
         {children}
       </table>
     </div>

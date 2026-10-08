@@ -42,9 +42,7 @@ def _alembic_config(engine: Engine) -> Config:
     api_root = Path(__file__).parents[1]
     config = Config(str(api_root / "alembic.ini"))
     config.set_main_option("script_location", str(api_root / "migrations"))
-    config.set_main_option(
-        "sqlalchemy.url", engine.url.render_as_string(hide_password=False)
-    )
+    config.set_main_option("sqlalchemy.url", engine.url.render_as_string(hide_password=False))
     return config
 
 
@@ -304,24 +302,15 @@ def test_0011_migrates_complete_tipper_history_and_reporting(
             _insert_legacy_graph(connection)
             legacy_counts = {
                 "events": connection.scalar(
-                    text(
-                        "SELECT count(*) FROM operational_events "
-                        "WHERE company_id = :company_id"
-                    ),
+                    text("SELECT count(*) FROM operational_events WHERE company_id = :company_id"),
                     {"company_id": COMPANY_ID},
                 ),
                 "verifications": connection.scalar(
-                    text(
-                        "SELECT count(*) FROM event_verifications "
-                        "WHERE company_id = :company_id"
-                    ),
+                    text("SELECT count(*) FROM event_verifications WHERE company_id = :company_id"),
                     {"company_id": COMPANY_ID},
                 ),
                 "evidence": connection.scalar(
-                    text(
-                        "SELECT count(*) FROM evidence_objects "
-                        "WHERE company_id = :company_id"
-                    ),
+                    text("SELECT count(*) FROM evidence_objects WHERE company_id = :company_id"),
                     {"company_id": COMPANY_ID},
                 ),
             }
@@ -329,13 +318,17 @@ def test_0011_migrates_complete_tipper_history_and_reporting(
         command.upgrade(config, "head")
 
         with postgres_engine.connect() as connection:
-            asset = connection.execute(
-                text(
-                    "SELECT id, asset_code, asset_type, ownership_type, registration_number, "
-                    "status FROM fleet_assets WHERE id = :id"
-                ),
-                {"id": ASSET_ID},
-            ).mappings().one()
+            asset = (
+                connection.execute(
+                    text(
+                        "SELECT id, asset_code, asset_type, ownership_type, registration_number, "
+                        "status FROM fleet_assets WHERE id = :id"
+                    ),
+                    {"id": ASSET_ID},
+                )
+                .mappings()
+                .one()
+            )
             assert dict(asset) == {
                 "id": ASSET_ID,
                 "asset_code": "TIPPER-12",
@@ -344,35 +337,41 @@ def test_0011_migrates_complete_tipper_history_and_reporting(
                 "registration_number": "KA01AB1234",
                 "status": "ACTIVE",
             }
-            assert connection.scalar(
-                text("SELECT asset_id FROM assignments WHERE id = :id"),
-                {"id": ASSIGNMENT_ID},
-            ) == ASSET_ID
-            assert connection.scalar(
-                text("SELECT asset_id FROM duty_sessions WHERE id = :id"),
-                {"id": DUTY_ID},
-            ) == ASSET_ID
-            assert connection.scalar(
-                text(
-                    "SELECT count(*) FROM operational_events "
-                    "WHERE company_id = :company_id"
-                ),
-                {"company_id": COMPANY_ID},
-            ) == legacy_counts["events"]
-            assert connection.scalar(
-                text(
-                    "SELECT count(*) FROM event_verifications "
-                    "WHERE company_id = :company_id"
-                ),
-                {"company_id": COMPANY_ID},
-            ) == legacy_counts["verifications"]
-            assert connection.scalar(
-                text(
-                    "SELECT count(*) FROM evidence_objects "
-                    "WHERE company_id = :company_id"
-                ),
-                {"company_id": COMPANY_ID},
-            ) == legacy_counts["evidence"]
+            assert (
+                connection.scalar(
+                    text("SELECT asset_id FROM assignments WHERE id = :id"),
+                    {"id": ASSIGNMENT_ID},
+                )
+                == ASSET_ID
+            )
+            assert (
+                connection.scalar(
+                    text("SELECT asset_id FROM duty_sessions WHERE id = :id"),
+                    {"id": DUTY_ID},
+                )
+                == ASSET_ID
+            )
+            assert (
+                connection.scalar(
+                    text("SELECT count(*) FROM operational_events WHERE company_id = :company_id"),
+                    {"company_id": COMPANY_ID},
+                )
+                == legacy_counts["events"]
+            )
+            assert (
+                connection.scalar(
+                    text("SELECT count(*) FROM event_verifications WHERE company_id = :company_id"),
+                    {"company_id": COMPANY_ID},
+                )
+                == legacy_counts["verifications"]
+            )
+            assert (
+                connection.scalar(
+                    text("SELECT count(*) FROM evidence_objects WHERE company_id = :company_id"),
+                    {"company_id": COMPANY_ID},
+                )
+                == legacy_counts["evidence"]
+            )
 
         with Session(postgres_engine) as session:
             company = session.get(Company, COMPANY_ID)
@@ -385,9 +384,7 @@ def test_0011_migrates_complete_tipper_history_and_reporting(
                 membership=owner,
                 company=company,
             )
-            report = ReportingService(session, context).site_daily(
-                SITE_ID, date(2026, 1, 15)
-            )
+            report = ReportingService(session, context).site_daily(SITE_ID, date(2026, 1, 15))
             assert report.assigned_assets_count == 1
             assert len(report.rows) == 1
             row = report.rows[0]
@@ -455,13 +452,17 @@ def test_0012_preserves_people_sites_and_accepts_invited_status(
         command.upgrade(config, "head")
 
         with postgres_engine.begin() as connection:
-            site = connection.execute(
-                text(
-                    "SELECT id, name, code, location_description, latitude, longitude "
-                    "FROM sites WHERE id = :id"
-                ),
-                {"id": site_id},
-            ).mappings().one()
+            site = (
+                connection.execute(
+                    text(
+                        "SELECT id, name, code, location_description, latitude, longitude "
+                        "FROM sites WHERE id = :id"
+                    ),
+                    {"id": site_id},
+                )
+                .mappings()
+                .one()
+            )
             assert site["id"] == site_id
             assert site["name"] == "Preserved Site"
             assert site["code"] == "KEEP"
@@ -469,15 +470,16 @@ def test_0012_preserves_people_sites_and_accepts_invited_status(
             assert site["latitude"] is None
             assert site["longitude"] is None
             connection.execute(
-                text(
-                    "UPDATE company_memberships SET status = 'INVITED' WHERE id = :id"
-                ),
+                text("UPDATE company_memberships SET status = 'INVITED' WHERE id = :id"),
                 {"id": membership_id},
             )
-            assert connection.scalar(
-                text("SELECT status::text FROM company_memberships WHERE id = :id"),
-                {"id": membership_id},
-            ) == "INVITED"
+            assert (
+                connection.scalar(
+                    text("SELECT status::text FROM company_memberships WHERE id = :id"),
+                    {"id": membership_id},
+                )
+                == "INVITED"
+            )
     finally:
         command.upgrade(config, "head")
         with postgres_engine.begin() as connection:
@@ -489,12 +491,8 @@ def test_0012_preserves_people_sites_and_accepts_invited_status(
                 text("DELETE FROM company_memberships WHERE company_id = :company_id"),
                 {"company_id": company_id},
             )
-            connection.execute(
-                text("DELETE FROM users WHERE id = :id"), {"id": user_id}
-            )
-            connection.execute(
-                text("DELETE FROM companies WHERE id = :id"), {"id": company_id}
-            )
+            connection.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+            connection.execute(text("DELETE FROM companies WHERE id = :id"), {"id": company_id})
 
 
 def test_0013_backfills_assignment_history_as_asset_site_deployments(
@@ -599,79 +597,82 @@ def test_0013_backfills_assignment_history_as_asset_site_deployments(
         command.upgrade(config, "head")
 
         with postgres_engine.begin() as connection:
-            deployments = connection.execute(
-                text(
-                    "SELECT asset_id, site_id, starts_at, ends_at "
-                    "FROM asset_site_deployments WHERE company_id = :company "
-                    "ORDER BY starts_at"
-                ),
-                {"company": company_id},
-            ).mappings().all()
+            deployments = (
+                connection.execute(
+                    text(
+                        "SELECT asset_id, site_id, starts_at, ends_at "
+                        "FROM asset_site_deployments WHERE company_id = :company "
+                        "ORDER BY starts_at"
+                    ),
+                    {"company": company_id},
+                )
+                .mappings()
+                .all()
+            )
             assert len(deployments) == 2
             assert deployments[0]["site_id"] == first_site_id
             assert deployments[0]["ends_at"] == boundary
             assert deployments[1]["asset_id"] == asset_id
             assert deployments[1]["site_id"] == current_site_id
             assert deployments[1]["ends_at"] is None
-            assert connection.scalar(
-                text(
-                    "SELECT count(*) FROM asset_site_deployments "
-                    "WHERE company_id = :company AND asset_id = :asset "
-                    "AND ends_at IS NULL"
-                ),
-                {"company": company_id, "asset": asset_id},
-            ) == 1
-            assert connection.scalar(
-                text(
-                    "SELECT count(*) FROM assignments "
-                    "WHERE company_id = :company AND asset_id = :asset"
-                ),
-                {"company": company_id, "asset": asset_id},
-            ) == 2
-            assert connection.scalar(
-                text(
-                    "SELECT count(*) FROM assignments AS a JOIN "
-                    "asset_site_deployments AS d ON "
-                    "d.company_id = a.company_id AND "
-                    "d.id = a.asset_site_deployment_id AND "
-                    "d.asset_id = a.asset_id AND d.site_id = a.site_id "
-                    "WHERE a.company_id = :company AND a.asset_id = :asset"
-                ),
-                {"company": company_id, "asset": asset_id},
-            ) == 2
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT count(*) FROM asset_site_deployments "
+                        "WHERE company_id = :company AND asset_id = :asset "
+                        "AND ends_at IS NULL"
+                    ),
+                    {"company": company_id, "asset": asset_id},
+                )
+                == 1
+            )
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT count(*) FROM assignments "
+                        "WHERE company_id = :company AND asset_id = :asset"
+                    ),
+                    {"company": company_id, "asset": asset_id},
+                )
+                == 2
+            )
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT count(*) FROM assignments AS a JOIN "
+                        "asset_site_deployments AS d ON "
+                        "d.company_id = a.company_id AND "
+                        "d.id = a.asset_site_deployment_id AND "
+                        "d.asset_id = a.asset_id AND d.site_id = a.site_id "
+                        "WHERE a.company_id = :company AND a.asset_id = :asset"
+                    ),
+                    {"company": company_id, "asset": asset_id},
+                )
+                == 2
+            )
     finally:
         command.upgrade(config, "head")
         with postgres_engine.begin() as connection:
             params = {"company": company_id}
-            connection.execute(
-                text("DELETE FROM assignments WHERE company_id = :company"), params
-            )
+            connection.execute(text("DELETE FROM assignments WHERE company_id = :company"), params)
             connection.execute(
                 text("DELETE FROM asset_site_deployments WHERE company_id = :company"),
                 params,
             )
-            connection.execute(
-                text("DELETE FROM fleet_assets WHERE company_id = :company"), params
-            )
-            connection.execute(
-                text("DELETE FROM sites WHERE company_id = :company"), params
-            )
+            connection.execute(text("DELETE FROM fleet_assets WHERE company_id = :company"), params)
+            connection.execute(text("DELETE FROM sites WHERE company_id = :company"), params)
             connection.execute(
                 text("DELETE FROM company_memberships WHERE company_id = :company"),
                 params,
             )
             connection.execute(
-                text(
-                    "DELETE FROM users WHERE id IN (:driver_user, :supervisor_user)"
-                ),
+                text("DELETE FROM users WHERE id IN (:driver_user, :supervisor_user)"),
                 {
                     "driver_user": driver_user_id,
                     "supervisor_user": supervisor_user_id,
                 },
             )
-            connection.execute(
-                text("DELETE FROM companies WHERE id = :company"), params
-            )
+            connection.execute(text("DELETE FROM companies WHERE id = :company"), params)
 
 
 def test_0016_seeds_exact_builtin_report_templates_for_existing_company(
@@ -694,14 +695,18 @@ def test_0016_seeds_exact_builtin_report_templates_for_existing_company(
         command.upgrade(config, "head")
 
         with postgres_engine.connect() as connection:
-            templates = connection.execute(
-                text(
-                    "SELECT name, builtin_key, is_builtin, is_default, included_sheets "
-                    "FROM report_templates WHERE company_id = :company "
-                    "ORDER BY name"
-                ),
-                {"company": company_id},
-            ).mappings().all()
+            templates = (
+                connection.execute(
+                    text(
+                        "SELECT name, builtin_key, is_builtin, is_default, included_sheets "
+                        "FROM report_templates WHERE company_id = :company "
+                        "ORDER BY name"
+                    ),
+                    {"company": company_id},
+                )
+                .mappings()
+                .all()
+            )
             assert len(templates) == 3
             assert {row["name"] for row in templates} == {
                 "Management Summary",
@@ -709,12 +714,8 @@ def test_0016_seeds_exact_builtin_report_templates_for_existing_company(
                 "Diesel Report",
             }
             assert all(row["is_builtin"] for row in templates)
-            assert [row["name"] for row in templates if row["is_default"]] == [
-                "Management Summary"
-            ]
-            detailed = next(
-                row for row in templates if row["name"] == "Detailed Operations"
-            )
+            assert [row["name"] for row in templates if row["is_default"]] == ["Management Summary"]
+            detailed = next(row for row in templates if row["name"] == "Detailed Operations")
             assert len(detailed["included_sheets"]) == 8
     finally:
         command.upgrade(config, "head")
@@ -766,13 +767,17 @@ def test_0017_backfills_site_short_names_and_internal_codes(
         command.upgrade(config, "head")
 
         with postgres_engine.connect() as connection:
-            sites = connection.execute(
-                text(
-                    "SELECT id, name, short_name, code FROM sites "
-                    "WHERE company_id = :company ORDER BY id"
-                ),
-                {"company": company_id},
-            ).mappings().all()
+            sites = (
+                connection.execute(
+                    text(
+                        "SELECT id, name, short_name, code FROM sites "
+                        "WHERE company_id = :company ORDER BY id"
+                    ),
+                    {"company": company_id},
+                )
+                .mappings()
+                .all()
+            )
             assert [dict(row) for row in sites] == [
                 {
                     "id": generated_site_id,
@@ -809,6 +814,90 @@ def test_0017_backfills_site_short_names_and_internal_codes(
         with postgres_engine.begin() as connection:
             connection.execute(
                 text("DELETE FROM sites WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM report_templates WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :company"),
+                {"company": company_id},
+            )
+
+
+def test_0018_preserves_existing_rented_assets_with_nullable_new_fields(
+    postgres_engine: Engine,
+) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("80000000-0000-0000-0000-000000000001")
+    asset_id = UUID("80000000-0000-0000-0000-000000000002")
+    command.downgrade(config, "0017_internal_ids")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'Asset Contact Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO fleet_assets "
+                    "(id, company_id, asset_type, ownership_type, asset_code, "
+                    "registration_number, short_name, status, rental_party_name) VALUES "
+                    "(:asset, :company, 'TIPPER', 'RENTED', 'LEGACY-RENTED', "
+                    "'MH01AM5678', 'Legacy rented asset', 'ACTIVE', 'Legacy Supplier')"
+                ),
+                {"asset": asset_id, "company": company_id},
+            )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.connect() as connection:
+            asset = (
+                connection.execute(
+                    text(
+                        "SELECT rental_party_name, rental_owner_phone_primary, "
+                        "rental_owner_phone_secondary, chassis_number, engine_number "
+                        "FROM fleet_assets WHERE id = :asset"
+                    ),
+                    {"asset": asset_id},
+                )
+                .mappings()
+                .one()
+            )
+            assert dict(asset) == {
+                "rental_party_name": "Legacy Supplier",
+                "rental_owner_phone_primary": None,
+                "rental_owner_phone_secondary": None,
+                "chassis_number": None,
+                "engine_number": None,
+            }
+            nullable = {
+                str(row["column_name"]): str(row["is_nullable"])
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name, is_nullable FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'fleet_assets' "
+                        "AND column_name IN ('rental_owner_phone_primary', "
+                        "'rental_owner_phone_secondary', 'chassis_number', 'engine_number')"
+                    )
+                ).mappings()
+            }
+            assert nullable == {
+                "chassis_number": "YES",
+                "engine_number": "YES",
+                "rental_owner_phone_primary": "YES",
+                "rental_owner_phone_secondary": "YES",
+            }
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM fleet_assets WHERE company_id = :company"),
                 {"company": company_id},
             )
             connection.execute(

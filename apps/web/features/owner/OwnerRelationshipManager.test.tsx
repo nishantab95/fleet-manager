@@ -92,8 +92,12 @@ const tipper: OwnerAsset = {
   short_name: "ABHI-BENZ",
   manufacturer: "BharatBenz",
   model: "2823C",
+  chassis_number: "MA1XXXXXXXX",
+  engine_number: "E4XXXXXX",
   status: "ACTIVE",
   rental_party_name: "Roadworks Hire",
+  rental_owner_phone_primary: "+919876543210",
+  rental_owner_phone_secondary: null,
   rental_start_date: "2026-01-01",
   rental_end_date: null,
   current_deployment: {
@@ -111,6 +115,7 @@ const tipper: OwnerAsset = {
     site_name: "Quarry",
     driver_membership_id: currentDriver.membership_id,
     driver_name: currentDriver.display_name,
+    driver_phone: currentDriver.phone,
     starts_at: "2026-01-02T00:00:00Z",
     regular_duty_minutes: 600,
   },
@@ -125,6 +130,8 @@ const deployedExcavator: OwnerAsset = {
   registration_number: null,
   short_name: "North excavator",
   rental_party_name: null,
+  rental_owner_phone_primary: null,
+  rental_owner_phone_secondary: null,
   rental_start_date: null,
   has_active_assignment: false,
   active_assignment: null,
@@ -220,7 +227,8 @@ afterEach(cleanup);
 describe("Owner relationship manager", () => {
   it("shows off-duty identity, activity, simple selectors, and saves a Driver change with the preview token", async () => {
     const apiRequest = operationApi();
-    const props = managerProps({ apiRequest: apiRequest as unknown as WebRequest });
+    const onEditAsset = vi.fn();
+    const props = managerProps({ apiRequest: apiRequest as unknown as WebRequest, onEditAsset });
     render(<OwnerRelationshipManager {...props} />);
 
     const dialog = screen.getByRole("dialog", { name: "ABHI-BENZ" });
@@ -229,6 +237,11 @@ describe("Owner relationship manager", () => {
     expect(activity).toHaveTextContent("Off duty");
     expect(activity).toHaveTextContent("Basavaraj Koli");
     expect(activity).toHaveTextContent("Quarry");
+    const technicalDetails = within(dialog).getByRole("region", { name: "Technical details" });
+    expect(technicalDetails).toHaveTextContent("MA1XXXXXXXX");
+    expect(technicalDetails).toHaveTextContent("E4XXXXXX");
+    fireEvent.click(within(technicalDetails).getByRole("button", { name: "Edit asset details" }));
+    expect(onEditAsset).toHaveBeenCalledWith(tipper.id);
     expect(within(dialog).getByLabelText("Driver / Operator")).toHaveValue(currentDriver.membership_id);
     expect(within(dialog).getByLabelText("Site")).toHaveValue(siteOne.id);
     expectNoNormalWizard(dialog);

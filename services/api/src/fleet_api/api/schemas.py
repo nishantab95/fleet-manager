@@ -161,7 +161,11 @@ class OwnerAssetCreateRequest(BaseModel):
     short_name: str | None = Field(default=None, max_length=100)
     manufacturer: str | None = Field(default=None, max_length=100)
     model: str | None = Field(default=None, max_length=100)
+    chassis_number: str | None = Field(default=None, max_length=100)
+    engine_number: str | None = Field(default=None, max_length=100)
     rental_party_name: str | None = Field(default=None, max_length=200)
+    rental_owner_phone_primary: str | None = Field(default=None, max_length=64)
+    rental_owner_phone_secondary: str | None = Field(default=None, max_length=64)
     rental_start_date: date | None = None
     rental_end_date: date | None = None
 
@@ -173,7 +177,11 @@ class OwnerAssetUpdateRequest(BaseModel):
     short_name: str | None = Field(default=None, max_length=100)
     manufacturer: str | None = Field(default=None, max_length=100)
     model: str | None = Field(default=None, max_length=100)
+    chassis_number: str | None = Field(default=None, max_length=100)
+    engine_number: str | None = Field(default=None, max_length=100)
     rental_party_name: str | None = Field(default=None, max_length=200)
+    rental_owner_phone_primary: str | None = Field(default=None, max_length=64)
+    rental_owner_phone_secondary: str | None = Field(default=None, max_length=64)
     rental_start_date: date | None = None
     rental_end_date: date | None = None
 
@@ -184,6 +192,7 @@ class OwnerAssetAssignmentResponse(BaseModel):
     site_name: str
     driver_membership_id: UUID
     driver_name: str
+    driver_phone: str
     starts_at: datetime
     regular_duty_minutes: int
 
@@ -342,8 +351,12 @@ class OwnerAssetResponse(BaseModel):
     short_name: str | None
     manufacturer: str | None
     model: str | None
+    chassis_number: str | None
+    engine_number: str | None
     status: FleetAssetStatus
     rental_party_name: str | None
+    rental_owner_phone_primary: str | None
+    rental_owner_phone_secondary: str | None
     rental_start_date: date | None
     rental_end_date: date | None
     current_deployment: AssetSiteDeploymentResponse | None
