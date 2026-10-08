@@ -304,22 +304,36 @@ test.describe("mocked Owner workstation", () => {
     const fleetTable = page.getByRole("table", { name: "Fleet assets" });
     await expect(fleetTable).toBeVisible();
     await expect(fleetTable.getByRole("columnheader")).toHaveCount(4);
-    await expect(fleetTable.getByRole("columnheader", { name: /Asset/ })).toBeVisible();
-    await expect(fleetTable.getByRole("columnheader", { name: /Current setup/ })).toBeVisible();
-    await expect(fleetTable.getByRole("columnheader", { name: /Driver \/ Operator/ })).toBeVisible();
+    await expect(fleetTable.getByRole("columnheader", { name: "Asset", exact: true })).toBeVisible();
+    await expect(fleetTable.getByRole("columnheader", { name: "Current setup", exact: true })).toBeVisible();
+    await expect(fleetTable.getByRole("columnheader", { name: "Driver / Operator", exact: true })).toBeVisible();
     await expect(fleetTable.getByRole("columnheader", { name: "Actions" })).toBeVisible();
     await expect(fleetTable.getByRole("columnheader", { name: "Registration" })).toHaveCount(0);
+    await expect(fleetTable.locator("thead button")).toHaveCount(0);
+    const sortBy = page.getByLabel("Sort by");
+    await expect(sortBy).toHaveValue("asset-asc");
+    await expect(sortBy.locator("option:checked")).toHaveText("Asset name A–Z");
+    await sortBy.selectOption("asset-desc");
+    await expect(fleetTable.locator("tbody tr").first()).toContainText("Yard Roller");
+    await sortBy.selectOption("asset-asc");
 
     const rentedRow = fleetTable.getByRole("row").filter({ hasText: "North Excavator" });
-    await expect(rentedRow).toContainText("EXCAVATOR · RENTED");
+    const rentedAssetCell = rentedRow.locator('td[data-label="Asset"]');
+    const rentedSetupCell = rentedRow.locator('td[data-label="Current setup"]');
+    await expect(rentedAssetCell).toContainText("EXCAVATOR");
+    await expect(rentedAssetCell).not.toContainText("RENTED");
+    await expect(rentedSetupCell).toContainText("RENTED");
     await expect(rentedRow).toContainText("Owner: Metro Plant Hire");
-    await expect(rentedRow).toContainText("+91 98765 43210");
-    await expect(rentedRow).toContainText("+91 99887 76655");
+    await expect(rentedRow).toContainText("Primary: +91 98765 43210");
+    await expect(rentedRow).toContainText("Alternate: +91 99887 76655");
+    await expect(rentedRow.locator(".owner-fleet-rental")).toHaveCSS("border-top-style", "none");
     await expect(rentedRow.getByRole("button")).toHaveCount(2);
     await expect(rentedRow.getByRole("button", { name: "Manage" })).toBeVisible();
     await expect(rentedRow.getByRole("button", { name: "History" })).toBeVisible();
 
     const assignedRow = fleetTable.getByRole("row").filter({ hasText: "Green Tipper" });
+    await expect(assignedRow.locator('td[data-label="Asset"]')).not.toContainText("OWNED");
+    await expect(assignedRow.locator('td[data-label="Current setup"]')).toContainText("OWNED");
     await expect(assignedRow).toContainText("North Pit");
     await expect(assignedRow).toContainText("On duty");
     await expect(assignedRow).toContainText("Ravi Kumar");
@@ -332,6 +346,16 @@ test.describe("mocked Owner workstation", () => {
     await expect(page.getByLabel("Chassis number")).toHaveValue("LONG-CHASSIS-NUMBER-THAT-WRAPS-CLEANLY-1234567890");
     await expect(page.getByLabel("Primary phone")).toHaveValue("+919876543210");
     await page.getByRole("button", { name: "Cancel" }).click();
+
+    await page.getByLabel("Filter ownership").selectOption("RENTED");
+    await page.getByLabel("Filter site").selectOption("site-1");
+    await sortBy.selectOption("asset-desc");
+    await expect(fleetTable.locator("tbody tr")).toHaveCount(1);
+    await expect(fleetTable.locator("tbody tr").first()).toContainText("North Excavator");
+    await expect(page.getByLabel("Filter ownership")).toHaveValue("RENTED");
+    await expect(page.getByLabel("Filter site")).toHaveValue("site-1");
+    await page.getByLabel("Filter ownership").selectOption("");
+    await page.getByLabel("Filter site").selectOption("");
 
     for (const width of [1280, 1366, 1440, 1920]) {
       await page.setViewportSize({ width, height: 800 });

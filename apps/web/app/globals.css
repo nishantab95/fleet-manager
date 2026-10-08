@@ -718,8 +718,9 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .owner-fleet-cell > :where(strong, span, div) { min-width: 0; overflow-wrap: anywhere; }
 .owner-fleet-cell > span { color: var(--owner-muted); font-size: 0.73rem; }
 .owner-fleet-asset > strong { font-size: 0.88rem; }
-.owner-fleet-rental { display: grid; gap: 2px; padding-top: 6px; margin-top: 2px; border-top: 1px solid var(--owner-border); color: #56635e; font-size: 0.71rem; line-height: 1.4; }
+.owner-fleet-rental { display: grid; gap: 2px; padding-top: 4px; margin-top: 2px; color: #56635e; font-size: 0.71rem; line-height: 1.4; }
 .owner-fleet-rental span:first-child { color: var(--owner-ink); font-weight: 750; }
+.owner-fleet-ownership { display: flex; align-items: flex-start; min-width: 0; }
 .owner-fleet-statuses { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 5px; }
 .owner-row-actions--fleet { align-items: flex-start; flex-direction: column; gap: 2px; }
 

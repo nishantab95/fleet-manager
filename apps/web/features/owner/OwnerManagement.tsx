@@ -227,7 +227,34 @@ function assetPayload(draft: AssetDraft, includeType: boolean) {
   };
 }
 
-type FleetSort = "asset" | "setup" | "operator";
+type FleetSort =
+  | "asset-asc"
+  | "asset-desc"
+  | "site-asc"
+  | "site-desc"
+  | "operator-asc"
+  | "operator-desc"
+  | "owned-first"
+  | "rented-first"
+  | "on-duty-first"
+  | "off-duty-first"
+  | "active-first"
+  | "type-asc";
+
+const fleetSortOptions: { value: FleetSort; label: string }[] = [
+  { value: "asset-asc", label: "Asset name A–Z" },
+  { value: "asset-desc", label: "Asset name Z–A" },
+  { value: "site-asc", label: "Site A–Z" },
+  { value: "site-desc", label: "Site Z–A" },
+  { value: "operator-asc", label: "Driver / Operator A–Z" },
+  { value: "operator-desc", label: "Driver / Operator Z–A" },
+  { value: "owned-first", label: "Owned first" },
+  { value: "rented-first", label: "Rented first" },
+  { value: "on-duty-first", label: "On duty first" },
+  { value: "off-duty-first", label: "Off duty first" },
+  { value: "active-first", label: "Active first" },
+  { value: "type-asc", label: "Asset type A–Z" },
+];
 
 export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload, setError, openRelationshipManager, editAssetId = null, onEditHandled }: Common & { assets: OwnerAsset[]; people?: OwnerPerson[]; sites?: OwnerSite[]; editAssetId?: string | null; onEditHandled?: () => void }) {
   const mutation = useOwnerAction({ reload, setError });
@@ -240,8 +267,7 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
   const [ownershipFilter, setOwnershipFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [siteFilter, setSiteFilter] = useState("");
-  const [sortKey, setSortKey] = useState<FleetSort>("asset");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [fleetSort, setFleetSort] = useState<FleetSort>("asset-asc");
   const [historyAsset, setHistoryAsset] = useState<OwnerAsset | null>(null);
   const [deploymentHistory, setDeploymentHistory] = useState<AssetSiteDeployment[]>([]);
   const [assignmentHistory, setAssignmentHistory] = useState<DriverAssetAssignment[]>([]);
@@ -251,11 +277,33 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
   const shown = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = assets.filter((asset) => (!normalizedQuery || assetSearchText(asset).includes(normalizedQuery)) && (!typeFilter || asset.asset_type === typeFilter) && (!ownershipFilter || asset.ownership_type === ownershipFilter) && (!statusFilter || asset.status === statusFilter) && (!siteFilter || asset.current_deployment?.site_id === siteFilter));
-    const value = (asset: OwnerAsset) => sortKey === "asset" ? assetLabel(asset) : sortKey === "setup" ? `${asset.current_deployment?.site_name ?? ""} ${personForAsset(asset, people)?.has_active_duty ? "ON_DUTY" : asset.has_active_assignment ? "OFF_DUTY" : "UNASSIGNED"} ${asset.status}` : asset.active_assignment?.driver_name;
-    return [...filtered].sort((left, right) => { const result = compareText(value(left), value(right)); return sortDirection === "asc" ? result : -result; });
-  }, [assets, ownershipFilter, people, query, siteFilter, sortDirection, sortKey, statusFilter, typeFilter]);
-
-  const changeSort = (next: FleetSort) => { const value = toggleSort(sortKey, next, sortDirection); setSortKey(value.key); setSortDirection(value.direction); };
+    const byAssetName = (left: OwnerAsset, right: OwnerAsset, direction: SortDirection = "asc") => {
+      const result = compareText(assetLabel(left), assetLabel(right));
+      return (direction === "asc" ? result : -result) || compareText(left.id, right.id);
+    };
+    const byOptionalText = (left: string | null | undefined, right: string | null | undefined, direction: SortDirection) => {
+      if (!left && !right) return 0;
+      if (!left) return 1;
+      if (!right) return -1;
+      const result = compareText(left, right);
+      return direction === "asc" ? result : -result;
+    };
+    const duty = (asset: OwnerAsset) => personForAsset(asset, people)?.has_active_duty ? "ON_DUTY" : asset.has_active_assignment ? "OFF_DUTY" : "UNASSIGNED";
+    return [...filtered].sort((left, right) => {
+      let primary = 0;
+      if (fleetSort === "asset-asc") return byAssetName(left, right);
+      if (fleetSort === "asset-desc") return byAssetName(left, right, "desc");
+      if (fleetSort === "site-asc" || fleetSort === "site-desc") primary = byOptionalText(left.current_deployment?.site_name, right.current_deployment?.site_name, fleetSort === "site-asc" ? "asc" : "desc");
+      if (fleetSort === "operator-asc" || fleetSort === "operator-desc") primary = byOptionalText(left.active_assignment?.driver_name, right.active_assignment?.driver_name, fleetSort === "operator-asc" ? "asc" : "desc");
+      if (fleetSort === "owned-first") primary = Number(left.ownership_type === "RENTED") - Number(right.ownership_type === "RENTED");
+      if (fleetSort === "rented-first") primary = Number(left.ownership_type === "OWNED") - Number(right.ownership_type === "OWNED");
+      if (fleetSort === "on-duty-first") primary = Number(duty(left) !== "ON_DUTY") - Number(duty(right) !== "ON_DUTY");
+      if (fleetSort === "off-duty-first") primary = Number(duty(left) === "ON_DUTY") - Number(duty(right) === "ON_DUTY");
+      if (fleetSort === "active-first") primary = Number(left.status !== "ACTIVE") - Number(right.status !== "ACTIVE");
+      if (fleetSort === "type-asc") primary = compareText(left.asset_type, right.asset_type);
+      return primary || byAssetName(left, right);
+    });
+  }, [assets, fleetSort, ownershipFilter, people, query, siteFilter, statusFilter, typeFilter]);
   const closeForm = () => { setDraft(blankAsset); setEditingId(""); setFormOpen(false); onEditHandled?.(); };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -294,19 +342,20 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
         <label>Ownership<select aria-label="Filter ownership" onChange={(event) => setOwnershipFilter(event.target.value)} value={ownershipFilter}><option value="">Owned and rented</option><option value="OWNED">Owned</option><option value="RENTED">Rented</option></select></label>
         <label>Status<select aria-label="Filter status" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
         <label>Site<select aria-label="Filter site" onChange={(event) => setSiteFilter(event.target.value)} value={siteFilter}><option value="">All sites</option>{sites.filter((site) => site.status === "ACTIVE").map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>
+        <label>Sort by<select aria-label="Sort by" onChange={(event) => setFleetSort(event.target.value as FleetSort)} value={fleetSort}>{fleetSortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
       </FilterToolbar>
       <OperationsTable label="Fleet assets" variant="fleet">
         <thead><tr>
-          <th aria-sort={sortKey === "asset" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "asset"} direction={sortDirection} label="Asset" onClick={() => changeSort("asset")} /></th>
-          <th aria-sort={sortKey === "setup" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "setup"} direction={sortDirection} label="Current setup" onClick={() => changeSort("setup")} /></th>
-          <th aria-sort={sortKey === "operator" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} scope="col"><SortButton active={sortKey === "operator"} direction={sortDirection} label="Driver / Operator" onClick={() => changeSort("operator")} /></th>
+          <th scope="col">Asset</th>
+          <th scope="col">Current setup</th>
+          <th scope="col">Driver / Operator</th>
           <th scope="col">Actions</th>
         </tr></thead>
         <tbody>
           {shown.length === 0 && <EmptyTableRow colSpan={4} detail="Adjust the search or filters, or add the first asset." title="No fleet assets match" />}
           {shown.map((asset) => { const person = personForAsset(asset, people); const dutyStatus = person?.has_active_duty ? "ON_DUTY" : asset.has_active_assignment ? "OFF_DUTY" : "UNASSIGNED"; return <tr key={asset.id}>
-            <td data-label="Asset"><div className="owner-fleet-cell owner-fleet-asset"><strong>{assetLabel(asset)}</strong><span>{asset.registration_number || "No registration"}</span><span>{title(asset.asset_type)} · {title(asset.ownership_type)}</span><span>{[asset.manufacturer, asset.model].filter(Boolean).join(" ") || "Make / model not provided"}</span>{asset.ownership_type === "RENTED" && <div className="owner-fleet-rental"><span>Owner: {asset.rental_party_name || "Not provided"}</span><span>{asset.rental_owner_phone_primary ? phoneDisplay(asset.rental_owner_phone_primary) : "Primary phone not provided"}</span>{asset.rental_owner_phone_secondary && <span>{phoneDisplay(asset.rental_owner_phone_secondary)}</span>}</div>}</div></td>
-            <td data-label="Current setup"><div className="owner-fleet-cell"><strong>{asset.current_deployment?.site_name || "Undeployed"}</strong><div className="owner-fleet-statuses"><StatusChip label={dutyStatus === "ON_DUTY" ? "On duty" : dutyStatus === "OFF_DUTY" ? "Off duty" : "Not assigned"} status={dutyStatus === "ON_DUTY" ? "ON_DUTY" : dutyStatus === "OFF_DUTY" ? "AVAILABLE" : "UNDEPLOYED"} /><StatusChip status={asset.status} /></div></div></td>
+            <td data-label="Asset"><div className="owner-fleet-cell owner-fleet-asset"><strong>{assetLabel(asset)}</strong><span>{asset.registration_number || "No registration"}</span><span>{title(asset.asset_type)}</span><span>{[asset.manufacturer, asset.model].filter(Boolean).join(" ") || "Make / model not provided"}</span>{asset.ownership_type === "RENTED" && <div className="owner-fleet-rental"><span>Owner: {asset.rental_party_name || "Not provided"}</span><span>{asset.rental_owner_phone_primary ? `Primary: ${phoneDisplay(asset.rental_owner_phone_primary)}` : "Primary phone not provided"}</span>{asset.rental_owner_phone_secondary && <span>Alternate: {phoneDisplay(asset.rental_owner_phone_secondary)}</span>}</div>}</div></td>
+            <td data-label="Current setup"><div className="owner-fleet-cell owner-fleet-setup"><div className="owner-fleet-ownership"><StatusChip status={asset.ownership_type} /></div><strong>{asset.current_deployment?.site_name || "Undeployed"}</strong><div className="owner-fleet-statuses"><StatusChip label={dutyStatus === "ON_DUTY" ? "On duty" : dutyStatus === "OFF_DUTY" ? "Off duty" : "Not assigned"} status={dutyStatus === "ON_DUTY" ? "ON_DUTY" : dutyStatus === "OFF_DUTY" ? "AVAILABLE" : "UNDEPLOYED"} /><StatusChip status={asset.status} /></div></div></td>
             <td data-label="Driver / Operator"><div className="owner-fleet-cell"><strong>{asset.active_assignment?.driver_name || "Unassigned"}</strong><span>{asset.active_assignment ? phoneDisplay(asset.active_assignment.driver_phone || person?.phone || "—") : "—"}</span></div></td>
             <td data-label="Actions"><div className="owner-row-actions owner-row-actions--fleet"><button className="owner-text-button" onClick={() => openRelationshipManager({ kind: "asset", assetId: asset.id, focus: asset.status === "INACTIVE" ? "lifecycle" : undefined, initialAction: asset.status === "INACTIVE" ? "REACTIVATE_ASSET" : undefined })} type="button">Manage</button><button className="owner-text-button" onClick={() => void openRelationshipHistory(asset)} type="button">History</button></div></td>
           </tr>; })}

@@ -155,6 +155,13 @@ function common(apiRequest = vi.fn().mockResolvedValue({})) {
   };
 }
 
+function fleetAssetOrder() {
+  return within(screen.getByRole("table", { name: "Fleet assets" }))
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.querySelector<HTMLElement>('td[data-label="Asset"] strong')?.textContent);
+}
+
 describe("Owner management panels", () => {
   it("creates machinery without exposing or sending an Asset Code", async () => {
     const props = common();
@@ -209,25 +216,106 @@ describe("Owner management panels", () => {
     render(<FleetPanel assets={[deployedMachine, assignedTipper]} people={[activeDriver]} sites={[siteOne, siteTwo]} {...props} />);
 
     const fleet = screen.getByRole("table", { name: "Fleet assets" });
-    expect(within(fleet).getAllByRole("columnheader").map((header) => header.textContent?.replace(/[↕↑↓]/g, "").trim())).toEqual([
+    expect(within(fleet).getAllByRole("columnheader").map((header) => header.textContent?.trim())).toEqual([
       "Asset",
       "Current setup",
       "Driver / Operator",
       "Actions",
     ]);
+    expect(within(fleet).queryByRole("button", { name: /^Sort by/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Sort by")).toHaveValue("asset-asc");
+    expect(screen.getByLabelText("Sort by")).toHaveDisplayValue("Asset name A–Z");
     expect(within(fleet).queryByRole("columnheader", { name: "Registration" })).not.toBeInTheDocument();
     const rentedRow = within(fleet).getByRole("row", { name: /Big digger/ });
-    expect(rentedRow).toHaveTextContent("EXCAVATOR · RENTED");
+    const rentedAssetCell = rentedRow.querySelector<HTMLElement>('td[data-label="Asset"]')!;
+    const rentedSetupCell = rentedRow.querySelector<HTMLElement>('td[data-label="Current setup"]')!;
+    expect(rentedAssetCell).toHaveTextContent("EXCAVATOR");
+    expect(rentedAssetCell).not.toHaveTextContent("RENTED");
+    expect(rentedSetupCell).toHaveTextContent("RENTED");
     expect(rentedRow).toHaveTextContent("Owner: Rental Co");
-    expect(rentedRow).toHaveTextContent("+91 98765 43210");
-    expect(rentedRow).toHaveTextContent("+91 99887 76655");
+    expect(rentedRow).toHaveTextContent("Primary: +91 98765 43210");
+    expect(rentedRow).toHaveTextContent("Alternate: +91 99887 76655");
+    expect(rentedRow.querySelector(".owner-fleet-rental hr")).not.toBeInTheDocument();
     expect(within(rentedRow).getAllByRole("button").map((button) => button.textContent)).toEqual(["Manage", "History"]);
     const assignedRow = within(fleet).getByRole("row", { name: /BENZ-1/ });
+    const assignedAssetCell = assignedRow.querySelector<HTMLElement>('td[data-label="Asset"]')!;
+    const assignedSetupCell = assignedRow.querySelector<HTMLElement>('td[data-label="Current setup"]')!;
+    expect(assignedAssetCell).not.toHaveTextContent("OWNED");
+    expect(assignedSetupCell).toHaveTextContent("OWNED");
     expect(assignedRow).toHaveTextContent("Quarry");
     expect(assignedRow).toHaveTextContent("Off duty");
     expect(assignedRow).toHaveTextContent("Operator Active");
     expect(assignedRow).toHaveTextContent("+91 91000 00002");
     expect(assignedRow).not.toHaveTextContent("Owner:");
+  });
+
+  it("sorts Fleet rows explicitly and composes sorting with existing filters", () => {
+    const onDutyDriver: OwnerPerson = {
+      ...activeDriver,
+      membership_id: "driver-on-duty",
+      display_name: "Alpha Driver",
+      has_active_duty: true,
+      current_asset_id: "asset-gamma",
+    };
+    const alpha: OwnerAsset = {
+      ...deployedMachine,
+      id: "asset-alpha",
+      short_name: "Alpha excavator",
+      current_deployment: { ...deployedMachine.current_deployment!, id: "deployment-alpha", asset_id: "asset-alpha", site_id: siteTwo.id, site_name: "Yard" },
+    };
+    const beta: OwnerAsset = {
+      ...assignedTipper,
+      id: "asset-beta",
+      short_name: "Beta tipper",
+      active_assignment: { ...assignedTipper.active_assignment!, assignment_id: "assignment-beta", driver_name: "Beta Driver" },
+    };
+    const gamma: OwnerAsset = {
+      ...assignedTipper,
+      id: "asset-gamma",
+      short_name: "Gamma roller",
+      asset_type: "ROLLER",
+      current_deployment: { ...assignedTipper.current_deployment!, id: "deployment-gamma", asset_id: "asset-gamma", site_id: siteTwo.id, site_name: "Yard" },
+      active_assignment: { ...assignedTipper.active_assignment!, assignment_id: "assignment-gamma", driver_membership_id: onDutyDriver.membership_id, driver_name: onDutyDriver.display_name },
+    };
+    const delta: OwnerAsset = {
+      ...inactiveGrader,
+      id: "asset-delta",
+      short_name: "Delta grader",
+      ownership_type: "RENTED",
+    };
+    render(<FleetPanel assets={[gamma, delta, beta, alpha]} people={[activeDriver, onDutyDriver]} sites={[siteOne, siteTwo]} {...common()} />);
+
+    const sort = screen.getByLabelText("Sort by");
+    expect(fleetAssetOrder()).toEqual(["Alpha excavator", "Beta tipper", "Delta grader", "Gamma roller"]);
+    fireEvent.change(sort, { target: { value: "asset-desc" } });
+    expect(fleetAssetOrder()).toEqual(["Gamma roller", "Delta grader", "Beta tipper", "Alpha excavator"]);
+    fireEvent.change(sort, { target: { value: "site-asc" } });
+    expect(fleetAssetOrder()).toEqual(["Beta tipper", "Alpha excavator", "Gamma roller", "Delta grader"]);
+    fireEvent.change(sort, { target: { value: "site-desc" } });
+    expect(fleetAssetOrder()).toEqual(["Alpha excavator", "Gamma roller", "Beta tipper", "Delta grader"]);
+    fireEvent.change(sort, { target: { value: "operator-asc" } });
+    expect(fleetAssetOrder()).toEqual(["Gamma roller", "Beta tipper", "Alpha excavator", "Delta grader"]);
+    fireEvent.change(sort, { target: { value: "operator-desc" } });
+    expect(fleetAssetOrder()).toEqual(["Beta tipper", "Gamma roller", "Alpha excavator", "Delta grader"]);
+    fireEvent.change(sort, { target: { value: "owned-first" } });
+    expect(fleetAssetOrder()).toEqual(["Beta tipper", "Gamma roller", "Alpha excavator", "Delta grader"]);
+    fireEvent.change(sort, { target: { value: "rented-first" } });
+    expect(fleetAssetOrder()).toEqual(["Alpha excavator", "Delta grader", "Beta tipper", "Gamma roller"]);
+    fireEvent.change(sort, { target: { value: "on-duty-first" } });
+    expect(fleetAssetOrder()[0]).toBe("Gamma roller");
+    fireEvent.change(sort, { target: { value: "off-duty-first" } });
+    expect(fleetAssetOrder()).toEqual(["Alpha excavator", "Beta tipper", "Delta grader", "Gamma roller"]);
+    fireEvent.change(sort, { target: { value: "active-first" } });
+    expect(fleetAssetOrder()).toEqual(["Alpha excavator", "Beta tipper", "Gamma roller", "Delta grader"]);
+    fireEvent.change(sort, { target: { value: "type-asc" } });
+    expect(fleetAssetOrder()).toEqual(["Alpha excavator", "Delta grader", "Gamma roller", "Beta tipper"]);
+
+    fireEvent.change(screen.getByLabelText("Filter ownership"), { target: { value: "RENTED" } });
+    fireEvent.change(screen.getByLabelText("Filter site"), { target: { value: siteTwo.id } });
+    fireEvent.change(sort, { target: { value: "asset-desc" } });
+    expect(fleetAssetOrder()).toEqual(["Alpha excavator"]);
+    expect(screen.getByLabelText("Filter ownership")).toHaveValue("RENTED");
+    expect(screen.getByLabelText("Filter site")).toHaveValue(siteTwo.id);
   });
 
   it("shows and submits rented contacts plus optional technical identifiers", async () => {
