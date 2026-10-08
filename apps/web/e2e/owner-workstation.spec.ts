@@ -52,6 +52,23 @@ const assets = [
     has_active_assignment: false,
     active_assignment: null,
   },
+  {
+    id: "asset-inactive",
+    asset_code: "GRADER-44444444444444444444444444444444",
+    asset_type: "GRADER",
+    ownership_type: "OWNED",
+    registration_number: null,
+    short_name: "Inactive Grader",
+    manufacturer: "Komatsu",
+    model: "GD655",
+    status: "INACTIVE",
+    rental_party_name: null,
+    rental_start_date: null,
+    rental_end_date: null,
+    current_deployment: null,
+    has_active_assignment: false,
+    active_assignment: null,
+  },
 ];
 
 const people = [
@@ -100,6 +117,21 @@ const people = [
     current_site_id: null,
     current_site_name: null,
   },
+  {
+    user_id: "user-inactive",
+    membership_id: "driver-inactive",
+    phone: "+919900000004",
+    display_name: "Kiran Rao",
+    role: "DRIVER",
+    status: "INACTIVE",
+    sites: [],
+    has_active_assignment: false,
+    has_active_duty: false,
+    current_asset_id: null,
+    current_asset_code: null,
+    current_site_id: null,
+    current_site_name: null,
+  },
 ];
 
 const sites = [
@@ -141,9 +173,32 @@ async function mockOwnerApi(page: Page, options: { ownerOperationsAvailable?: bo
       return;
     }
     const intent = path.endsWith("/owner/operations/preview")
-      ? route.request().postDataJSON() as { action: string; asset_id?: string; target_site_id?: string }
+      ? route.request().postDataJSON() as { action: string; asset_id?: string; target_site_id?: string; site_id?: string; driver_membership_id?: string; activate_membership?: boolean }
       : null;
-    const operationPlan = intent ? {
+    const selectedDriver = people.find((person) => person.membership_id === intent?.driver_membership_id);
+    const reactivateBlockers = intent?.action === "REACTIVATE_ASSET" ? [
+      ...(selectedDriver && !intent.site_id ? ["Choose a Site before assigning a Driver / Operator."] : []),
+      ...(selectedDriver?.status === "INACTIVE" && !intent.activate_membership ? ["Explicitly reactivate the Driver / Operator role to continue."] : []),
+    ] : [];
+    const operationPlan = intent?.action === "REACTIVATE_ASSET" ? {
+      action: intent.action,
+      state_token: "a".repeat(64),
+      title: "Reactivate Inactive Grader",
+      summary: "Review the inactive asset and optionally set up its next Site and Driver / Operator.",
+      current_state: [
+        { kind: "ASSET", id: "asset-inactive", label: "Inactive Grader", status: "INACTIVE", details: { asset_type: "GRADER", ownership_type: "OWNED" } },
+        { kind: "PREVIOUS_SITE", id: "old-deployment", label: "Old Yard", status: "PREVIOUS", details: {} },
+      ],
+      dependencies: [
+        ...(intent.site_id ? [{ kind: "TARGET_SITE", id: intent.site_id, label: sites.find((site) => site.id === intent.site_id)?.short_name, status: "ACTIVE", details: {} }] : []),
+        ...(selectedDriver ? [{ kind: "DRIVER", id: selectedDriver.membership_id, label: selectedDriver.display_name, status: selectedDriver.status, details: { role: "DRIVER", assignment_state: "UNASSIGNED" } }] : []),
+      ],
+      warnings: [],
+      allowed_resolutions: ["REACTIVATE_ONLY", "REACTIVATE_AND_DEPLOY", "REACTIVATE_DEPLOY_ASSIGN"],
+      blocked_reasons: reactivateBlockers,
+      planned_changes: ["Reactivate Inactive Grader"],
+      can_execute: reactivateBlockers.length === 0,
+    } : intent ? {
       action: intent.action,
       state_token: "a".repeat(64),
       title: intent.action === "MOVE_DEPLOYMENT" ? "Move North Excavator" : "End Ravi Kumar's assignment",
@@ -198,7 +253,7 @@ test.describe("mocked Owner workstation", () => {
     await page.getByRole("button", { name: "Fleet", exact: true }).click();
     const fleetTable = page.getByRole("table", { name: "Fleet assets" });
     await expect(fleetTable).toBeVisible();
-    await expect(fleetTable.getByRole("row")).toHaveCount(4);
+    await expect(fleetTable.getByRole("row")).toHaveCount(5);
     await expect(fleetTable.getByText("Green Tipper")).toBeVisible();
     await expect(page.getByText(assets[0].asset_code)).toBeHidden();
     await page.getByLabel("Search fleet").fill("excavator");
@@ -243,6 +298,35 @@ test.describe("mocked Owner workstation", () => {
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("reactivates an inactive asset with optional Site and Driver setup in the shared wizard", async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await openOwner(page);
+
+    await page.getByRole("button", { name: "Fleet", exact: true }).click();
+    const assetRow = page.getByRole("table", { name: "Fleet assets" }).getByRole("row").filter({ hasText: "Inactive Grader" });
+    await assetRow.getByRole("button", { name: "Reactivate", exact: true }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Reactivate Inactive Grader" });
+    await expect(dialog.getByRole("region", { name: "Asset current state" })).toContainText("Grader");
+    await expect(dialog).toContainText("Old Yard");
+    await dialog.getByRole("button", { name: "Continue" }).click();
+    await expect(dialog.getByLabel("Reactivation Site")).toHaveValue("");
+    await expect(dialog.getByLabel("Reactivation Driver / Operator")).toHaveValue("");
+    await dialog.getByLabel("Reactivation Site").selectOption("site-2");
+    await dialog.getByLabel("Reactivation Driver / Operator").selectOption("driver-inactive");
+    await expect(dialog).toContainText("Currently inactive");
+    await expect(dialog).not.toContainText(/before\s+assignment/i);
+    await dialog.getByRole("checkbox", { name: "Reactivate role as part of this setup" }).check();
+    await dialog.getByRole("button", { name: "Review changes" }).click();
+
+    const review = dialog.getByRole("group", { name: "Final setup" });
+    await expect(review).toContainText("Inactive Grader → Active");
+    await expect(review).toContainText("River Yard");
+    await expect(review).toContainText("Kiran Rao");
+    await expect(review).toContainText("Driver / Operator → Reactivate");
+    await expect(dialog.getByRole("button", { name: "REACTIVATE & SET UP" })).toBeEnabled();
   });
 
   test("mobile layout keeps navigation and table cards within the page", async ({ page }) => {

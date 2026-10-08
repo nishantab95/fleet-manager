@@ -227,11 +227,64 @@ action. `OPEN` and `REOPENED` with no blockers are presented as derived
 complete. Supervisors may close only permitted sites, while only an owner may
 reopen a closed day with a reason.
 
-The Excel route calls the same dashboard report object as the JSON routes and
-creates five private, macro-free sheets: Daily Summary, Trip Register, KM
-Register, Diesel Register, and Exceptions. User-controlled text beginning
-with `=`, `+`, `-`, or `@` is prefixed before writing cells, and no object-store
-key or session/token value is exported.
+The configurable Excel route calls the same dashboard report object as the JSON
+routes and creates the selected private, macro-free management, tipper,
+machinery, trip, meter, diesel, duty, and exception sheets. User-controlled text
+beginning with `=`, `+`, `-`, or `@` is prefixed before writing cells, and no
+object-store key or session/token value is exported.
+
+The built-in `Simple Site Workbook` is a separate Owner-only presentation over
+the same reporting service; it does not replace or modify the configurable
+daily export. Its input is exactly one tenant-scoped Site and an inclusive date
+range of at most 366 operational days. Effective-dated deployment history
+determines which assets receive a sheet, including deployments with no Driver
+assignment, while each operational day delegates trip, meter, diesel, and base
+status calculations to the existing daily report path. An unassigned deployment
+therefore receives a summary/asset sheet but no fabricated work rows.
+
+Multiple duty sessions under one assignment remain one authoritative
+assignment/day row using the existing reporting service's first/last meter
+aggregate. Displayed duty bounds span the sessions and Duty End remains blank if
+any session is active. Pending, disputed, rejected, and amended session events
+remain visible in daily status; the Simple workbook does not reinterpret the
+authoritative aggregate. A same-day Driver reassignment remains separate rows
+but counts as one distinct asset working day. A working day requires a persisted
+duty session or a non-emergency operational event, rather than deployment or an
+emergency-only record alone.
+
+`Pending Items` counts non-emergency `PENDING_VERIFICATION` events. `Exceptions`
+counts non-pending structured report exceptions, each non-emergency `DISPUTED`
+event once. The structured `TRIP_DISPUTED` marker is not counted a second time.
+`REJECTED` and `AMENDED` remain visible in daily status but are not unresolved
+exception counts.
+
+Effective-dated IDs preserve historical relationship attribution; editable
+Site, asset, and person labels are not separately snapshotted and therefore use
+their current spelling. Regenerated historical ranges also use the company's
+current reporting timezone and operational-day start through the existing daily
+report service; daily closure records are the component that snapshots those
+settings.
+
+The workbook is macro-free and value-based: `SUMMARY` is first, followed by one
+deterministically named sheet per historically relevant asset. Unsupported
+capability metrics use `N/A`; applicable incomplete distance/HMR totals and
+averages use `MISSING`, while authoritative numeric zero remains zero. Tipper
+`Distance per Litre Recorded` is `N/A` when verified recorded diesel is zero or
+absent and `MISSING` when diesel is positive but required distance is incomplete.
+Machinery `Litres Recorded / Machine Hour` is `N/A` when the HMR denominator is
+missing, incomplete, or zero. Both ratios use verified diesel recorded/issued
+and never claim actual consumption. Partial valid daily values remain visible
+where safe, but an incomplete period aggregate is not presented as a complete
+total.
+Sheet names are sanitized and de-duplicated within Excel's 31-character limit;
+all user-controlled cell text retains the formula-injection guard.
+
+Simple Site Workbook uses its dedicated Site/from/to Owner form and endpoint.
+It cannot be duplicated, made the default advanced template, or passed to the
+advanced `/reports/daily.xlsx` route; Management Summary remains the advanced
+fallback. If rollout finds a case-insensitive custom-template name collision,
+the custom template is preserved, renamed with a `(Custom)` suffix, and the
+rename is audited before the exact built-in name is created.
 
 ## Phase 7 pilot-hardening boundary
 
@@ -257,6 +310,13 @@ previous event is accepted. A deterministic START business rejection preserves
 the chain as `blockedPendingStartCorrection`; correcting the original START
 retains its UUID and releases the chain in order. Emergency has no queue
 dependency and is attempted ahead of normal queued work.
+
+The mobile Driver surface presents that same state machine directly. Off duty,
+START DUTY owns required START KM/HMR capture and Emergency remains available.
+On duty, only asset-supported work actions are shown, Emergency stays prominent,
+and END DUTY owns required END KM/HMR capture at the bottom of the screen. This
+removes the standalone primary meter tile without removing meter events,
+evidence, correction, offline queue, or idempotency support.
 
 Evidence MIME is derived from the file signature and checked against any known
 extension before upload. The client sends only `image/jpeg`, `image/png`, or
@@ -392,9 +452,12 @@ back activation, access, deployment, assignment, lifecycle, and audit writes as
 one unit.
 
 The planner can activate or deactivate Driver and Supervisor memberships,
-reconcile Supervisor Site access, deploy, move, remove, or deactivate assets,
-assign or change Drivers, end assignments, and deactivate or reactivate Sites
-with optional setup. It ends effective-dated rows and creates replacements when
-Site context changes; it never rewrites historical Site or Driver attribution.
-Active duty is an explicit blocker and is never ended or synthesized by an Owner
+reconcile Supervisor Site access, deploy, move, remove, deactivate, or reactivate
+assets, assign or change Drivers, end assignments, and deactivate or reactivate
+Sites with optional setup. Asset reactivation may remain undeployed, add a Site,
+or atomically reactivate, deploy, and assign an eligible Driver; selecting a
+Driver requires a deployment Site and activating an inactive Driver role is
+always explicit. It ends effective-dated rows and creates replacements when Site
+context changes; it never rewrites historical Site or Driver attribution. Active
+duty is an explicit blocker and is never ended or synthesized by an Owner
 operation.

@@ -46,24 +46,45 @@ def test_owner_report_template_lifecycle_validation_tenant_scope_and_audit(
         assert listed.status_code == 200, listed.text
         builtins = listed.json()
         assert [item["name"] for item in builtins] == [
+            "Simple Site Workbook",
             "Management Summary",
             "Detailed Operations",
             "Diesel Report",
         ]
+        assert builtins[0]["builtin_key"] == "simple_site_workbook"
         assert all(item["is_builtin"] for item in builtins)
         assert [item["name"] for item in builtins if item["is_default"]] == ["Management Summary"]
         assert builtins[0]["included_sheets"] == [
             "management_dashboard",
             "tipper_daily",
             "machinery_daily",
+        ]
+        assert builtins[1]["included_sheets"] == [
+            "management_dashboard",
+            "tipper_daily",
+            "machinery_daily",
             "exceptions",
         ]
-        assert builtins[1]["included_sheets"] == list(SHEET_IDS)
-        assert builtins[2]["included_sheets"] == [
+        assert builtins[2]["included_sheets"] == list(SHEET_IDS)
+        assert builtins[3]["included_sheets"] == [
             "management_dashboard",
             "diesel_register",
             "exceptions",
         ]
+
+        simple_id = builtins[0]["id"]
+        assert (
+            owner.get("/api/v1/reports/daily.xlsx", params={"template_id": simple_id}).status_code
+            == 422
+        )
+        assert owner.post(f"/api/v1/owner/report-templates/{simple_id}/default").status_code == 409
+        assert (
+            owner.post(
+                f"/api/v1/owner/report-templates/{simple_id}/duplicate",
+                json={"name": "Misleading Simple Copy"},
+            ).status_code
+            == 409
+        )
 
         created = owner.post("/api/v1/owner/report-templates", json=custom_payload())
         assert created.status_code == 201, created.text
@@ -112,7 +133,7 @@ def test_owner_report_template_lifecycle_validation_tenant_scope_and_audit(
         )
         assert null_update.status_code == 422
 
-        builtin_id = builtins[0]["id"]
+        builtin_id = builtins[1]["id"]
         assert (
             owner.patch(
                 f"/api/v1/owner/report-templates/{builtin_id}",
@@ -147,7 +168,7 @@ def test_owner_report_template_lifecycle_validation_tenant_scope_and_audit(
             assert [item["name"] for item in persisted.json() if item["is_default"]] == [
                 "Daily Brief"
             ]
-            assert len([item for item in persisted.json() if item["is_builtin"]]) == 3
+            assert len([item for item in persisted.json() if item["is_builtin"]]) == 4
         finally:
             reloaded_owner.close()
 
@@ -212,6 +233,56 @@ def test_report_template_routes_are_owner_only(
         assert driver.get("/api/v1/owner/report-templates").status_code == 403
     finally:
         driver.close()
+
+
+def test_simple_builtin_renames_a_colliding_custom_template_without_overwriting_it(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    custom = ReportTemplate(
+        company_id=company.id,
+        name="simple site workbook",
+        builtin_key=None,
+        is_builtin=False,
+        is_default=False,
+        included_sheets=["management_dashboard"],
+        management_dashboard_columns=["asset", "pending_status"],
+        tipper_daily_columns=["asset", "status"],
+        machinery_daily_columns=["asset", "status"],
+    )
+    db_session.add(custom)
+    db_session.flush()
+    custom_id = str(custom.id)
+
+    owner = owner_client(db_session, tenant_records)
+    try:
+        response = owner.get("/api/v1/owner/report-templates")
+        assert response.status_code == 200, response.text
+        templates = response.json()
+        simple_builtin = next(
+            item for item in templates if item["builtin_key"] == "simple_site_workbook"
+        )
+        renamed_custom = next(item for item in templates if item["id"] == custom_id)
+        assert simple_builtin["name"] == "Simple Site Workbook"
+        assert renamed_custom["name"] == "simple site workbook (Custom)"
+        assert renamed_custom["included_sheets"] == ["management_dashboard"]
+        assert renamed_custom["management_dashboard_columns"] == [
+            "asset",
+            "pending_status",
+        ]
+        assert (
+            db_session.scalar(
+                select(AuditLog.action).where(
+                    AuditLog.company_id == company.id,
+                    AuditLog.entity_id == custom.id,
+                    AuditLog.action == "REPORT_TEMPLATE_RENAMED_FOR_BUILTIN",
+                )
+            )
+            == "REPORT_TEMPLATE_RENAMED_FOR_BUILTIN"
+        )
+    finally:
+        owner.close()
 
 
 def test_template_catalogs_are_stable_and_asset_first() -> None:

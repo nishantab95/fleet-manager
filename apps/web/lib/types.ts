@@ -60,6 +60,7 @@ export type OwnerOperationAction =
   | "REASSIGN_DRIVER"
   | "END_ASSIGNMENT"
   | "DEACTIVATE_ASSET"
+  | "REACTIVATE_ASSET"
   | "DEACTIVATE_SITE"
   | "REACTIVATE_SITE";
 export type OwnerOperationAssetResolution = {
@@ -186,6 +187,7 @@ export type ReportTemplate = {
   name: string;
   is_builtin: boolean;
   is_default: boolean;
+  builtin_key: string | null;
   included_sheets: string[];
   management_dashboard_columns: string[];
   tipper_daily_columns: string[];

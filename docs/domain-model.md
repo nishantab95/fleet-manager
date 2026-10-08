@@ -212,6 +212,40 @@ append-only and requires an owner reason.
 37. Reassignment closes the prior half-open interval and inserts a new row.
     Active duty blocks unassign/reassign, while events before the old end remain
     valid and events at or after it cannot attach to that history.
+38. Asset reactivation is a lifecycle transition with optional operational
+    setup. Reactivate-only leaves the asset undeployed and unassigned;
+    reactivation with a Site creates a new deployment interval; adding a Driver
+    creates a Site-consistent Assignment in the same transaction. A Driver
+    cannot be selected without a Site, an inactive Driver membership requires
+    explicit activation, and prior Deployment/Assignment rows remain unchanged
+    historical context.
+39. A Simple Site Workbook is scoped by one Site and an inclusive range of at
+    most 366 company-configured operational days. Any asset whose effective-dated
+    Deployment overlaps that range belongs in the workbook, even without an
+    Assignment. Daily work and Driver/Operator attribution still come from the
+    effective Assignment, duty sessions, and events for that historical day;
+    current relationships never backfill older rows.
+40. Multiple duty sessions for the same Assignment and operational day use the
+    existing authoritative assignment/day first/last meter aggregate. The
+    workbook does not recalculate that metric, and retains pending/disputed/
+    rejected/amended event status in the daily row. Multiple effective
+    Assignments for one asset on the same day remain distinct rows. Days Worked
+    counts distinct asset dates with a persisted duty session or non-emergency
+    operational event, not mere deployment, assignment overlap, or an
+    emergency-only record.
+41. Workbook metrics preserve capability state: non-applicable values are
+    `N/A`, missing readings remain missing with exceptions, and numeric zero is
+    retained only when it is an authoritative applicable value. Recorded-diesel
+    ratios are presentation derivatives and exclude pending/unverified diesel.
+    Tipper Distance/L is `N/A` for zero/absent recorded diesel and `MISSING` for
+    positive diesel with incomplete distance. Machinery L/HMR is `N/A` for a
+    missing, incomplete, or zero HMR denominator. Applicable incomplete base
+    totals and averages are `MISSING`; valid daily values remain visible where
+    safe but are not presented as a complete period total.
+42. Simple workbook Pending Items count each non-emergency pending-verification
+    event. Exceptions count non-pending structured report exceptions, each
+    non-emergency disputed event once. Rejected and amended history remains
+    visible in daily status but is not counted as unresolved.
 
 ## PC V1 emergency contract
 

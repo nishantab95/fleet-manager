@@ -1,7 +1,8 @@
 # ADR 0005: Operational Reporting, Daily Closure, and Excel Export
 
-- Status: Accepted for Phase 6
+- Status: Accepted for Phase 6; amended for the 2026-10-08 pilot reporting UX
 - Date: 2026-09-22
+- Amended: 2026-10-08
 
 ## Context
 
@@ -24,9 +25,12 @@ accounting, or fuel-efficiency analytics.
    they never infer historical site ownership from current tipper state.
 
 3. **Official totals.** Only current `APPROVED` event records contribute to
-   official trip counts, diesel issued, and readings. Pending, disputed, and
-   rejected trips/diesel are counted separately. Diesel is issued/recorded,
-   not consumed, and no litres/trip or km/litre value is calculated.
+   official trip counts, diesel issued, and odometer readings; existing HMR
+   verification semantics remain unchanged. Pending, disputed, and rejected
+   records remain separate. Diesel is issued/recorded, not consumed. The
+   Simple Site Workbook may present explicitly named ratios over verified
+   recorded diesel, with a consumption disclaimer and safe zero-denominator
+   behavior; those ratios are not treated as actual fuel consumption.
 
 4. **KM safety.** Distance is calculated only when exactly one distinct
    approved START and END reading exist and END is not below START. Missing,
@@ -45,16 +49,30 @@ accounting, or fuel-efficiency analytics.
    close only an explicitly granted site, and cannot bypass blockers. Drivers
    have no report or closure access.
 
-7. **Excel.** The export calls the already-built dashboard report and writes
-   Daily Summary, Trip Register, KM Register, Diesel Register, and Exceptions.
-   Headers are bold, panes are frozen, filters and widths are applied, and
-   aware datetimes are normalized to naive UTC for Excel compatibility. Values
+7. **Excel.** The configurable export calls the already-built dashboard report
+   and keeps its existing selectable management, asset, event, duty, and
+   exception sheets. Headers are bold, panes are frozen, filters and widths are
+   applied, and aware datetimes are normalized for Excel compatibility. Values
    beginning with `=`, `+`, `-`, or `@` receive a leading apostrophe.
+
+8. **Simple Site Workbook.** A separate fixed-layout Owner export accepts one
+   tenant-scoped Site and an inclusive range of at most 366 operational days.
+   Effective-dated Deployments determine asset-sheet inclusion, including
+   assets without a Driver, while `ReportingService.site_daily()` remains
+   authoritative for historical Assignment/Driver attribution and metrics.
+   `SUMMARY` is first,
+   followed by one deterministic, Excel-safe sheet per relevant owned or
+   rented asset. Multiple duty sessions use the existing assignment/day
+   first/last aggregate and retain event review status; same-day reassignment
+   remains multiple rows. The dedicated export cannot become an advanced
+   default or be used through the advanced route. The advanced export is neither
+   replaced nor reconfigured.
 
 ## Consequences
 
-The owner receives reconciled operational totals and an auditable close
-without introducing a second calculation engine or broadening V1 beyond
-company-owned tippers. Incomplete or ambiguous records remain operational
-exceptions and may require supervisor review. More advanced export formats,
-large-scale aggregation, and a browser BFF remain future hardening work.
+The owner receives reconciled operational totals, a practical Site-range
+workbook, and an auditable close without introducing a second calculation
+engine. Incomplete or ambiguous records remain operational exceptions and may
+require supervisor review. Editable display labels are not historical
+snapshots. Multi-Site/ZIP export, ranges beyond the 366-day bound, and a browser
+BFF remain future hardening work.

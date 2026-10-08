@@ -21,6 +21,7 @@ METER_READINGS = "meter_readings"
 DIESEL_REGISTER = "diesel_register"
 DUTY_REGISTER = "duty_register"
 EXCEPTIONS = "exceptions"
+SIMPLE_SITE_WORKBOOK_BUILTIN_KEY = "simple_site_workbook"
 
 SHEET_IDS = (
     MANAGEMENT_DASHBOARD,
@@ -135,6 +136,12 @@ class _BuiltinDefinition:
 
 BUILTIN_DEFINITIONS = (
     _BuiltinDefinition(
+        key=SIMPLE_SITE_WORKBOOK_BUILTIN_KEY,
+        name="Simple Site Workbook",
+        included_sheets=(MANAGEMENT_DASHBOARD, TIPPER_DAILY, MACHINERY_DAILY),
+        management_columns=STANDARD_MANAGEMENT_COLUMNS,
+    ),
+    _BuiltinDefinition(
         key="management_summary",
         name="Management Summary",
         included_sheets=(
@@ -178,6 +185,16 @@ def _clean_name(name: str) -> str:
     if len(cleaned) > 120:
         raise DomainError("Template name must be 120 characters or fewer.")
     return cleaned
+
+
+def _collision_safe_custom_name(name: str, used_names: set[str]) -> str:
+    suffix_number = 1
+    while True:
+        suffix = " (Custom)" if suffix_number == 1 else f" (Custom {suffix_number})"
+        candidate = f"{name[: 120 - len(suffix)].rstrip()}{suffix}"
+        if candidate.casefold() not in used_names:
+            return candidate
+        suffix_number += 1
 
 
 def _canonical_selection(
@@ -252,16 +269,18 @@ class ReportTemplateService:
         }
 
     def ensure_builtins(self) -> list[ReportTemplate]:
+        company_templates = list(
+            self.session.scalars(
+                select(ReportTemplate).where(ReportTemplate.company_id == self.company_id)
+            )
+        )
         existing = {
             item.builtin_key: item
-            for item in self.session.scalars(
-                select(ReportTemplate).where(
-                    ReportTemplate.company_id == self.company_id,
-                    ReportTemplate.is_builtin.is_(True),
-                )
-            )
+            for item in company_templates
+            if item.is_builtin
             if item.builtin_key is not None
         }
+        used_names = {item.name.casefold() for item in company_templates}
         has_default = (
             self.session.scalar(
                 select(ReportTemplate.id)
@@ -277,6 +296,34 @@ class ReportTemplateService:
         for definition in BUILTIN_DEFINITIONS:
             template = existing.get(definition.key)
             if template is None:
+                name_collision = next(
+                    (
+                        item
+                        for item in company_templates
+                        if item.name.casefold() == definition.name.casefold()
+                    ),
+                    None,
+                )
+                if name_collision is not None:
+                    if name_collision.is_builtin:
+                        raise ConflictError(
+                            "A built-in report template has a conflicting name; contact support."
+                        )
+                    old_values = self.values(name_collision)
+                    used_names.discard(name_collision.name.casefold())
+                    name_collision.name = _collision_safe_custom_name(
+                        name_collision.name,
+                        used_names,
+                    )
+                    used_names.add(name_collision.name.casefold())
+                    self._audit(
+                        action="REPORT_TEMPLATE_RENAMED_FOR_BUILTIN",
+                        template=name_collision,
+                        old_values=old_values,
+                        new_values=self.values(name_collision),
+                    )
+                    # Free the case-insensitive unique name before inserting the built-in.
+                    self.session.flush()
                 template = ReportTemplate(
                     id=builtin_template_id(self.company_id, definition.key),
                     company_id=self.company_id,
@@ -290,6 +337,8 @@ class ReportTemplateService:
                     machinery_daily_columns=list(definition.machinery_columns),
                 )
                 self.session.add(template)
+                company_templates.append(template)
+                used_names.add(template.name.casefold())
                 if template.is_default:
                     has_default = True
             results.append(template)
@@ -473,6 +522,10 @@ class ReportTemplateService:
 
     def duplicate(self, template_id: UUID, *, name: str) -> ReportTemplate:
         source = self.get(template_id)
+        if source.builtin_key == SIMPLE_SITE_WORKBOOK_BUILTIN_KEY:
+            raise ConflictError(
+                "Simple Site Workbook has a fixed Site/date-range layout and cannot be duplicated."
+            )
         return self.create(
             name=name,
             included_sheets=source.included_sheets,
@@ -503,6 +556,10 @@ class ReportTemplateService:
 
     def set_default(self, template_id: UUID) -> ReportTemplate:
         template = self.get(template_id)
+        if template.builtin_key == SIMPLE_SITE_WORKBOOK_BUILTIN_KEY:
+            raise ConflictError(
+                "Simple Site Workbook cannot be the default advanced daily workbook."
+            )
         previous = self.session.scalar(
             select(ReportTemplate).where(
                 ReportTemplate.company_id == self.company_id,
@@ -528,15 +585,23 @@ class ReportTemplateService:
     def resolve_for_export(self, template_id: UUID | None) -> ReportTemplate:
         builtins = self.ensure_builtins()
         if template_id is not None:
-            return self.get(template_id)
-        template = self.session.scalar(
+            template = self.get(template_id)
+            if template.builtin_key == SIMPLE_SITE_WORKBOOK_BUILTIN_KEY:
+                raise DomainError(
+                    "Simple Site Workbook requires one Site and a from/to date range."
+                )
+            return template
+        default_template = self.session.scalar(
             select(ReportTemplate).where(
                 ReportTemplate.company_id == self.company_id,
                 ReportTemplate.is_default.is_(True),
             )
         )
-        if template is not None:
-            return template
+        if (
+            default_template is not None
+            and default_template.builtin_key != SIMPLE_SITE_WORKBOOK_BUILTIN_KEY
+        ):
+            return default_template
         return next(item for item in builtins if item.builtin_key == "management_summary")
 
     @staticmethod

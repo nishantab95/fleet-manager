@@ -1,8 +1,10 @@
 # Phase 7 End-to-End and Failure Matrix
 
-Phase 7 hardens the completed owned-tipper workflow without changing the
-driver's four primary actions. The matrix below is the acceptance contract for
-the one-tipper pilot.
+Phase 7 hardens the completed owned-tipper workflow while preserving its event
+and offline guarantees. The Driver surface is duty-state aware: START/END duty
+own normal meter capture, Emergency is always reachable, and on-duty work
+actions follow asset capability. The matrix below is the acceptance contract
+for the one-tipper pilot.
 
 | Area | Scenario | Automated coverage | Pilot verification |
 | --- | --- | --- | --- |

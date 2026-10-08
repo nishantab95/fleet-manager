@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 
 from fleet_api.auth.service import AuthContext, ensure_supervisor_site_access
 from fleet_api.db.models import (
+    AssetSiteDeployment,
     Assignment,
     CompanyMembership,
     DieselEvent,
@@ -210,6 +211,17 @@ class DashboardReport:
     complete_assets_count: int
     sites: list[SiteDailyReport]
     exceptions: list[ReportException]
+
+
+@dataclass(frozen=True)
+class SitePeriodReport:
+    """Authoritative daily reports and historically deployed assets for one Site."""
+
+    site: Site
+    from_date: date
+    to_date: date
+    operational_days: list[SiteDailyReport]
+    assets: list[FleetAsset]
 
 
 @dataclass(frozen=True)
@@ -531,9 +543,7 @@ class ReportingService:
             assignment_id=parts.assignment.id,
             duty_session_id=parts.event.duty_session_id,
             asset_id=parts.asset.id,
-            asset_registration_number=(
-                parts.asset.registration_number or parts.asset.asset_code
-            ),
+            asset_registration_number=(parts.asset.registration_number or parts.asset.asset_code),
             asset_type=parts.asset.asset_type.value,
             ownership_type=parts.asset.ownership_type.value,
             asset_code=parts.asset.asset_code,
@@ -548,12 +558,16 @@ class ReportingService:
             reading_type=(
                 parts.km.reading_type.value
                 if parts.km
-                else parts.hmr.reading_type.value if parts.hmr else None
+                else parts.hmr.reading_type.value
+                if parts.hmr
+                else None
             ),
             reading_value=(
                 parts.km.reading_value
                 if parts.km
-                else parts.hmr.reading_value if parts.hmr else None
+                else parts.hmr.reading_value
+                if parts.hmr
+                else None
             ),
             litres=parts.diesel.litres if parts.diesel else None,
             emergency_category=(
@@ -705,18 +719,14 @@ class ReportingService:
                     description=description,
                     assignment_id=assignment.id,
                     asset_id=asset.id,
-                    asset_registration_number=(
-                        asset.registration_number or asset.asset_code
-                    ),
+                    asset_registration_number=(asset.registration_number or asset.asset_code),
                     site_id=site.id,
                     event_id=event_id,
                 )
             )
 
         if conflicting_start:
-            add_exception(
-                "CONFLICTING_START_READING", "More than one valid START reading exists"
-            )
+            add_exception("CONFLICTING_START_READING", "More than one valid START reading exists")
         elif capabilities.supports_odometer and start_km is None:
             if self._has_status(
                 events, OperationalEventType.KM_READING, VerificationStatus.PENDING_VERIFICATION
@@ -1005,6 +1015,81 @@ class ReportingService:
             for assignment, asset, site_row, driver, supervisor in rows
         ]
         return self._make_site_report(site, day, reports)
+
+    def site_period(
+        self,
+        site_id: UUID,
+        from_date: date,
+        to_date: date,
+    ) -> SitePeriodReport:
+        """Build a date range without reinterpreting historical Site ownership.
+
+        Daily calculations deliberately delegate to :meth:`site_daily`, while
+        workbook inclusion comes from effective-dated deployments. This keeps
+        verified event semantics and operational-day boundaries in one place
+        and still includes an unassigned asset that belonged to the Site for
+        any part of the requested period.
+        """
+
+        if to_date < from_date:
+            raise DomainError("to_date must be on or after from_date")
+        if (to_date - from_date).days + 1 > 366:
+            raise DomainError("Site workbook date range cannot exceed 366 operational days")
+        if from_date == date.min:
+            raise DomainError("from_date is outside the supported operational date range")
+        if to_date == date.max:
+            raise DomainError("to_date is outside the supported operational date range")
+
+        site = self._site(site_id)
+        period_start = self.operational_day(from_date).start_utc
+        period_end = self.operational_day(to_date).end_utc
+        deployed_assets = list(
+            self.session.scalars(
+                select(FleetAsset)
+                .join(
+                    AssetSiteDeployment,
+                    and_(
+                        AssetSiteDeployment.company_id == FleetAsset.company_id,
+                        AssetSiteDeployment.asset_id == FleetAsset.id,
+                    ),
+                )
+                .where(
+                    AssetSiteDeployment.company_id == self.company_id,
+                    AssetSiteDeployment.site_id == site.id,
+                    AssetSiteDeployment.starts_at < period_end,
+                    (
+                        AssetSiteDeployment.ends_at.is_(None)
+                        | (AssetSiteDeployment.ends_at > period_start)
+                    ),
+                )
+                .distinct()
+            ).all()
+        )
+
+        operational_days: list[SiteDailyReport] = []
+        current_date = from_date
+        while True:
+            operational_days.append(self.site_daily(site.id, current_date))
+            if current_date == to_date:
+                break
+            current_date += timedelta(days=1)
+
+        assets_by_id = {asset.id: asset for asset in deployed_assets}
+        for daily in operational_days:
+            for row in daily.rows:
+                assets_by_id.setdefault(row.asset.id, row.asset)
+
+        def asset_sort_key(asset: FleetAsset) -> tuple[str, str]:
+            display_name = asset.short_name or asset.registration_number or asset.asset_code
+            return display_name.casefold(), str(asset.id)
+
+        return SitePeriodReport(
+            site=site,
+            from_date=from_date,
+            to_date=to_date,
+            operational_days=operational_days,
+            assets=sorted(assets_by_id.values(), key=asset_sort_key),
+        )
 
     def asset_daily(
         self, asset_id: UUID, requested_date: date | None = None

@@ -14,15 +14,16 @@ This file is the persistent engineering contract for the project. Read it before
 
 This is initially for a real civil construction company.
 
-## V1 scope: company-owned tippers only
+## Current pilot fleet scope
+
+The core field workflow is still centered on company-owned tippers. The current
+capability and reporting model also supports owned or rented tippers,
+excavators, backhoe loaders, graders, and rollers. Treat this as a narrow pilot
+extension, not permission to start unrelated future modules.
 
 Do not implement yet:
 
-- rented tippers
-- excavators
-- JCBs
-- graders
-- rollers
+- equipment categories outside the current capability catalog
 - recruitment marketplace
 - WhatsApp integration
 - payroll
@@ -34,7 +35,8 @@ Do not implement yet:
 - predictive maintenance
 - customer billing
 
-Expansion happens only after the owned-tipper workflow is stable in production.
+Further expansion happens only after the core field workflow is stable in
+production.
 
 ---
 
@@ -52,12 +54,24 @@ Authorization must be enforced by the backend. UI hiding is not authorization.
 
 # 3. Driver App Contract
 
-The driver's main operational screen must contain only four primary actions:
+The driver's operational screen is duty-state aware.
 
-1. `TRIP COMPLETE`
-2. `KM READING`
-3. `DIESEL`
-4. `EMERGENCY`
+While off duty, show only:
+
+1. `START DUTY`
+2. `EMERGENCY`
+
+Starting duty captures the required START odometer KM for a tipper or START
+HMR for machinery, including the existing evidence requirement.
+
+While on duty, `EMERGENCY` remains prominent. A tipper also shows
+`TRIP COMPLETE` and `DIESEL`; non-trip machinery shows `DIESEL` but never a
+fake trip action. `END DUTY` stays at the bottom and captures the corresponding
+END KM or END HMR. Do not show a separate primary KM/HMR tile when duty
+start/end owns normal meter capture.
+
+A disabled `MAINTENANCE · Coming later` placeholder may communicate future
+scope, but it must not activate or implement Maintenance behavior.
 
 The driver must not see:
 
@@ -170,7 +184,14 @@ For V1 this is `DIESEL_ISSUED` / `DIESEL_RECORDED`.
 
 Do not call this actual fuel consumption unless a valid consumption-measurement method is implemented later.
 
-Do not calculate km/litre from same-day diesel issued by default.
+Do not calculate km/litre from same-day diesel issued by default. A specifically
+requested report may show `Distance per Litre Recorded` or
+`Litres Recorded / Machine Hour` from verified records, but it must label the
+diesel input as recorded/issued, handle a zero or missing denominator as
+unavailable, and state that the result is not a direct measurement of actual
+fuel consumed. For `Distance per Litre Recorded`, recorded diesel is the
+denominator; for `Litres Recorded / Machine Hour`, machine hours are the
+denominator.
 
 ---
 
@@ -213,7 +234,7 @@ Owner/admin manages:
 
 - company
 - sites
-- owned tippers
+- owned and rented assets in the current pilot capability catalog
 - drivers
 - supervisors
 - assignments
@@ -725,7 +746,7 @@ Do not automatically continue to the next phase.
 2. Phase 1 — core domain + database
 3. Phase 2 — authentication + RBAC
 4. Phase 3 — admin APIs + owner/admin web setup
-5. Phase 4 — driver mobile shell + four-button contract
+5. Phase 4 — driver mobile shell + duty-state action contract
 6. Phase 5 — offline events + idempotent sync
 7. Phase 6 — KM + diesel + emergency workflows
 8. Phase 7 — supervisor verification
@@ -733,7 +754,8 @@ Do not automatically continue to the next phase.
 10. Phase 9 — Excel export + E2E + hardening
 11. Pilot-hardening phases based on real field usage
 
-Do not add rented tippers until owned-tipper V1 is proven.
+Do not add equipment categories or business modules beyond the current pilot
+scope until the core field workflow is proven.
 
 ---
 

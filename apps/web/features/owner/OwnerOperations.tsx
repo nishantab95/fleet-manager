@@ -28,7 +28,7 @@ export function OwnerOperations({ accessToken, setError, apiRequest }: Props) {
           call<DriverDutyReport[]>(`/api/v1/reports/duty${query}`).catch(() => []), call<ReportTemplate[]>("/api/v1/owner/report-templates").catch(() => []),
         ]);
         if (!active) return;
-        const templateItems = Array.isArray(templateResult) ? templateResult : [];
+        const templateItems = Array.isArray(templateResult) ? templateResult.filter((item) => item.builtin_key !== "simple_site_workbook") : [];
         setReport(dashboard); setDuties(Array.isArray(dutyResult) ? dutyResult : []); setSettings(company); setTimezone(company.reporting_timezone); setDayStart(String(company.operational_day_start_minutes)); setTemplates(templateItems); setTemplateId((value) => value || templateItems.find((item) => item.is_default)?.id || templateItems[0]?.id || "");
         if (!operationalDate) setOperationalDate(dashboard.operational_date);
       } catch (caught) { if (active) setError(caught instanceof Error ? caught.message : "Could not load the owner dashboard."); }

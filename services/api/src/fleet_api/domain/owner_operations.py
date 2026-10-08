@@ -340,6 +340,7 @@ class OwnerOperationPlanner:
             OwnerOperationAction.REASSIGN_DRIVER: self._preview_reassign_driver,
             OwnerOperationAction.END_ASSIGNMENT: self._preview_end_assignment,
             OwnerOperationAction.DEACTIVATE_ASSET: self._preview_deactivate_asset,
+            OwnerOperationAction.REACTIVATE_ASSET: self._preview_reactivate_asset,
             OwnerOperationAction.DEACTIVATE_SITE: self._preview_deactivate_site,
             OwnerOperationAction.REACTIVATE_SITE: self._preview_reactivate_site,
         }
@@ -480,6 +481,97 @@ class OwnerOperationPlanner:
                 )
             )
         return current, dependencies
+
+    def _previous_asset_relationships(
+        self,
+        asset_id: UUID,
+        *,
+        lock: bool,
+    ) -> tuple[
+        AssetSiteDeployment | None,
+        Site | None,
+        Assignment | None,
+        CompanyMembership | None,
+        User | None,
+        list[dict[str, object]],
+    ]:
+        deployment_statement = (
+            select(AssetSiteDeployment)
+            .where(
+                AssetSiteDeployment.company_id == self.company_id,
+                AssetSiteDeployment.asset_id == asset_id,
+                AssetSiteDeployment.ends_at.is_not(None),
+            )
+            .order_by(
+                AssetSiteDeployment.ends_at.desc(),
+                AssetSiteDeployment.starts_at.desc(),
+                AssetSiteDeployment.id.desc(),
+            )
+            .limit(1)
+        )
+        assignment_statement = (
+            select(Assignment)
+            .where(
+                Assignment.company_id == self.company_id,
+                Assignment.asset_id == asset_id,
+                Assignment.ends_at.is_not(None),
+            )
+            .order_by(
+                Assignment.ends_at.desc(),
+                Assignment.starts_at.desc(),
+                Assignment.id.desc(),
+            )
+            .limit(1)
+        )
+        if lock:
+            deployment_statement = deployment_statement.with_for_update()
+            assignment_statement = assignment_statement.with_for_update()
+        deployment = self.session.scalar(deployment_statement)
+        assignment = self.session.scalar(assignment_statement)
+        site = self._site(deployment.site_id, lock=lock) if deployment is not None else None
+        membership: CompanyMembership | None = None
+        user: User | None = None
+        if assignment is not None:
+            membership, user = self._membership(
+                assignment.driver_membership_id,
+                lock=lock,
+            )
+        snapshot = [
+            self._snapshot_row(
+                "previous_deployment",
+                deployment,
+                site_id=str(deployment.site_id) if deployment else None,
+                starts_at=deployment.starts_at.isoformat() if deployment else None,
+                ends_at=(
+                    deployment.ends_at.isoformat()
+                    if deployment is not None and deployment.ends_at is not None
+                    else None
+                ),
+            ),
+            self._snapshot_row(
+                "previous_assignment",
+                assignment,
+                driver_membership_id=(str(assignment.driver_membership_id) if assignment else None),
+                site_id=str(assignment.site_id) if assignment else None,
+                starts_at=assignment.starts_at.isoformat() if assignment else None,
+                ends_at=(
+                    assignment.ends_at.isoformat()
+                    if assignment is not None and assignment.ends_at is not None
+                    else None
+                ),
+            ),
+        ]
+        if site is not None:
+            snapshot.append(self._snapshot_row("previous_site", site, status=site.status.value))
+        if membership is not None:
+            snapshot.append(
+                self._snapshot_row(
+                    "previous_driver",
+                    membership,
+                    status=membership.status.value,
+                )
+            )
+        return deployment, site, assignment, membership, user, snapshot
 
     def _preview_remove_deployment(
         self, intent: OwnerOperationIntent, lock: bool
@@ -1328,6 +1420,206 @@ class OwnerOperationPlanner:
             snapshot=snapshot,
         )
 
+    def _preview_reactivate_asset(
+        self, intent: OwnerOperationIntent, lock: bool
+    ) -> OwnerOperationPlan:
+        if intent.asset_id is None:
+            raise DomainError("asset_id is required")
+        asset, deployment, site, assignment, membership, user, duty, snapshot = (
+            self._asset_relationship_state(intent.asset_id, lock=lock)
+        )
+        current, dependencies = self._asset_items(
+            asset,
+            deployment,
+            site,
+            assignment,
+            membership,
+            user,
+            duty,
+        )
+        (
+            previous_deployment,
+            previous_site,
+            previous_assignment,
+            previous_driver,
+            previous_driver_user,
+            previous_snapshot,
+        ) = self._previous_asset_relationships(asset.id, lock=lock)
+        snapshot.extend(previous_snapshot)
+        if previous_deployment is not None and previous_site is not None:
+            current.append(
+                OperationItem(
+                    "PREVIOUS_SITE",
+                    previous_deployment.id,
+                    previous_site.short_name,
+                    "PREVIOUS",
+                    {
+                        "site_id": str(previous_site.id),
+                        "ended_at": (
+                            previous_deployment.ends_at.isoformat()
+                            if previous_deployment.ends_at is not None
+                            else None
+                        ),
+                    },
+                )
+            )
+        if (
+            previous_assignment is not None
+            and previous_driver is not None
+            and previous_driver_user is not None
+        ):
+            current.append(
+                OperationItem(
+                    "PREVIOUS_DRIVER",
+                    previous_assignment.id,
+                    self._person_label(previous_driver, previous_driver_user),
+                    "PREVIOUS",
+                    {
+                        "driver_membership_id": str(previous_driver.id),
+                        "site_id": str(previous_assignment.site_id),
+                        "ended_at": (
+                            previous_assignment.ends_at.isoformat()
+                            if previous_assignment.ends_at is not None
+                            else None
+                        ),
+                    },
+                )
+            )
+
+        target_site = self._site(intent.site_id, lock=lock) if intent.site_id is not None else None
+        if target_site is not None:
+            snapshot.append(
+                self._snapshot_row(
+                    "target_site",
+                    target_site,
+                    status=target_site.status.value,
+                )
+            )
+            dependencies.append(
+                OperationItem(
+                    "TARGET_SITE",
+                    target_site.id,
+                    target_site.short_name,
+                    target_site.status.value,
+                )
+            )
+
+        selected_driver: CompanyMembership | None = None
+        selected_driver_user: User | None = None
+        selected_driver_assignment: Assignment | None = None
+        if intent.driver_membership_id is not None:
+            selected_driver, selected_driver_user = self._membership(
+                intent.driver_membership_id,
+                lock=lock,
+            )
+            selected_driver_assignment = self._driver_assignment(
+                selected_driver.id,
+                at=datetime.now(UTC),
+                lock=lock,
+            )
+            snapshot.extend(
+                [
+                    self._snapshot_row(
+                        "selected_driver",
+                        selected_driver,
+                        status=selected_driver.status.value,
+                        role=selected_driver.role.value,
+                    ),
+                    self._snapshot_row(
+                        "selected_driver_assignment",
+                        selected_driver_assignment,
+                        asset_id=(
+                            str(selected_driver_assignment.asset_id)
+                            if selected_driver_assignment is not None
+                            else None
+                        ),
+                    ),
+                ]
+            )
+            dependencies.append(
+                OperationItem(
+                    "DRIVER",
+                    selected_driver.id,
+                    self._person_label(selected_driver, selected_driver_user),
+                    selected_driver.status.value,
+                    {
+                        "role": selected_driver.role.value,
+                        "assignment_state": (
+                            "ASSIGNED" if selected_driver_assignment is not None else "UNASSIGNED"
+                        ),
+                    },
+                )
+            )
+
+        blocked: list[str] = []
+        if asset.status != FleetAssetStatus.INACTIVE:
+            blocked.append("Asset is already active.")
+        if deployment is not None or assignment is not None or duty is not None:
+            blocked.append(
+                "Resolve the asset's current deployment, assignment, or duty before reactivation."
+            )
+        if target_site is not None and target_site.status != SiteStatus.ACTIVE:
+            blocked.append("The selected Site must be active.")
+        if selected_driver is not None:
+            assert selected_driver_user is not None
+            if target_site is None:
+                blocked.append("Choose a Site before assigning a Driver / Operator.")
+            if not capabilities_for(asset.asset_type).supports_duty_session:
+                blocked.append("This asset type is not supported by the current Driver workflow.")
+            if (
+                selected_driver.role != MembershipRole.DRIVER
+                or selected_driver_user.status != UserStatus.ACTIVE
+            ):
+                blocked.append("The selected person is not an eligible Driver / Operator.")
+            if selected_driver.status == MembershipStatus.INACTIVE:
+                if not intent.activate_membership:
+                    blocked.append(
+                        "Select ‘Reactivate role as part of this setup’ for this inactive "
+                        "Driver / Operator."
+                    )
+            elif selected_driver.status == MembershipStatus.INVITED and intent.activate_membership:
+                blocked.append("Invited people become active through their first OTP login.")
+            if selected_driver_assignment is not None:
+                blocked.append("Driver / Operator already has a current asset.")
+        elif intent.activate_membership:
+            blocked.append("Choose a Driver / Operator before selecting role reactivation.")
+
+        asset_label = self._asset_label(asset)
+        changes = [f"Set {asset_label} lifecycle to Active"]
+        if target_site is not None:
+            changes.append(f"Set Site to {target_site.short_name}")
+        if selected_driver is not None and selected_driver_user is not None:
+            driver_name = self._person_label(selected_driver, selected_driver_user)
+            if selected_driver.status == MembershipStatus.INACTIVE and intent.activate_membership:
+                changes.append(f"Reactivate {driver_name}'s Driver / Operator role")
+            changes.append(f"Set Driver / Operator to {driver_name}")
+
+        if target_site is None:
+            summary = f"Reactivate {asset_label} and leave it undeployed."
+        elif selected_driver is None:
+            summary = (
+                f"Reactivate {asset_label}, deploy it to {target_site.short_name}, "
+                "and leave it unassigned."
+            )
+        else:
+            summary = f"Reactivate {asset_label} with its Site and Driver / Operator setup."
+        return self._plan(
+            intent,
+            title=f"Reactivate {asset_label}",
+            summary=summary,
+            current_state=current,
+            dependencies=dependencies,
+            warnings=[],
+            allowed_resolutions=[
+                "REACTIVATE_ONLY",
+                "REACTIVATE_AND_DEPLOY",
+                "REACTIVATE_DEPLOY_ASSIGN",
+            ],
+            blocked_reasons=blocked,
+            planned_changes=changes,
+            snapshot=snapshot,
+        )
+
     def _site_dependencies(
         self,
         site: Site,
@@ -1654,6 +1946,7 @@ class OwnerOperationPlanner:
             OwnerOperationAction.REASSIGN_DRIVER: self._execute_reassign_driver,
             OwnerOperationAction.END_ASSIGNMENT: self._execute_end_assignment,
             OwnerOperationAction.DEACTIVATE_ASSET: self._execute_deactivate_asset,
+            OwnerOperationAction.REACTIVATE_ASSET: self._execute_reactivate_asset,
             OwnerOperationAction.DEACTIVATE_SITE: self._execute_deactivate_site,
             OwnerOperationAction.REACTIVATE_SITE: self._execute_reactivate_site,
         }
@@ -2003,6 +2296,40 @@ class OwnerOperationPlanner:
                 old_values={"status": FleetAssetStatus.ACTIVE.value},
                 new_values={"status": FleetAssetStatus.INACTIVE.value},
             )
+
+    def _execute_reactivate_asset(self, intent: OwnerOperationIntent) -> None:
+        assert intent.asset_id is not None
+        asset = self._asset(intent.asset_id, lock=True)
+        old_status = asset.status
+        asset.status = FleetAssetStatus.ACTIVE
+        self._audit(
+            action="OWNER_ASSET_REACTIVATED",
+            entity_type="FLEET_ASSET",
+            entity_id=asset.id,
+            old_values={"status": old_status.value},
+            new_values={"status": FleetAssetStatus.ACTIVE.value},
+        )
+
+        if intent.site_id is None:
+            return
+        now = datetime.now(UTC)
+        deployment = self._create_deployment(
+            asset_id=asset.id,
+            site_id=intent.site_id,
+            starts_at=now,
+        )
+        if intent.driver_membership_id is None:
+            return
+        driver, _user = self._membership(intent.driver_membership_id, lock=True)
+        if intent.activate_membership:
+            self._activate_membership(driver)
+        self._create_assignment(
+            asset=asset,
+            deployment=deployment,
+            driver_membership_id=driver.id,
+            starts_at=now,
+            regular_duty_minutes=intent.regular_duty_minutes,
+        )
 
     def _move_site_asset(
         self,

@@ -667,6 +667,7 @@ class DriverHomeScreen extends StatefulWidget {
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final _picker = ImagePicker();
   Timer? _syncRetryTimer;
+  Timer? _messageTimer;
   int _pendingCount = 0;
   late DriverDutyState _duty;
   String? _message;
@@ -685,7 +686,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   void dispose() {
     _syncRetryTimer?.cancel();
+    _messageTimer?.cancel();
     super.dispose();
+  }
+
+  void _showMessage(String message, {bool persistent = false}) {
+    if (!mounted) return;
+    _messageTimer?.cancel();
+    setState(() => _message = message);
+    if (persistent) return;
+    _messageTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => _message = null);
+    });
   }
 
   @override
@@ -739,15 +751,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       final syncError = await widget.dependencies.sync.lastSyncErrorMessage();
       final pending = await widget.dependencies.sync.pendingCount();
       if (mounted) {
-        setState(() {
-          _message =
-              refreshWarning ??
+        _showMessage(
+          refreshWarning ??
               (pending > 0
                   ? (syncError == null
                         ? '$pending event(s) pending. Retry when connected.'
                         : 'Needs attention: $syncError')
-                  : 'Synced');
-        });
+                  : 'Synced'),
+          persistent: refreshWarning != null || pending > 0,
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -799,7 +811,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           DriverEventType.kmReading => 'KM reading saved',
           DriverEventType.hmrReading => 'HMR saved',
         };
-        setState(() => _message = label);
+        _showMessage(label);
       }
       unawaited(
         _syncQueuedEvents(
@@ -821,14 +833,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       await _refreshQueue();
       final refreshWarning = await _refreshAuthoritativeState();
       if (refreshWarning != null && mounted) {
-        setState(() => _message = refreshWarning);
+        _showMessage(refreshWarning, persistent: true);
       }
       if (emergencyEventId != null && mounted) {
         final state = await widget.dependencies.sync.eventSyncState(
           emergencyEventId,
         );
         if (state == SyncState.synced.name) {
-          setState(() => _message = 'Emergency received by server');
+          _showMessage('Emergency received by server');
         }
       }
     } catch (_) {
@@ -860,8 +872,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     });
   }
 
-  Future<void> _showKmDialog() async {
-    final type = await _chooseReadingType(hourMeter: false);
+  Future<void> _showKmDialog({KmReadingType? forcedType}) async {
+    final type = forcedType ?? await _chooseReadingType(hourMeter: false);
     if (type == null || !mounted) return;
     final result = await showDialog<_KmCapture>(
       context: context,
@@ -888,8 +900,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
-  Future<void> _showHmrDialog() async {
-    final type = await _chooseReadingType(hourMeter: true);
+  Future<void> _showHmrDialog({KmReadingType? forcedType}) async {
+    final type = forcedType ?? await _chooseReadingType(hourMeter: true);
     if (type == null || !mounted) return;
     final result = await showDialog<_KmCapture>(
       context: context,
@@ -963,9 +975,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       await _refreshQueue();
       await _refreshDuty();
       if (mounted) {
-        setState(
-          () => _message =
-              'Corrected START ${hourMeter ? 'HMR' : 'KM'} saved on phone',
+        _showMessage(
+          'Corrected START ${hourMeter ? 'HMR' : 'KM'} saved on phone',
         );
       }
       unawaited(_syncQueuedEvents());
@@ -1068,11 +1079,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return await _picker.pickImage(source: source, imageQuality: 85);
     } on PlatformException catch (error) {
       if (mounted) {
-        setState(() {
-          _message = error.code == 'camera_access_denied'
-              ? 'Camera permission is required to take the KM photograph.'
-              : 'Photo could not be opened. Please try again.';
-        });
+        _showMessage(
+          error.code == 'camera_access_denied'
+              ? 'Camera permission is required to take the meter photograph.'
+              : 'Photo could not be opened. Please try again.',
+        );
       }
       return null;
     }
@@ -1086,24 +1097,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final hourMeter = capabilities.supportsHourMeter;
     final meterLabel = hourMeter ? 'HMR' : 'KM';
     final canCapture = assignment != null;
-    final canOperate = canCapture && !_busy && _duty.isOperationallyActive;
+    final dutyActive = _duty.isOperationallyActive;
+    final canOperate = canCapture && !_busy && dutyActive;
     final canReadMeter = canCapture && !_busy && _duty.canReadKm;
-    final dutyActionLabel = _duty.canEnd
-        ? 'END DUTY · $meterLabel'
-        : 'START DUTY · $meterLabel';
-    final dutyLabel = switch (_duty.localState) {
-      LocalDutyState.startPendingSync => 'Saved on phone · Syncing start',
-      LocalDutyState.activeConfirmed => 'Duty active',
+    final dutyStatusLabel = dutyActive ? 'DUTY ACTIVE' : 'OFF DUTY';
+    final dutyDetail = switch (_duty.localState) {
+      LocalDutyState.startPendingSync => 'Start saved on phone · Syncing',
+      LocalDutyState.activeConfirmed => 'Shift in progress',
       LocalDutyState.endPendingSync => 'Saving end $meterLabel…',
-      LocalDutyState.closedConfirmed =>
-        'Previous duty completed · Record START $meterLabel for the next session',
+      LocalDutyState.closedConfirmed => 'Previous duty completed',
       LocalDutyState.needsAttention =>
         'START $meterLabel needs correction. Please check the reading.',
       null => switch (_duty.status) {
-        DriverDutyStatus.none => 'Before START $meterLabel',
-        DriverDutyStatus.active => 'Duty active',
-        DriverDutyStatus.closed =>
-          'Previous duty completed · Record START $meterLabel for the next session',
+        DriverDutyStatus.none => 'Ready to start with $meterLabel',
+        DriverDutyStatus.active => 'Shift in progress',
+        DriverDutyStatus.closed => 'Previous duty completed',
       },
     };
     return Scaffold(
@@ -1138,74 +1146,108 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           _AssignmentCard(assignment: assignment),
           const SizedBox(height: 12),
           _DriverStatePanel(
-            dutyLabel: dutyLabel,
+            dutyStatusLabel: dutyStatusLabel,
+            dutyDetail: dutyDetail,
             siteName: assignment?.siteName,
             pendingCount: _pendingCount,
-            actionLabel: dutyActionLabel,
-            onDutyAction: canReadMeter
-                ? (hourMeter ? _showHmrDialog : _showKmDialog)
+            correctionLabel: _duty.canCorrectStart
+                ? 'CORRECT START $meterLabel'
+                : null,
+            onCorrectStart: _duty.canCorrectStart && canReadMeter
+                ? () => hourMeter
+                      ? _showHmrDialog(forcedType: KmReadingType.startReading)
+                      : _showKmDialog(forcedType: KmReadingType.startReading)
                 : null,
           ),
           const SizedBox(height: 16),
-          GridView.count(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 1.42,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            children: [
-              if (capabilities.supportsTripComplete)
-                _ActionButton(
-                  label: 'TRIP COMPLETE',
-                  icon: Icons.check_circle_outline,
-                  onPressed: canOperate ? _confirmTripComplete : null,
-                ),
-              if (capabilities.supportsOdometer)
-                _ActionButton(
-                  label: 'KM READING',
-                  icon: Icons.speed,
-                  onPressed: canReadMeter ? _showKmDialog : null,
-                ),
-              if (capabilities.supportsHourMeter)
-                _ActionButton(
-                  label: 'HMR READING',
-                  icon: Icons.timer_outlined,
-                  onPressed: canReadMeter ? _showHmrDialog : null,
-                ),
+          if (!dutyActive) ...[
+            _ActionButton(
+              label: 'START DUTY',
+              icon: hourMeter ? Icons.timer_outlined : Icons.speed_outlined,
+              onPressed: canReadMeter
+                  ? () => hourMeter ? _showHmrDialog() : _showKmDialog()
+                  : null,
+            ),
+            const SizedBox(height: 12),
+            _ActionButton(
+              label: 'EMERGENCY',
+              icon: Icons.warning_amber,
+              danger: true,
+              onPressed: canCapture && !_busy ? _sendEmergency : null,
+            ),
+            if (_message != null) ...[
+              const SizedBox(height: 16),
+              _DriverFeedbackCard(
+                message: _message!,
+                onDismiss: () {
+                  _messageTimer?.cancel();
+                  setState(() => _message = null);
+                },
+              ),
+            ],
+          ] else ...[
+            _ActionButton(
+              label: 'EMERGENCY',
+              icon: Icons.warning_amber,
+              danger: true,
+              prominent: true,
+              onPressed: canCapture && !_busy ? _sendEmergency : null,
+            ),
+            const SizedBox(height: 12),
+            if (capabilities.supportsTripComplete)
+              Row(
+                children: [
+                  Expanded(
+                    child: _ActionButton(
+                      label: 'TRIP COMPLETE',
+                      icon: Icons.check_circle_outline,
+                      compact: true,
+                      onPressed: canOperate ? _confirmTripComplete : null,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _ActionButton(
+                      label: 'DIESEL',
+                      icon: Icons.local_gas_station,
+                      compact: true,
+                      onPressed: canOperate ? _showDieselDialog : null,
+                    ),
+                  ),
+                ],
+              )
+            else if (capabilities.supportsDiesel)
               _ActionButton(
                 label: 'DIESEL',
                 icon: Icons.local_gas_station,
                 onPressed: canOperate ? _showDieselDialog : null,
               ),
-              _ActionButton(
-                label: 'EMERGENCY',
-                icon: Icons.warning_amber,
-                danger: true,
-                onPressed: canCapture && !_busy ? _sendEmergency : null,
+            const SizedBox(height: 12),
+            const _ActionButton(
+              label: 'MAINTENANCE',
+              subtitle: 'Coming later',
+              icon: Icons.build_outlined,
+              onPressed: null,
+            ),
+            if (_message != null) ...[
+              const SizedBox(height: 16),
+              _DriverFeedbackCard(
+                message: _message!,
+                onDismiss: () {
+                  _messageTimer?.cancel();
+                  setState(() => _message = null);
+                },
               ),
             ],
-          ),
-          if (_message != null) ...[
-            const SizedBox(height: 16),
-            Card(
-              color: _message == 'Synced'
-                  ? Theme.of(context).colorScheme.primaryContainer
-                  : Theme.of(context).colorScheme.tertiaryContainer,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    Icon(
-                      _message == 'Synced'
-                          ? Icons.check_circle_outline
-                          : Icons.info_outline,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text(_message!)),
-                  ],
-                ),
-              ),
+            const SizedBox(height: 40),
+            _ActionButton(
+              label: 'END DUTY',
+              icon: hourMeter ? Icons.timer_outlined : Icons.speed_outlined,
+              onPressed: canReadMeter
+                  ? () => hourMeter
+                        ? _showHmrDialog(forcedType: KmReadingType.endReading)
+                        : _showKmDialog(forcedType: KmReadingType.endReading)
+                  : null,
             ),
           ],
         ],
@@ -1469,18 +1511,20 @@ class _AssignmentCard extends StatelessWidget {
 
 class _DriverStatePanel extends StatelessWidget {
   const _DriverStatePanel({
-    required this.dutyLabel,
+    required this.dutyStatusLabel,
+    required this.dutyDetail,
     required this.pendingCount,
-    required this.actionLabel,
-    required this.onDutyAction,
+    this.correctionLabel,
+    this.onCorrectStart,
     this.siteName,
   });
 
-  final String dutyLabel;
+  final String dutyStatusLabel;
+  final String dutyDetail;
   final String? siteName;
   final int pendingCount;
-  final String actionLabel;
-  final VoidCallback? onDutyAction;
+  final String? correctionLabel;
+  final VoidCallback? onCorrectStart;
 
   @override
   Widget build(BuildContext context) {
@@ -1495,9 +1539,9 @@ class _DriverStatePanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(
-                  onDutyAction == null
-                      ? Icons.pause_circle_outline
-                      : Icons.play_circle_outline,
+                  dutyStatusLabel == 'DUTY ACTIVE'
+                      ? Icons.play_circle_outline
+                      : Icons.pause_circle_outline,
                   color: Theme.of(context).colorScheme.primary,
                 ),
                 const SizedBox(width: 10),
@@ -1506,8 +1550,9 @@ class _DriverStatePanel extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        dutyLabel,
-                        style: Theme.of(context).textTheme.titleMedium,
+                        dutyStatusLabel,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
                       if (siteName != null)
                         Text(
@@ -1516,6 +1561,11 @@ class _DriverStatePanel extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
+                      const SizedBox(height: 2),
+                      Text(
+                        dutyDetail,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ],
                   ),
                 ),
@@ -1534,11 +1584,49 @@ class _DriverStatePanel extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: onDutyAction,
-              icon: const Icon(Icons.speed_outlined),
-              label: Text(actionLabel),
+            if (correctionLabel != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: onCorrectStart,
+                  icon: const Icon(Icons.edit_outlined),
+                  label: Text(correctionLabel!),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverFeedbackCard extends StatelessWidget {
+  const _DriverFeedbackCard({required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final synced = message == 'Synced';
+    return Card(
+      color: synced
+          ? Theme.of(context).colorScheme.primaryContainer
+          : Theme.of(context).colorScheme.tertiaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        child: Row(
+          children: [
+            Icon(synced ? Icons.check_circle_outline : Icons.info_outline),
+            const SizedBox(width: 10),
+            Expanded(child: Text(message)),
+            IconButton(
+              tooltip: 'Dismiss message',
+              visualDensity: VisualDensity.compact,
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close),
             ),
           ],
         ),
@@ -1552,37 +1640,87 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.onPressed,
+    this.subtitle,
     this.danger = false,
+    this.prominent = false,
+    this.compact = false,
   });
 
   final String label;
+  final String? subtitle;
   final IconData icon;
   final VoidCallback? onPressed;
   final bool danger;
+  final bool prominent;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 72,
-      child: FilledButton.icon(
+      height: compact ? 82 : (prominent ? 78 : 72),
+      child: FilledButton(
         onPressed: onPressed,
-        style: danger
-            ? FilledButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.errorContainer,
-                foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
-                side: BorderSide(color: Theme.of(context).colorScheme.error),
-              )
-            : FilledButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.surface,
-                foregroundColor: Theme.of(context).colorScheme.primary,
-                side: BorderSide(color: Theme.of(context).colorScheme.outline),
-              ),
-        icon: Icon(icon),
-        label: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontWeight: FontWeight.bold),
+        style: FilledButton.styleFrom(
+          backgroundColor: danger
+              ? Theme.of(context).colorScheme.errorContainer
+              : Theme.of(context).colorScheme.surface,
+          foregroundColor: danger
+              ? Theme.of(context).colorScheme.onErrorContainer
+              : Theme.of(context).colorScheme.primary,
+          disabledBackgroundColor: Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHighest,
+          disabledForegroundColor: Theme.of(
+            context,
+          ).colorScheme.onSurfaceVariant,
+          side: BorderSide(
+            color: danger
+                ? Theme.of(context).colorScheme.error
+                : Theme.of(context).colorScheme.outline,
+          ),
+          padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
         ),
+        child: compact
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon),
+                  const SizedBox(height: 4),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon),
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          label,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        if (subtitle != null)
+                          Text(
+                            subtitle!,
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }

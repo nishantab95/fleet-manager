@@ -798,6 +798,7 @@ class ReportTemplateResponse(BaseModel):
 
     id: UUID
     name: str
+    builtin_key: str | None
     is_builtin: bool
     is_default: bool
     included_sheets: list[str]

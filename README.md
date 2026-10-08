@@ -10,9 +10,14 @@ FLEET_API_UPSTREAM_URL=https://your-private-fleet-api-host
 
 Then double-click `Start Fleet Manager Owner.bat`. The launcher checks the remote `/health` and `/ready` gates, starts only the local Next.js web app, waits for its same-origin API proxy, and opens the Owner workspace. It does not start a local API or database.
 
-Production foundation for a construction company's company-owned tipper operations.
+Production foundation for a civil-construction company's fleet operations.
 
-V1 is intentionally limited to owned tippers and three roles: `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. Phase 0 established the modular-monolith workspace and runtime foundation; Phase 1 adds the tenant-safe core domain schema and database invariants; Phase 2 adds phone OTP authentication, server-side sessions, and tenant-scoped RBAC; Phase 3 adds tenant-safe owner/admin management APIs and an authenticated web administration shell; Phase 4 adds the offline-first driver event client and reliable event/evidence sync; Phase 5 adds supervisor site-scoped verification and operational completeness review.
+The core field workflow began with company-owned tippers and three roles:
+`DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. The current pilot capability catalog
+also represents owned or rented tippers, excavators, backhoe loaders, rollers,
+and graders for capability-aware duty, meter, diesel, and reporting workflows.
+This narrow fleet extension does not bring later commercial or maintenance
+modules into scope.
 
 ## Repository layout
 
@@ -71,38 +76,46 @@ Run checks with:
 
 ## Scope guardrails
 
-Do not add rented equipment, non-tipper machinery, payroll, accounting, customer billing, continuous GPS, predictive maintenance, WhatsApp, AI/LLM features, or asynchronous infrastructure until the owned-tipper workflow is reliable in production.
+Do not add equipment categories beyond the current pilot capability catalog, or
+payroll, accounting, customer billing, continuous GPS, predictive maintenance,
+WhatsApp, AI/LLM features, or asynchronous infrastructure until the core field
+workflow is reliable in production.
 
 ## Current status
 
 Phase 4 contains the Android-first driver client with secure session storage,
-assignment-scoped four-button event capture, camera evidence for KM and DIESEL,
-an on-device Drift queue, bounded retry/refresh sync, and tenant-safe backend
-event/evidence APIs. Phase 5 adds the authenticated supervisor web workflow:
+assignment-scoped duty-state event capture, camera evidence for meter readings
+and DIESEL, an on-device Drift queue, bounded retry/refresh sync, and tenant-safe
+backend event/evidence APIs. Off-duty Drivers see Start Duty and Emergency;
+on-duty actions follow asset capability and keep End Duty at the bottom. Phase 5
+adds the authenticated supervisor web workflow:
 explicit `SupervisorSiteAccess` site scope, trip/KM/diesel/emergency review,
 reasoned individual or batch decisions, append-only verification history, private
 evidence access, emergency acknowledgement, stale-decision conflicts, and daily
 per-tipper completeness flags. The backend remains authoritative for assignment,
 role, device, event idempotency, evidence ownership, and verification state.
 
-Phase 3 contains owner/admin management for sites, owned tippers, people,
+Phase 3 contains owner/admin management for sites, pilot fleet assets, people,
 supervisor site grants, and effective-dated assignments, plus the authenticated
 web administration shell. Phase 6 adds the owner operations dashboard,
 timezone-aware operational-day reporting, site/tipper drill-downs, explicit
-exceptions, daily site closure/history, and a reconciled Excel export.
+exceptions, daily site closure/history, and a reconciled Excel export. Owner
+report templates also include a Simple Site Workbook: one historical Site and
+date range, Summary first, then one capability-aware sheet for every relevant
+owned or rented asset. Existing configurable exports remain available. Simple
+workbook fuel ratios are explicitly based on verified diesel recorded/issued
+and are not represented as actual consumption or true fuel efficiency.
 
 Phase 2 contains the authentication boundary, OTP challenge persistence,
 membership selection, access/refresh session rotation, authenticated identity
 routes, and reusable tenant/RBAC dependencies. The default OTP provider is
 unavailable and fails closed; development OTP requires explicit development
-configuration. Reporting is limited to company-owned tippers; rented
-equipment, machinery, fuel-efficiency calculations, and later business
-expansion remain deferred.
+configuration.
 
 Phase 7 adds release-candidate hardening for a controlled one-tipper pilot:
 production-profile validation, API/web security headers, browser refresh
 cookies, durable mobile sync diagnostics, cold-restart/retry tests, evidence
 content validation, backup/restore tooling, and pilot documentation. It does
-not add new equipment or change the driver's four-button contract. See
+not add new equipment or change the Driver event/offline contract. See
 `docs/phase7-e2e-matrix.md`, `docs/pilot-runbook.md`, and
 `docs/pilot-checklist.md`.

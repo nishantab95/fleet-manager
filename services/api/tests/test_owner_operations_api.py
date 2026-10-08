@@ -919,3 +919,495 @@ def test_composite_operation_rolls_back_all_changes_when_audit_fails(
         assert assignment.ends_at is None
     finally:
         client.close()
+
+
+def test_reactivate_asset_only_leaves_it_undeployed_and_unassigned(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+        assert plan["can_execute"] is True
+        assert plan["allowed_resolutions"] == [
+            "REACTIVATE_ONLY",
+            "REACTIVATE_AND_DEPLOY",
+            "REACTIVATE_DEPLOY_ASSIGN",
+        ]
+        assert execute(client, payload, plan).status_code == 200
+        db_session.expire_all()
+        db_session.refresh(asset)
+        assert asset.status == FleetAssetStatus.ACTIVE
+        assert (
+            db_session.scalar(
+                select(AssetSiteDeployment).where(
+                    AssetSiteDeployment.asset_id == asset.id,
+                    AssetSiteDeployment.ends_at.is_(None),
+                )
+            )
+            is None
+        )
+        assert (
+            db_session.scalar(
+                select(Assignment).where(
+                    Assignment.asset_id == asset.id,
+                    Assignment.ends_at.is_(None),
+                )
+            )
+            is None
+        )
+        assert (
+            db_session.scalar(
+                select(func.count(AuditLog.id)).where(
+                    AuditLog.action == "OWNER_ASSET_REACTIVATED",
+                    AuditLog.entity_id == asset.id,
+                )
+            )
+            == 1
+        )
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_with_site_deploys_without_assigning(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "site_id": str(site.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+        assert plan["can_execute"] is True
+        assert any(
+            item["kind"] == "TARGET_SITE"
+            for item in cast(list[dict[str, object]], plan["dependencies"])
+        )
+        assert execute(client, payload, plan).status_code == 200
+        db_session.expire_all()
+        db_session.refresh(asset)
+        deployment = db_session.scalar(
+            select(AssetSiteDeployment).where(
+                AssetSiteDeployment.asset_id == asset.id,
+                AssetSiteDeployment.ends_at.is_(None),
+            )
+        )
+        assert asset.status == FleetAssetStatus.ACTIVE
+        assert deployment is not None
+        assert deployment.site_id == site.id
+        assert (
+            db_session.scalar(
+                select(Assignment).where(
+                    Assignment.asset_id == asset.id,
+                    Assignment.ends_at.is_(None),
+                )
+            )
+            is None
+        )
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_with_site_and_driver_is_atomic_setup(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "site_id": str(site.id),
+        "driver_membership_id": str(driver.id),
+        "regular_duty_minutes": 540,
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+        assert plan["can_execute"] is True
+        driver_item = next(
+            item
+            for item in cast(list[dict[str, object]], plan["dependencies"])
+            if item["kind"] == "DRIVER"
+        )
+        assert cast(dict[str, object], driver_item["details"])["assignment_state"] == "UNASSIGNED"
+        assert execute(client, payload, plan).status_code == 200
+        db_session.expire_all()
+        db_session.refresh(asset)
+        deployment = db_session.scalar(
+            select(AssetSiteDeployment).where(
+                AssetSiteDeployment.asset_id == asset.id,
+                AssetSiteDeployment.ends_at.is_(None),
+            )
+        )
+        assignment = db_session.scalar(
+            select(Assignment).where(
+                Assignment.asset_id == asset.id,
+                Assignment.ends_at.is_(None),
+            )
+        )
+        assert asset.status == FleetAssetStatus.ACTIVE
+        assert deployment is not None
+        assert assignment is not None
+        assert assignment.asset_site_deployment_id == deployment.id
+        assert assignment.site_id == site.id
+        assert assignment.driver_membership_id == driver.id
+        assert assignment.regular_duty_minutes == 540
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_requires_site_before_driver_assignment(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "driver_membership_id": str(driver.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+        assert plan["can_execute"] is False
+        assert "Choose a Site before assigning a Driver / Operator." in cast(
+            list[str], plan["blocked_reasons"]
+        )
+        response = execute(client, payload, plan)
+        assert response.status_code == 409
+        db_session.expire_all()
+        db_session.refresh(asset)
+        assert asset.status == FleetAssetStatus.INACTIVE
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_rejects_driver_with_a_current_assignment(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    target_asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    busy_asset = add_asset(db_session, company, "BUSY")
+    deploy(db_session, busy_asset, site)
+    assign(db_session, tenant_records, busy_asset, site)
+    target_asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(target_asset.id),
+        "site_id": str(site.id),
+        "driver_membership_id": str(driver.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+        assert plan["can_execute"] is False
+        assert "Driver / Operator already has a current asset." in cast(
+            list[str], plan["blocked_reasons"]
+        )
+        driver_item = next(
+            item
+            for item in cast(list[dict[str, object]], plan["dependencies"])
+            if item["kind"] == "DRIVER"
+        )
+        assert cast(dict[str, object], driver_item["details"])["assignment_state"] == "ASSIGNED"
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_requires_explicit_inactive_driver_role_reactivation(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    asset.status = FleetAssetStatus.INACTIVE
+    driver.status = MembershipStatus.INACTIVE
+    db_session.commit()
+    base_payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "site_id": str(site.id),
+        "driver_membership_id": str(driver.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        blocked_plan = preview(client, base_payload)
+        assert blocked_plan["can_execute"] is False
+        assert any(
+            "Reactivate role as part of this setup" in reason
+            for reason in cast(list[str], blocked_plan["blocked_reasons"])
+        )
+
+        payload = {**base_payload, "activate_membership": True}
+        plan = preview(client, payload)
+        assert plan["can_execute"] is True
+        assert execute(client, payload, plan).status_code == 200
+        db_session.expire_all()
+        db_session.refresh(driver)
+        assert driver.status == MembershipStatus.ACTIVE
+        assignment = db_session.scalar(
+            select(Assignment).where(
+                Assignment.asset_id == asset.id,
+                Assignment.ends_at.is_(None),
+            )
+        )
+        assert assignment is not None
+        assert assignment.driver_membership_id == driver.id
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_allows_invited_driver_without_silent_activation(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    asset.status = FleetAssetStatus.INACTIVE
+    driver.status = MembershipStatus.INVITED
+    db_session.commit()
+    base_payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "site_id": str(site.id),
+        "driver_membership_id": str(driver.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        invalid_activation_plan = preview(
+            client,
+            {**base_payload, "activate_membership": True},
+        )
+        assert invalid_activation_plan["can_execute"] is False
+        assert "Invited people become active through their first OTP login." in cast(
+            list[str], invalid_activation_plan["blocked_reasons"]
+        )
+
+        plan = preview(client, base_payload)
+        assert plan["can_execute"] is True
+        assert execute(client, base_payload, plan).status_code == 200
+        db_session.expire_all()
+        db_session.refresh(driver)
+        assert driver.status == MembershipStatus.INVITED
+        assignment = db_session.scalar(
+            select(Assignment).where(
+                Assignment.asset_id == asset.id,
+                Assignment.ends_at.is_(None),
+            )
+        )
+        assert assignment is not None
+        assert assignment.driver_membership_id == driver.id
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_setup_rolls_back_every_step_when_assignment_audit_fails(
+    db_session: Session,
+    tenant_records: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    asset.status = FleetAssetStatus.INACTIVE
+    driver.status = MembershipStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "site_id": str(site.id),
+        "driver_membership_id": str(driver.id),
+        "activate_membership": True,
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+
+        def fail_assignment_audit(*args: object, **kwargs: object) -> AuditLog:
+            if kwargs.get("action") == "DRIVER_ASSIGNED_TO_ASSET":
+                raise ConflictError("injected assignment audit failure")
+            return real_write_audit_log(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(operations_domain, "write_audit_log", fail_assignment_audit)
+        response = execute(client, payload, plan)
+        assert response.status_code == 409
+        db_session.expire_all()
+        db_session.refresh(asset)
+        db_session.refresh(driver)
+        assert asset.status == FleetAssetStatus.INACTIVE
+        assert driver.status == MembershipStatus.INACTIVE
+        assert (
+            db_session.scalar(
+                select(AssetSiteDeployment).where(
+                    AssetSiteDeployment.asset_id == asset.id,
+                    AssetSiteDeployment.ends_at.is_(None),
+                )
+            )
+            is None
+        )
+        assert (
+            db_session.scalar(
+                select(Assignment).where(
+                    Assignment.asset_id == asset.id,
+                    Assignment.ends_at.is_(None),
+                )
+            )
+            is None
+        )
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_rejects_stale_state_without_partial_changes(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "site_id": str(site.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+        site.short_name = "Renamed after preview"
+        db_session.commit()
+        response = execute(client, payload, plan)
+        assert response.status_code == 409
+        assert response.json()["detail"]["message"] == (
+            "State changed. Review the operation again."
+        )
+        db_session.expire_all()
+        db_session.refresh(asset)
+        assert asset.status == FleetAssetStatus.INACTIVE
+        assert (
+            db_session.scalar(
+                select(AssetSiteDeployment).where(
+                    AssetSiteDeployment.asset_id == asset.id,
+                    AssetSiteDeployment.ends_at.is_(None),
+                )
+            )
+            is None
+        )
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_is_tenant_scoped_for_asset_site_and_driver(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    foreign_asset = value(tenant_records, "tipper_b", FleetAsset)
+    foreign_site = value(tenant_records, "site_b", Site)
+    foreign_driver = value(tenant_records, "driver_b", CompanyMembership)
+    asset.status = FleetAssetStatus.INACTIVE
+    foreign_asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    payloads: list[dict[str, object]] = [
+        {
+            "action": "REACTIVATE_ASSET",
+            "asset_id": str(foreign_asset.id),
+        },
+        {
+            "action": "REACTIVATE_ASSET",
+            "asset_id": str(asset.id),
+            "site_id": str(foreign_site.id),
+        },
+        {
+            "action": "REACTIVATE_ASSET",
+            "asset_id": str(asset.id),
+            "site_id": str(value(tenant_records, "site_a", Site).id),
+            "driver_membership_id": str(foreign_driver.id),
+        },
+    ]
+    try:
+        for payload in payloads:
+            response = client.post("/api/v1/owner/operations/preview", json=payload)
+            assert response.status_code == 404
+            assert response.json()["detail"]["code"] == "NOT_FOUND"
+    finally:
+        client.close()
+
+
+def test_reactivate_asset_preserves_history_and_marks_previous_context(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    site = value(tenant_records, "site_a", Site)
+    driver = value(tenant_records, "driver_a", CompanyMembership)
+    previous_deployment = deploy(db_session, asset, site)
+    previous_assignment = assign(db_session, tenant_records, asset, site)
+    ended_at = datetime.now(UTC)
+    previous_assignment.ends_at = ended_at
+    previous_deployment.ends_at = ended_at
+    asset.status = FleetAssetStatus.INACTIVE
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "REACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "site_id": str(site.id),
+        "driver_membership_id": str(driver.id),
+    }
+    client = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(client, payload)
+        current_kinds = {
+            item["kind"] for item in cast(list[dict[str, object]], plan["current_state"])
+        }
+        assert {"ASSET", "PREVIOUS_SITE", "PREVIOUS_DRIVER"} <= current_kinds
+        assert execute(client, payload, plan).status_code == 200
+        db_session.expire_all()
+        db_session.refresh(previous_deployment)
+        db_session.refresh(previous_assignment)
+        assert previous_deployment.ends_at == ended_at
+        assert previous_assignment.ends_at == ended_at
+        deployments = db_session.scalars(
+            select(AssetSiteDeployment)
+            .where(AssetSiteDeployment.asset_id == asset.id)
+            .order_by(AssetSiteDeployment.starts_at)
+        ).all()
+        assignments = db_session.scalars(
+            select(Assignment).where(Assignment.asset_id == asset.id).order_by(Assignment.starts_at)
+        ).all()
+        assert len(deployments) == 2
+        assert len(assignments) == 2
+        assert deployments[-1].id != previous_deployment.id
+        assert assignments[-1].id != previous_assignment.id
+        assert deployments[-1].ends_at is None
+        assert assignments[-1].ends_at is None
+    finally:
+        client.close()

@@ -60,6 +60,15 @@ const activeDriver: OwnerPerson = {
   status: "ACTIVE",
 };
 
+const inactiveDriver: OwnerPerson = {
+  ...activeDriver,
+  user_id: "user-3",
+  membership_id: "driver-inactive",
+  phone: "+919100000003",
+  display_name: "Operator Inactive",
+  status: "INACTIVE",
+};
+
 const activeOwner: OwnerPerson = {
   ...activeDriver,
   membership_id: "owner-active",
@@ -103,6 +112,11 @@ const undeployedGrader: OwnerAsset = {
   rental_party_name: null,
   rental_start_date: null,
   current_deployment: null,
+};
+
+const inactiveGrader: OwnerAsset = {
+  ...undeployedGrader,
+  status: "INACTIVE",
 };
 
 const assignedTipper: OwnerAsset = {
@@ -168,6 +182,44 @@ function operationApi(
   });
 }
 
+function assetReactivationPlan(intent: OwnerOperationIntent): OwnerOperationPlan {
+  const selectedSite = intent.site_id === siteOne.id ? siteOne : intent.site_id === siteTwo.id ? siteTwo : null;
+  const selectedDriver = intent.driver_membership_id === activeDriver.membership_id
+    ? activeDriver
+    : intent.driver_membership_id === inactiveDriver.membership_id
+      ? inactiveDriver
+      : null;
+  const blockedReasons = [
+    ...(selectedDriver && !selectedSite ? ["Choose a Site before assigning a Driver / Operator."] : []),
+    ...(selectedDriver?.status === "INACTIVE" && !intent.activate_membership ? ["Explicitly reactivate the Driver / Operator role to continue."] : []),
+  ];
+  return operationPlan("REACTIVATE_ASSET", {
+    title: "Reactivate Road grader",
+    current_state: [
+      { kind: "ASSET", id: inactiveGrader.id, label: "Road grader", status: "INACTIVE", details: { asset_type: "GRADER", ownership_type: "OWNED" } },
+      { kind: "PREVIOUS_SITE", id: "deployment-old", label: "Old Quarry", status: "PREVIOUS", details: {} },
+      { kind: "PREVIOUS_DRIVER", id: "assignment-old", label: "Previous Operator", status: "PREVIOUS", details: {} },
+    ],
+    dependencies: [
+      ...(selectedSite ? [{ kind: "TARGET_SITE", id: selectedSite.id, label: siteLabelForTest(selectedSite), status: "ACTIVE", details: {} }] : []),
+      ...(selectedDriver ? [{ kind: "DRIVER", id: selectedDriver.membership_id, label: selectedDriver.display_name, status: selectedDriver.status, details: { role: "DRIVER", assignment_state: "UNASSIGNED" } }] : []),
+    ],
+    allowed_resolutions: ["REACTIVATE_ONLY", "REACTIVATE_AND_DEPLOY", "REACTIVATE_DEPLOY_ASSIGN"],
+    blocked_reasons: blockedReasons,
+    planned_changes: [
+      "Reactivate Road grader",
+      ...(selectedSite ? [`Deploy Road grader to ${siteLabelForTest(selectedSite)}`] : []),
+      ...(selectedDriver?.status === "INACTIVE" && intent.activate_membership ? ["Reactivate Operator Inactive's Driver / Operator role"] : []),
+      ...(selectedDriver && selectedSite ? [`Assign ${selectedDriver.display_name} to Road grader at ${siteLabelForTest(selectedSite)}`] : []),
+    ],
+    can_execute: blockedReasons.length === 0,
+  });
+}
+
+function siteLabelForTest(site: OwnerSite) {
+  return site.short_name || site.name;
+}
+
 afterEach(cleanup);
 
 function common(apiRequest = vi.fn().mockResolvedValue({})) {
@@ -199,6 +251,108 @@ describe("Owner operations tables", () => {
     const payload = JSON.parse(vi.mocked(props.apiRequest).mock.calls[0][1]?.body as string);
     expect(payload).toEqual(expect.objectContaining({ asset_type: "GRADER", ownership_type: "OWNED", registration_number: null, short_name: "South grader" }));
     expect(payload).not.toHaveProperty("asset_code");
+  });
+
+  it("reactivates an asset through the shared wizard while allowing it to remain undeployed and unassigned", async () => {
+    const apiRequest = operationApi(assetReactivationPlan);
+    render(<FleetPanel assets={[inactiveGrader]} people={[inactiveDriver, activeDriver]} sites={[siteOne, siteTwo]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reactivate Road grader" });
+    const currentState = within(dialog).getByRole("region", { name: "Asset current state" });
+    expect(currentState).toHaveTextContent("Road grader");
+    expect(currentState).toHaveTextContent("Grader");
+    expect(currentState).toHaveTextContent("Owned");
+    expect(currentState).toHaveTextContent("Inactive");
+    expect(dialog).toHaveTextContent("Previous relationships");
+    expect(dialog).toHaveTextContent("Old Quarry");
+    expect(dialog).toHaveTextContent("Previous Operator");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(within(dialog).getByLabelText("Reactivation Site")).toHaveValue("");
+    expect(within(dialog).getByRole("option", { name: "Leave undeployed" })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Reactivation Driver / Operator")).toHaveValue("");
+    expect(within(dialog).getByRole("option", { name: "Leave unassigned" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
+    const review = await within(dialog).findByRole("group", { name: "Final setup" });
+    expect(review).toHaveTextContent("Road grader → Active");
+    expect(review).toHaveTextContent("Leave undeployed");
+    expect(review).toHaveTextContent("Leave unassigned");
+    fireEvent.click(within(dialog).getByRole("button", { name: "REACTIVATE" }));
+
+    const executeCall = await waitFor(() => apiRequest.mock.calls.find(([path]) => path.endsWith("/execute")));
+    expect(JSON.parse(executeCall?.[1]?.body as string)).toEqual(expect.objectContaining({
+      action: "REACTIVATE_ASSET",
+      asset_id: inactiveGrader.id,
+      site_id: null,
+      driver_membership_id: null,
+      activate_membership: false,
+      state_token: "a".repeat(64),
+    }));
+  });
+
+  it("offers active Sites and eligible Drivers for atomic asset reactivation setup", async () => {
+    const assignedDriver = { ...activeDriver, membership_id: "driver-busy", display_name: "Operator Busy", has_active_assignment: true };
+    const apiRequest = operationApi(assetReactivationPlan);
+    render(<FleetPanel assets={[inactiveGrader]} people={[inactiveDriver, invitedDriver, assignedDriver, activeDriver]} sites={[siteOne, siteTwo]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reactivate Road grader" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    const site = within(dialog).getByLabelText("Reactivation Site");
+    const driver = within(dialog).getByLabelText("Reactivation Driver / Operator");
+    expect(within(site).getByRole("option", { name: "Quarry" })).toBeInTheDocument();
+    expect(within(driver).getByRole("option", { name: /Operator Active · Driver \/ Operator · Active · Unassigned/ })).toBeInTheDocument();
+    expect(within(driver).getByRole("option", { name: /Operator Invited · Driver \/ Operator · Invited · Unassigned/ })).toBeInTheDocument();
+    expect(within(driver).queryByRole("option", { name: /Operator Busy/ })).not.toBeInTheDocument();
+    const driverOptions = within(driver).getAllByRole("option");
+    expect(driverOptions[1]).toHaveValue(activeDriver.membership_id);
+    expect(driverOptions[2]).toHaveValue(invitedDriver.membership_id);
+    expect(driverOptions[3]).toHaveValue(inactiveDriver.membership_id);
+
+    fireEvent.change(site, { target: { value: siteOne.id } });
+    fireEvent.change(driver, { target: { value: activeDriver.membership_id } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
+    const review = await within(dialog).findByRole("group", { name: "Final setup" });
+    expect(review).toHaveTextContent("Road grader → Active");
+    expect(review).toHaveTextContent("Quarry");
+    expect(review).toHaveTextContent("Operator Active");
+    expect(review).not.toHaveTextContent("Deploy Road grader");
+    expect(within(dialog).getByRole("button", { name: "REACTIVATE & SET UP" })).toBeEnabled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "REACTIVATE & SET UP" }));
+    const executeCall = await waitFor(() => apiRequest.mock.calls.find(([path]) => path.endsWith("/execute")));
+    expect(JSON.parse(executeCall?.[1]?.body as string)).toEqual(expect.objectContaining({
+      action: "REACTIVATE_ASSET",
+      asset_id: inactiveGrader.id,
+      site_id: siteOne.id,
+      driver_membership_id: activeDriver.membership_id,
+      activate_membership: false,
+    }));
+  });
+
+  it("requires a Site before assigning during reactivation and makes inactive-role reactivation explicit", async () => {
+    const apiRequest = operationApi(assetReactivationPlan);
+    render(<FleetPanel assets={[inactiveGrader]} people={[inactiveDriver]} sites={[siteOne]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reactivate Road grader" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    fireEvent.change(within(dialog).getByLabelText("Reactivation Driver / Operator"), { target: { value: inactiveDriver.membership_id } });
+    expect(within(dialog).getByRole("note")).toHaveTextContent("Choose a Site before assigning a Driver / Operator.");
+    expect(dialog).toHaveTextContent("Currently inactive");
+    const roleChoice = within(dialog).getByRole("checkbox", { name: "Reactivate role as part of this setup" });
+    expect(roleChoice).not.toBeChecked();
+    expect(dialog).not.toHaveTextContent(/before\s+assignment/i);
+
+    fireEvent.change(within(dialog).getByLabelText("Reactivation Site"), { target: { value: siteOne.id } });
+    fireEvent.click(roleChoice);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
+    const review = await within(dialog).findByRole("group", { name: "Final setup" });
+    expect(review).toHaveTextContent("Driver / Operator → Reactivate");
+    expect(review).toHaveTextContent("Operator Inactive");
+    expect(within(dialog).getByRole("button", { name: "REACTIVATE & SET UP" })).toBeEnabled();
   });
 
   it("creates a site with an Owner-facing short name and no technical code field", async () => {
@@ -428,6 +582,52 @@ describe("Owner operations tables", () => {
     expect(screen.getAllByText("INVITED").length).toBeGreaterThan(0);
   });
 
+  it("reviews inactive Driver role activation as a clear optional assignment", async () => {
+    const apiRequest = operationApi((intent) => operationPlan("ACTIVATE_PERSON", {
+      title: "Activate Operator Inactive",
+      current_state: [{ kind: "PERSON", id: inactiveDriver.membership_id, label: inactiveDriver.display_name, status: "INACTIVE", details: { role: "DRIVER" } }],
+      dependencies: intent.asset_id ? [
+        { kind: "ASSET", id: deployedMachine.id, label: "Big digger", status: "ACTIVE", details: {} },
+        { kind: "DEPLOYMENT", id: "deployment-1", label: "Quarry", status: "ACTIVE", details: { site_id: siteOne.id } },
+      ] : [],
+      planned_changes: intent.asset_id ? ["Reactivate Operator Inactive as Driver / Operator", "Assign Operator Inactive to Big digger at Quarry"] : ["Reactivate Operator Inactive as Driver / Operator"],
+    }));
+    render(<PeoplePanel people={[inactiveDriver]} assets={[deployedMachine]} sites={[siteOne]} {...common(apiRequest)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage person" }));
+    const manageDialog = screen.getByRole("dialog", { name: "Manage Operator Inactive" });
+    fireEvent.click(within(manageDialog).getByRole("button", { name: "Reactivate" }));
+
+    let wizard = await screen.findByRole("dialog", { name: "Reactivate Operator Inactive" });
+    fireEvent.click(within(wizard).getByRole("button", { name: "Continue" }));
+    expect(wizard).toHaveTextContent("Role");
+    expect(wizard).toHaveTextContent("Driver / Operator");
+    expect(wizard).toHaveTextContent("Currently inactive");
+    const requiredRoleActivation = within(wizard).getByRole("checkbox", { name: "Reactivate role as part of this assignment" });
+    expect(requiredRoleActivation).toBeChecked();
+    expect(requiredRoleActivation).toHaveAttribute("aria-readonly", "true");
+    fireEvent.click(within(wizard).getByRole("button", { name: "Review changes" }));
+    let review = await within(wizard).findByRole("group", { name: "Final assignment" });
+    expect(review).toHaveTextContent("PersonOperator Inactive");
+    expect(review).toHaveTextContent("RoleDriver / Operator → Reactivate");
+    expect(review).toHaveTextContent("AssetLeave unassigned");
+    expect(within(wizard).getByRole("button", { name: "REACTIVATE" })).toBeEnabled();
+
+    fireEvent.click(within(wizard).getByRole("button", { name: "Back" }));
+    fireEvent.change(within(wizard).getByLabelText("Wizard asset"), { target: { value: deployedMachine.id } });
+    wizard = screen.getByRole("dialog", { name: "Assign Operator Inactive" });
+    expect(wizard).toHaveTextContent("Site: Quarry (derived from deployment)");
+    fireEvent.click(within(wizard).getByRole("button", { name: "Review changes" }));
+    review = await within(wizard).findByRole("group", { name: "Final assignment" });
+    expect(review).toHaveTextContent("PersonOperator Inactive");
+    expect(review).toHaveTextContent("RoleDriver / Operator → Reactivate");
+    expect(review).toHaveTextContent("AssetBig digger · Excavator");
+    expect(review).toHaveTextContent("SiteQuarry");
+    expect(wizard).not.toHaveTextContent("Assign Operator Inactive to Big digger at Quarry");
+    expect(within(wizard).getByRole("button", { name: "REACTIVATE & ASSIGN" })).toBeEnabled();
+    expect(wizard).not.toHaveTextContent(/before\s+assignment/i);
+  });
+
   it("groups one identity's memberships and grants another role through the normal Owner API", async () => {
     const apiRequest = vi.fn().mockResolvedValue({});
     const props = common(apiRequest);
@@ -476,8 +676,11 @@ describe("Owner operations tables", () => {
     const dialog = await screen.findByRole("dialog", { name: "Assign Operator Invited" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
-    await within(dialog).findByText("Assign Operator Invited to Big digger at Quarry");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Assign Driver / Operator" }));
+    const review = await within(dialog).findByRole("group", { name: "Final assignment" });
+    expect(review).toHaveTextContent("Operator Invited");
+    expect(review).toHaveTextContent("Big digger · Excavator");
+    expect(review).toHaveTextContent("Quarry");
+    fireEvent.click(within(dialog).getByRole("button", { name: "ASSIGN" }));
 
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
       "/api/v1/owner/operations/execute",
@@ -491,6 +694,42 @@ describe("Owner operations tables", () => {
       site_id: siteOne.id,
       regular_duty_minutes: 600,
     }));
+  });
+
+  it("uses clear explicit role-reactivation wording and a final-state review for person assignment", async () => {
+    const apiRequest = operationApi((intent) => operationPlan("ASSIGN_DRIVER", {
+      title: "Assign Operator Inactive",
+      dependencies: [
+        { kind: "DEPLOYMENT", id: "deployment-1", label: "Quarry", status: "ACTIVE", details: { site_id: siteOne.id } },
+        { kind: "DRIVER", id: inactiveDriver.membership_id, label: inactiveDriver.display_name, status: "INACTIVE", details: { role: "DRIVER", assignment_state: "UNASSIGNED" } },
+      ],
+      blocked_reasons: intent.activate_membership ? [] : ["Explicitly reactivate the Driver / Operator role to continue."],
+      planned_changes: intent.activate_membership ? ["Reactivate Operator Inactive's Driver / Operator role", "Assign Operator Inactive to Big digger at Quarry"] : [],
+      can_execute: Boolean(intent.activate_membership),
+    }));
+    render(<AssignmentsPanel assets={[deployedMachine]} people={[inactiveDriver]} sites={[siteOne]} {...common(apiRequest)} />);
+
+    fireEvent.change(screen.getByLabelText("Assignment asset"), { target: { value: deployedMachine.id } });
+    fireEvent.change(screen.getByLabelText("Driver / Operator"), { target: { value: inactiveDriver.membership_id } });
+    fireEvent.click(screen.getByRole("button", { name: "Review assignment" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Assign Operator Inactive" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(dialog).toHaveTextContent("Role");
+    expect(dialog).toHaveTextContent("Driver / Operator");
+    expect(dialog).toHaveTextContent("Currently inactive");
+    const roleChoice = within(dialog).getByRole("checkbox", { name: "Reactivate role as part of this assignment" });
+    expect(roleChoice).not.toBeChecked();
+    expect(dialog).not.toHaveTextContent(/before\s+assignment/i);
+    fireEvent.click(roleChoice);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review changes" }));
+
+    const review = await within(dialog).findByRole("group", { name: "Final assignment" });
+    expect(review).toHaveTextContent("PersonOperator Inactive");
+    expect(review).toHaveTextContent("RoleDriver / Operator → Reactivate");
+    expect(review).toHaveTextContent("AssetBig digger · Excavator");
+    expect(review).toHaveTextContent("SiteQuarry");
+    expect(within(dialog).getByRole("button", { name: "REACTIVATE & ASSIGN" })).toBeEnabled();
   });
 
   it("renders current assignment details and reviews ending the relationship", async () => {

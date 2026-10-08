@@ -188,7 +188,7 @@ export function OwnerWorkspace() {
           {tab === "deployments" && <DeploymentsPanel assets={assets} sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} onViewAssignments={() => showTab("assignments")} />}
           {tab === "assignments" && <AssignmentsPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
           {tab === "reports" && <OwnerOperations accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} />}
-          {tab === "templates" && <ReportTemplates apiRequest={request} setError={setError} />}
+          {tab === "templates" && <ReportTemplates accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} sites={sites} />}
         </div>}
       </section>
     </div>

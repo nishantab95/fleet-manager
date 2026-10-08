@@ -44,8 +44,13 @@ Complete and sign this checklist before onboarding a real driver.
 - [ ] App version/build identifier recorded.
 - [ ] Camera permission tested.
 - [ ] Active assignment appears.
-- [ ] Exactly four primary actions are visible: TRIP COMPLETE, KM READING,
-      DIESEL, and EMERGENCY.
+- [ ] While off duty, only START DUTY and EMERGENCY are visible as operational
+      actions.
+- [ ] While on duty, EMERGENCY is prominent; the tipper shows TRIP COMPLETE and
+      DIESEL, MAINTENANCE is disabled as `Coming later`, and END DUTY is at the
+      bottom.
+- [ ] START DUTY captures START KM and END DUTY captures END KM with the
+      required evidence; no standalone primary KM tile is shown.
 - [ ] Offline trip captured, app terminated, restarted, and event still present.
 - [ ] Offline event synced after backend recovery.
 - [ ] Duplicate sync produced one logical event.
@@ -56,6 +61,19 @@ Complete and sign this checklist before onboarding a real driver.
 - [ ] Eight approved trips reconcile across dashboard/site/tipper/Excel.
 - [ ] START 10000 and END 10120 reconcile to 120 KM.
 - [ ] Approved diesel is 30 L and is labelled issued/recorded.
+- [ ] Simple Site Workbook selects exactly one Site and date range, opens with
+      `SUMMARY`, and has exactly one sheet per historically relevant asset.
+- [ ] Moving an asset or changing its Driver during the range leaves old rows
+      attributed to the old Site/person and new rows to the new Site/person.
+- [ ] A same-day Driver reassignment produces two daily rows with the historical
+      people but one distinct asset Day Worked.
+- [ ] Multiple duty sessions use the authoritative first/last daily aggregate,
+      retain each event's review status, and do not drop the day's activity.
+- [ ] Summary Pending Items and Exceptions reconcile to pending events,
+      structured exceptions, and disputes in daily rows.
+- [ ] Machinery/tipper non-applicable cells show `N/A`; recorded-diesel ratios
+      carry the consumption disclaimer and remain unavailable when their
+      denominator is zero or missing.
 - [ ] A pending/disputed/missing-reading failure scenario blocks closure.
 - [ ] Emergency contact process is explained; the app is not treated as a guaranteed emergency-response service.
 - [ ] Rollback/contact plan is defined.

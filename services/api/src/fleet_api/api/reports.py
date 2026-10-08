@@ -86,6 +86,8 @@ from fleet_api.domain.reporting import (
 )
 from fleet_api.storage.objects import ObjectStorage
 
+from .simple_site_workbook import build_simple_site_workbook
+
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 
 
@@ -1179,6 +1181,46 @@ def daily_excel(
             f"FleetManager-{report.operational_day.operational_date.isoformat()}-"
             f"{template_segment}.xlsx"
         )
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except DomainError as exc:
+        db.rollback()
+        _fail(exc)
+
+
+@router.get("/sites/{site_id}/simple-workbook.xlsx")
+def simple_site_workbook(
+    site_id: UUID,
+    from_date: date = Query(),
+    to_date: date = Query(),
+    context: AuthContext = Depends(require_owner_admin),
+    db: Session = Depends(get_db),
+) -> Response:
+    try:
+        report = _service(db, context).site_period(site_id, from_date, to_date)
+        duty_sessions = list(
+            db.scalars(
+                select(DutySession)
+                .where(
+                    DutySession.company_id == context.company.id,
+                    DutySession.site_id == report.site.id,
+                    DutySession.operational_date >= from_date,
+                    DutySession.operational_date <= to_date,
+                )
+                .order_by(
+                    DutySession.operational_date,
+                    DutySession.started_at,
+                    DutySession.id,
+                )
+            ).all()
+        )
+        content = build_simple_site_workbook(report, duty_sessions)
+        db.commit()
+        site_segment = _template_filename_segment(report.site.short_name or report.site.name)
+        filename = f"{site_segment}-{from_date.isoformat()}-to-{to_date.isoformat()}.xlsx"
         return Response(
             content=content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

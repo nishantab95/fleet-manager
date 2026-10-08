@@ -14,7 +14,7 @@ import 'package:fleet_manager_mobile/domain/driver_models.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('pilot driver shell exposes four actions and diagnostics', (
+  testWidgets('pilot driver shell exposes off-duty actions and diagnostics', (
     tester,
   ) async {
     final database = LocalDatabase(NativeDatabase.memory());
@@ -49,10 +49,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('TRIP COMPLETE'), findsOneWidget);
-    expect(find.text('KM READING'), findsOneWidget);
-    expect(find.text('DIESEL'), findsOneWidget);
+    expect(find.text('START DUTY'), findsOneWidget);
     expect(find.text('EMERGENCY'), findsOneWidget);
+    expect(find.text('TRIP COMPLETE'), findsNothing);
+    expect(find.text('KM READING'), findsNothing);
+    expect(find.text('DIESEL'), findsNothing);
     await tester.tap(find.byTooltip('Diagnostics'));
     await tester.pumpAndSettle();
     expect(find.text('App version'), findsOneWidget);

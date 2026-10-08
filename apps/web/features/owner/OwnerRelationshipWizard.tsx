@@ -64,6 +64,10 @@ function siteLabel(site: OwnerSite) {
   return site.short_name || site.name;
 }
 
+function businessTitle(value: string) {
+  return value.toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function operationLabel(action: OwnerOperationIntent["action"]) {
   const labels: Record<OwnerOperationIntent["action"], string> = {
     ACTIVATE_PERSON: "Activate person",
@@ -76,6 +80,7 @@ function operationLabel(action: OwnerOperationIntent["action"]) {
     REASSIGN_DRIVER: "Change Driver / Operator",
     END_ASSIGNMENT: "End assignment",
     DEACTIVATE_ASSET: "Deactivate asset",
+    REACTIVATE_ASSET: "Reactivate asset",
     DEACTIVATE_SITE: "Deactivate Site",
     REACTIVATE_SITE: "Reactivate Site",
   };
@@ -90,9 +95,31 @@ function hasChoices(action: OwnerOperationIntent["action"]) {
     "MOVE_DEPLOYMENT",
     "ASSIGN_DRIVER",
     "REASSIGN_DRIVER",
+    "REACTIVATE_ASSET",
     "DEACTIVATE_SITE",
     "REACTIVATE_SITE",
   ]).has(action);
+}
+
+function operationButtonLabel(intent: OwnerOperationIntent, driver?: OwnerPerson) {
+  if (intent.action === "REACTIVATE_ASSET") {
+    return intent.site_id || intent.driver_membership_id ? "REACTIVATE & SET UP" : "REACTIVATE";
+  }
+  if ((intent.action === "ASSIGN_DRIVER" || intent.action === "REASSIGN_DRIVER") && driver?.status === "INACTIVE" && intent.activate_membership) {
+    return "REACTIVATE & ASSIGN";
+  }
+  if (intent.action === "ACTIVATE_PERSON" && driver?.role === "DRIVER") {
+    return intent.asset_id ? "REACTIVATE & ASSIGN" : "REACTIVATE";
+  }
+  if (intent.action === "ASSIGN_DRIVER") return "ASSIGN";
+  return operationLabel(intent.action);
+}
+
+function wizardTitle(plan: OwnerOperationPlan | null, intent: OwnerOperationIntent, person?: OwnerPerson) {
+  if (intent.action === "ACTIVATE_PERSON" && person?.role === "DRIVER") {
+    return intent.asset_id ? `Assign ${person.display_name}` : `Reactivate ${person.display_name}`;
+  }
+  return plan?.title || operationLabel(intent.action);
 }
 
 type BodyProps = Omit<Props, "open" | "initialIntent"> & {
@@ -133,6 +160,11 @@ function OwnerRelationshipWizardBody({
     () => people.filter((person) => person.role === "SUPERVISOR" && person.status === "ACTIVE"),
     [people],
   );
+  const selectedAsset = assets.find((asset) => asset.id === intent.asset_id);
+  const selectedPerson = people.find((person) => person.membership_id === intent.person_membership_id);
+  const selectedDriver = drivers.find((driver) => driver.membership_id === intent.driver_membership_id);
+  const operationDriver = selectedDriver ?? (selectedPerson?.role === "DRIVER" ? selectedPerson : undefined);
+  const structuredReview = intent.action === "REACTIVATE_ASSET" || intent.action === "ASSIGN_DRIVER" || (intent.action === "ACTIVATE_PERSON" && selectedPerson?.role === "DRIVER");
 
   const loadPreview = useCallback(async (nextIntent: OwnerOperationIntent) => {
     setBusy(true);
@@ -226,7 +258,7 @@ function OwnerRelationshipWizardBody({
         <div className="owner-dialog-heading">
           <div>
             <p className="owner-section-eyebrow">Relationship operation</p>
-            <h2 id="owner-operation-title">{plan?.title || operationLabel(intent.action)}</h2>
+            <h2 id="owner-operation-title">{wizardTitle(plan, intent, selectedPerson)}</h2>
           </div>
           <button aria-label="Close operation" className="owner-icon-button" disabled={busy} onClick={onClose} type="button">×</button>
         </div>
@@ -247,9 +279,11 @@ function OwnerRelationshipWizardBody({
         {step === 1 && plan && (
           <div className="owner-wizard-body">
             <p>{plan.summary}</p>
-            <OperationItems heading="Current state" items={plan.current_state} />
-            <OperationItems heading="Active relationships" items={plan.dependencies} />
-            {plan.dependencies.length === 0 && <p className="owner-dim">No dependent relationships.</p>}
+            {intent.action === "REACTIVATE_ASSET" && selectedAsset ? <ReactivateAssetState asset={selectedAsset} plan={plan} /> : <>
+              <OperationItems heading="Current state" items={plan.current_state} />
+              <OperationItems heading="Active relationships" items={plan.dependencies} />
+              {plan.dependencies.length === 0 && <p className="owner-dim">No dependent relationships.</p>}
+            </>}
           </div>
         )}
 
@@ -272,8 +306,8 @@ function OwnerRelationshipWizardBody({
 
         {step === 3 && plan && (
           <div className="owner-wizard-body">
-            <h3>Review</h3>
-            {plan.planned_changes.length > 0 && <ol className="owner-change-list">{plan.planned_changes.map((change) => <li key={change}>{change}</li>)}</ol>}
+            <h3>{structuredReview ? "Review setup" : "Review"}</h3>
+            {structuredReview ? <FinalStateReview assets={assets} intent={intent} people={people} sites={sites} /> : plan.planned_changes.length > 0 && <ol className="owner-change-list">{plan.planned_changes.map((change) => <li key={change}>{change}</li>)}</ol>}
             {error.toLowerCase().includes("state changed") && <button className="secondary" disabled={busy} onClick={() => void review()} type="button">Review again</button>}
             {plan.blocked_reasons.length > 0 && <div className="owner-blocker" role="alert"><strong>This operation cannot continue yet.</strong><ul>{plan.blocked_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>{onViewAssignments && plan.blocked_reasons.some((reason) => reason.toLowerCase().includes("duty")) && <button className="secondary" onClick={() => { onClose(); onViewAssignments(); }} type="button">View active assignment / duty</button>}</div>}
             {plan.warnings.length > 0 && <ul>{plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
@@ -292,7 +326,7 @@ function OwnerRelationshipWizardBody({
           {previewFailure ? <><button className="secondary" disabled={busy} onClick={onClose} type="button">Close</button><button disabled={busy} onClick={() => void loadPreview(intent)} type="button">Retry</button></> : <>
             {step === 1 && <><button className="secondary" disabled={busy} onClick={onClose} type="button">Cancel</button><button disabled={busy || !plan} onClick={() => setStep(hasChoices(intent.action) ? 2 : 3)} type="button">Continue</button></>}
             {step === 2 && <><button className="secondary" disabled={busy} onClick={() => setStep(1)} type="button">Back</button><button disabled={busy} onClick={() => void review()} type="button">Review changes</button></>}
-            {step === 3 && <><button className="secondary" disabled={busy} onClick={() => setStep(hasChoices(intent.action) ? 2 : 1)} type="button">Back</button><button disabled={busy || !plan?.can_execute} onClick={() => void execute()} type="button">{busy ? "Working…" : operationLabel(intent.action)}</button></>}
+            {step === 3 && <><button className="secondary" disabled={busy} onClick={() => setStep(hasChoices(intent.action) ? 2 : 1)} type="button">Back</button><button disabled={busy || !plan?.can_execute} onClick={() => void execute()} type="button">{busy ? "Working…" : operationButtonLabel(intent, operationDriver)}</button></>}
             {step === 4 && <button onClick={onClose} type="button">Done</button>}
           </>}
         </div>
@@ -310,6 +344,73 @@ export function OwnerRelationshipWizard(props: Props) {
 function OperationItems({ heading, items }: { heading: string; items: OwnerOperationPlan["dependencies"] }) {
   if (items.length === 0) return null;
   return <section><h3>{heading}</h3><div className="owner-operation-items">{items.map((item) => <article key={`${item.kind}-${item.id}`}><div><strong>{item.label}</strong><small>{title(item.kind)}</small></div><StatusChip status={item.status} /></article>)}</div></section>;
+}
+
+function ReactivateAssetState({ asset, plan }: { asset: OwnerAsset; plan: OwnerOperationPlan }) {
+  const previousRelationships = [...plan.current_state, ...plan.dependencies].filter((item) => item.kind === "PREVIOUS_SITE" || item.kind === "PREVIOUS_DRIVER");
+  return <>
+    <section aria-label="Asset current state">
+      <h3>Current state</h3>
+      <dl className="owner-detail-list">
+        <div><dt>Asset</dt><dd>{assetLabel(asset)}</dd></div>
+        <div><dt>Registration</dt><dd>{asset.registration_number || "Not applicable"}</dd></div>
+        <div><dt>Type</dt><dd>{businessTitle(asset.asset_type)}</dd></div>
+        <div><dt>Ownership</dt><dd>{businessTitle(asset.ownership_type)}</dd></div>
+        <div><dt>Lifecycle</dt><dd>{businessTitle(asset.status)}</dd></div>
+      </dl>
+    </section>
+    <OperationItems heading="Previous relationships" items={previousRelationships} />
+  </>;
+}
+
+function FinalStateReview({
+  intent,
+  assets,
+  people,
+  sites,
+}: {
+  intent: OwnerOperationIntent;
+  assets: OwnerAsset[];
+  people: OwnerPerson[];
+  sites: OwnerSite[];
+}) {
+  const asset = assets.find((item) => item.id === intent.asset_id);
+  const driver = people.find((item) => item.membership_id === (intent.driver_membership_id || intent.person_membership_id));
+  const siteId = intent.site_id || asset?.current_deployment?.site_id;
+  const site = sites.find((item) => item.id === siteId);
+  const reactivateRole = intent.action === "ACTIVATE_PERSON" || (driver?.status === "INACTIVE" && intent.activate_membership);
+
+  if (intent.action === "REACTIVATE_ASSET") {
+    return <dl aria-label="Final setup" className="owner-detail-list" role="group">
+      <div><dt>Asset</dt><dd>{asset ? assetLabel(asset) : "Selected asset"} → Active</dd></div>
+      <div><dt>Site</dt><dd>{site ? siteLabel(site) : "Leave undeployed"}</dd></div>
+      <div><dt>Driver / Operator</dt><dd>{driver?.display_name || "Leave unassigned"}</dd></div>
+      {reactivateRole && <div><dt>Role</dt><dd>Driver / Operator → Reactivate</dd></div>}
+    </dl>;
+  }
+
+  return <dl aria-label="Final assignment" className="owner-detail-list" role="group">
+    <div><dt>Person</dt><dd>{driver?.display_name || "Choose a Driver / Operator"}</dd></div>
+    <div><dt>Role</dt><dd>{reactivateRole ? "Driver / Operator → Reactivate" : "Driver / Operator"}</dd></div>
+    <div><dt>Asset</dt><dd>{asset ? `${assetLabel(asset)} · ${businessTitle(asset.asset_type)}` : intent.action === "ACTIVATE_PERSON" ? "Leave unassigned" : "Choose an asset"}</dd></div>
+    <div><dt>Site</dt><dd>{site ? siteLabel(site) : intent.action === "ACTIVATE_PERSON" ? "No Site setup" : "Choose a Site"}</dd></div>
+  </dl>;
+}
+
+function InactiveDriverRoleChoice({
+  checked,
+  context,
+  onChange,
+}: {
+  checked: boolean;
+  context: "assignment" | "setup";
+  onChange: (checked: boolean) => void;
+}) {
+  return <fieldset>
+    <legend>Role</legend>
+    <p><strong>Driver / Operator</strong><br /><span className="owner-dim">Currently inactive</span></p>
+    <label><input checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" /> Reactivate role as part of this {context}</label>
+  </fieldset>;
 }
 
 function OperationChoices({
@@ -337,6 +438,10 @@ function OperationChoices({
   const selectedAsset = assets.find((item) => item.id === intent.asset_id);
   const selectedDriver = drivers.find((item) => item.membership_id === intent.driver_membership_id);
   const assignmentDependency = plan?.dependencies.find((item) => item.kind === "ASSIGNMENT");
+  const eligibleDrivers = [...drivers.filter((driver) => !driver.has_active_assignment)].sort((left, right) => {
+    const statusOrder = { ACTIVE: 0, INVITED: 1, INACTIVE: 2 } as const;
+    return statusOrder[left.status] - statusOrder[right.status] || left.display_name.localeCompare(right.display_name);
+  });
 
   const toggleId = (field: "selected_site_ids" | "selected_supervisor_ids" | "selected_asset_ids", id: string) => {
     const current = new Set(intent[field] ?? []);
@@ -357,6 +462,16 @@ function OperationChoices({
     setIntent({ ...intent, asset_resolutions: [...current.filter((item) => item.asset_id !== assetId), next] });
   };
 
+  if (intent.action === "REACTIVATE_ASSET") {
+    return <div className="owner-dialog-form">
+      <fieldset><legend>Asset</legend><label><input checked readOnly type="checkbox" /> Reactivate asset</label></fieldset>
+      <label>Site<select aria-label="Reactivation Site" onChange={(event) => setIntent({ ...intent, site_id: event.target.value || null })} value={intent.site_id ?? ""}><option value="">Leave undeployed</option>{activeSites.map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>
+      <label>Driver / Operator<select aria-label="Reactivation Driver / Operator" onChange={(event) => setIntent({ ...intent, driver_membership_id: event.target.value || null, activate_membership: false })} value={intent.driver_membership_id ?? ""}><option value="">Leave unassigned</option>{eligibleDrivers.map((driver) => <option key={driver.membership_id} value={driver.membership_id}>{driver.display_name} · Driver / Operator · {businessTitle(driver.status)} · Unassigned</option>)}</select></label>
+      {intent.driver_membership_id && !intent.site_id && <p role="note">Choose a Site before assigning a Driver / Operator.</p>}
+      {selectedDriver?.status === "INACTIVE" && <InactiveDriverRoleChoice checked={intent.activate_membership ?? false} context="setup" onChange={(checked) => setIntent({ ...intent, activate_membership: checked })} />}
+    </div>;
+  }
+
   if (intent.action === "MOVE_DEPLOYMENT") {
     return <div className="owner-dialog-form"><label>Destination Site<select aria-label="Destination Site" onChange={(event) => setIntent({ ...intent, target_site_id: event.target.value || null })} value={intent.target_site_id ?? ""}><option value="">Choose destination…</option>{activeSites.filter((site) => site.id !== selectedAsset?.current_deployment?.site_id).map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>{assignmentDependency && <fieldset><legend>Current Driver / Operator</legend><label><input checked={intent.assignment_action === "KEEP"} name="assignment-action" onChange={() => setIntent({ ...intent, assignment_action: "KEEP" })} type="radio" /> Keep current Driver / Operator</label><label><input checked={intent.assignment_action === "END"} name="assignment-action" onChange={() => setIntent({ ...intent, assignment_action: "END" })} type="radio" /> End assignment</label></fieldset>}</div>;
   }
@@ -371,12 +486,12 @@ function OperationChoices({
   }
 
   if (intent.action === "ASSIGN_DRIVER" || (intent.action === "ACTIVATE_PERSON" && person?.role === "DRIVER")) {
-    return <div className="owner-dialog-form">{intent.action === "ASSIGN_DRIVER" && !intent.driver_membership_id && <label>Driver / Operator<select aria-label="Wizard Driver / Operator" onChange={(event) => setIntent({ ...intent, driver_membership_id: event.target.value || null, activate_membership: false })} value={intent.driver_membership_id ?? ""}><option value="">Choose person…</option>{drivers.map((driver) => <option key={driver.membership_id} value={driver.membership_id}>{driver.display_name} · {driver.status}</option>)}</select></label>}{!intent.asset_id && <label>Asset<select aria-label="Wizard asset" onChange={(event) => setIntent({ ...intent, asset_id: event.target.value || null, site_id: null })} value={intent.asset_id ?? ""}><option value="">Choose available asset…</option>{activeAssets.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset)} · {asset.current_deployment?.site_name || "Undeployed"}</option>)}</select></label>}{selectedAsset && !selectedAsset.current_deployment && <label>Deploy to<select aria-label="Deploy assignment asset to" onChange={(event) => setIntent({ ...intent, site_id: event.target.value || null })} value={intent.site_id ?? ""}><option value="">Choose Site…</option>{activeSites.map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>}{selectedAsset?.current_deployment && <p><strong>Site:</strong> {selectedAsset.current_deployment.site_name} (derived from deployment)</p>}{intent.action === "ASSIGN_DRIVER" && selectedDriver?.status === "INACTIVE" && <label><input checked={intent.activate_membership ?? false} onChange={(event) => setIntent({ ...intent, activate_membership: event.target.checked })} type="checkbox" /> Reactivate Driver / Operator before assignment</label>}</div>;
+    return <div className="owner-dialog-form">{intent.action === "ASSIGN_DRIVER" && !intent.driver_membership_id && <label>Driver / Operator<select aria-label="Wizard Driver / Operator" onChange={(event) => setIntent({ ...intent, driver_membership_id: event.target.value || null, activate_membership: false })} value={intent.driver_membership_id ?? ""}><option value="">Choose person…</option>{eligibleDrivers.map((driver) => <option key={driver.membership_id} value={driver.membership_id}>{driver.display_name} · {driver.status}</option>)}</select></label>}{intent.action === "ACTIVATE_PERSON" && person?.status === "INACTIVE" && <fieldset><legend>Role</legend><p><strong>Driver / Operator</strong><br /><span className="owner-dim">Currently inactive</span></p><label><input aria-readonly="true" checked readOnly type="checkbox" /> Reactivate role as part of this assignment</label></fieldset>}{!intent.asset_id && <label>Asset<select aria-label="Wizard asset" onChange={(event) => setIntent({ ...intent, asset_id: event.target.value || null, site_id: null })} value={intent.asset_id ?? ""}><option value="">Choose available asset…</option>{activeAssets.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset)} · {asset.current_deployment?.site_name || "Undeployed"}</option>)}</select></label>}{selectedAsset && !selectedAsset.current_deployment && <label>Deploy to<select aria-label="Deploy assignment asset to" onChange={(event) => setIntent({ ...intent, site_id: event.target.value || null })} value={intent.site_id ?? ""}><option value="">Choose Site…</option>{activeSites.map((site) => <option key={site.id} value={site.id}>{siteLabel(site)}</option>)}</select></label>}{selectedAsset?.current_deployment && <p><strong>Site:</strong> {selectedAsset.current_deployment.site_name} (derived from deployment)</p>}{intent.action === "ASSIGN_DRIVER" && selectedDriver?.status === "INACTIVE" && <InactiveDriverRoleChoice checked={intent.activate_membership ?? false} context="assignment" onChange={(checked) => setIntent({ ...intent, activate_membership: checked })} />}</div>;
   }
 
   if (intent.action === "REASSIGN_DRIVER") {
     const currentDriverId = assignmentDependency?.details.driver_membership_id;
-    return <div className="owner-dialog-form"><label>New Driver / Operator<select aria-label="Replacement Driver / Operator" onChange={(event) => setIntent({ ...intent, driver_membership_id: event.target.value || null, activate_membership: false })} value={intent.driver_membership_id ?? ""}><option value="">Choose available person…</option>{drivers.filter((driver) => !driver.has_active_assignment && driver.membership_id !== currentDriverId).map((driver) => <option key={driver.membership_id} value={driver.membership_id}>{driver.display_name} · {driver.status}</option>)}</select></label>{selectedDriver?.status === "INACTIVE" && <label><input checked={intent.activate_membership ?? false} onChange={(event) => setIntent({ ...intent, activate_membership: event.target.checked })} type="checkbox" /> Reactivate Driver / Operator before assignment</label>}</div>;
+    return <div className="owner-dialog-form"><label>New Driver / Operator<select aria-label="Replacement Driver / Operator" onChange={(event) => setIntent({ ...intent, driver_membership_id: event.target.value || null, activate_membership: false })} value={intent.driver_membership_id ?? ""}><option value="">Choose available person…</option>{eligibleDrivers.filter((driver) => driver.membership_id !== currentDriverId).map((driver) => <option key={driver.membership_id} value={driver.membership_id}>{driver.display_name} · {driver.status}</option>)}</select></label>{selectedDriver?.status === "INACTIVE" && <InactiveDriverRoleChoice checked={intent.activate_membership ?? false} context="assignment" onChange={(checked) => setIntent({ ...intent, activate_membership: checked })} />}</div>;
   }
 
   if (intent.action === "DEPLOY_ASSET") {

@@ -63,12 +63,18 @@ These fixed OTPs are local Pilot provider behavior only. Production authenticati
 
 1. Select `DRIVER`, enter the phone, send OTP, and continue with `111111`.
 2. Set the server URL if needed.
-3. Confirm the four primary actions are visible: `TRIP COMPLETE`, `KM READING`, `DIESEL`, `EMERGENCY`.
-4. Tap `KM READING`, enter `10000`, and take/choose the dashboard photo.
-5. Record four trips and record `30` litres without a diesel photo.
-6. Lock/minimize the app, reopen it, and confirm the duty is still `ACTIVE`.
-7. Enter `10120` with an end photo. Confirm the next `KM READING` starts a sequential session.
-8. Send one emergency and confirm the success message.
+3. While off duty, confirm only `START DUTY` and `EMERGENCY` are visible as
+   operational actions.
+4. Tap `START DUTY`, enter START KM `10000`, and take/choose the dashboard
+   photo.
+5. While on duty, confirm `EMERGENCY` is prominent, `TRIP COMPLETE` and
+   `DIESEL` are available, `MAINTENANCE` says `Coming later` and is disabled,
+   and `END DUTY` is at the bottom. Confirm no standalone `KM READING` tile.
+6. Record four trips and record `30` litres without a diesel photo.
+7. Lock/minimize the app, reopen it, and confirm the duty is still `ACTIVE`.
+8. Tap `END DUTY`, enter END KM `10120`, and add the required end photo.
+   Confirm `START DUTY` begins the next sequential session.
+9. Send one emergency both off duty and on duty and confirm the success message.
 
 ## Supervisor smoke flow
 

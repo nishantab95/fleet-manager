@@ -134,10 +134,14 @@ controls.
 - Reporting ranges are calculated from the company IANA timezone and converted
   to UTC for queries. The closure stores the timezone and day-start snapshot so
   a later settings change cannot reinterpret a historical close.
-- Official totals use approved event status only. Pending, disputed, rejected,
-  ambiguous KM, and unresolved emergency states stay visible as separate
-  exceptions. Diesel is labelled issued/recorded and no consumption or
-  efficiency metric is derived.
+- Official trip, odometer, and diesel totals use approved event status. HMR
+  keeps its existing accepted-state semantics, and any pending HMR remains
+  visibly pending. Disputed, rejected, ambiguous meter, and unresolved
+  emergency states stay visible separately. Diesel is labelled issued/recorded.
+  The Simple Site Workbook may derive distance per litre recorded or litres
+  recorded per machine hour from the same authoritative values, but labels and
+  an in-workbook note make clear that neither is a direct measurement of actual
+  fuel consumed.
 - Close/reopen transitions append both a closure-history row and an audit log.
   Structured blockers prevent a close; only an owner can reopen a closed day,
   and the reason is mandatory. A supervisor cannot bypass blockers or use a
@@ -146,6 +150,15 @@ controls.
   JSON API. The workbook contains no macros, tokens, object-store keys, or
   session data. Text values beginning with `=`, `+`, `-`, or `@` are prefixed
   before cell creation to prevent formula injection.
+- The Simple Site Workbook endpoint is Owner-only and resolves the Site through
+  the authenticated company before loading effective-dated deployments,
+  Assignments, duty sessions, or events. A foreign Site is indistinguishable
+  from a missing Site. The inclusive range is limited to 366 operational days
+  to bound per-day report queries and workbook memory. User-controlled Site,
+  asset, registration, manufacturer, model, and personnel text passes through
+  the same formula-injection guard, and illegal OpenXML control characters are
+  removed before workbook serialization. Excel sheet names are separately
+  sanitized, length-bounded, and made unique.
 
 ## PC Role Lab controls
 
@@ -235,6 +248,11 @@ Tokens and OTP values are never written to handover audit records.
   `ASSET_MOVED_SITE`, and `ASSET_REMOVED_FROM_SITE` audit entries with old and
   new Site identifiers. Credentials, tokens, evidence bytes, and local runtime
   data are never recorded.
+- Asset reactivation setup rechecks and locks the tenant-scoped asset, selected
+  Site, Driver membership, current assignment, deployment, and duty state. The
+  lifecycle, optional deployment, optional explicit Driver-role activation, new
+  Assignment, and audit entries commit or roll back as one transaction; the
+  browser cannot supply authoritative relationship state.
 
 ## Driver / Operator assignment controls
 
