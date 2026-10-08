@@ -71,6 +71,7 @@ def _intent(payload: OwnerOperationRequest) -> OwnerOperationIntent:
         assignment_action=payload.assignment_action,
         activate_membership=payload.activate_membership,
         regular_duty_minutes=payload.regular_duty_minutes,
+        reason=payload.reason,
     )
 
 

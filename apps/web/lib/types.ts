@@ -60,6 +60,7 @@ export type OwnerOperationAction =
   | "REASSIGN_DRIVER"
   | "END_ASSIGNMENT"
   | "DEACTIVATE_ASSET"
+  | "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET"
   | "REACTIVATE_ASSET"
   | "DEACTIVATE_SITE"
   | "REACTIVATE_SITE";
@@ -83,6 +84,7 @@ export type OwnerOperationIntent = {
   assignment_action?: "KEEP" | "END" | null;
   activate_membership?: boolean;
   regular_duty_minutes?: number;
+  reason?: string | null;
 };
 export type OwnerOperationItem = {
   kind: string;

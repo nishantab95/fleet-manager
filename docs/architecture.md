@@ -339,12 +339,14 @@ assets require a rental party, while changing an asset to owned clears all
 rental-only fields. Edits update the existing UUID so assignments, duty
 sessions, events, evidence, verification history, and reports remain linked.
 
-Deactivation is a status transition, never a delete. It is rejected while the
-asset has an effective assignment or active duty session. The mobile Owner
-Fleet tab consumes this API through one reusable, type-aware card and
-virtualized scrolling. Assignment identity is read-only here; assignment
-mutation remains Phase 1B.2. The PC Fleet CRUD UI is intentionally deferred to
-avoid creating a second incomplete management surface in this phase.
+Deactivation is a status transition, never a delete. The direct Fleet lifecycle
+route rejects it while the asset has an effective assignment or active duty
+session; the relationship orchestrator's documented atomic teardown paths are
+the only exceptions. The mobile Owner Fleet tab consumes this API through one
+reusable, type-aware card and virtualized scrolling. Assignment identity is
+read-only here; assignment mutation remains Phase 1B.2. The PC Fleet CRUD UI is
+intentionally deferred to avoid creating a second incomplete management surface
+in this phase.
 
 ## Phase 1B.2A Owner People and Sites boundary
 
@@ -401,7 +403,8 @@ The Owner deployment service exposes current placement, history, deploy/move,
 remove, and Site asset-list operations. Company scope comes only from the
 authenticated Owner membership. Initial deployment selects only an active Site;
 Driver and Supervisor selection remain separate. Active duty blocks a move or
-removal. An off-duty Assignment may be ended with removal or reconciled during a
+removal through the ordinary deployment operations. An off-duty Assignment may
+be ended with removal or reconciled during a
 move by the Owner relationship orchestrator, and an effective Assignment can be
 created only when its Site agrees with the deployment.
 
@@ -409,11 +412,12 @@ Owner Fleet cards and detail views show Site and Driver independently. Owner
 Site detail provides the alternate Site-first deployment flow. A direct
 deployment mutation remains conservative, while the Owner relationship
 orchestrator may reconcile an off-duty Assignment and deployment in one
-transaction. Active duty always blocks move and removal. Supervisor Site views
-read the same relationship, so every active deployed asset is visible to an
-authorized Supervisor even when it has no Driver and no events. Event review and
-Driver reporting remain Assignment-based and retain their existing totals and
-behavior.
+transaction. Active duty blocks ordinary move and removal; the force-close
+composite described below is the sole active-duty teardown exception. Supervisor
+Site views read the same relationship, so every active deployed asset is visible
+to an authorized Supervisor even when it has no Driver and no events. Event
+review and Driver reporting remain Assignment-based and retain their existing
+totals and behavior.
 
 ## Phase 1B.2C Driver / Operator assignment boundary
 
@@ -426,8 +430,8 @@ reassign preserve half-open history and are audited.
 Owners may manage any same-company deployed supported asset. Supervisors may
 manage only assets currently deployed to Sites granted through
 `SupervisorSiteAccess`; neither flow asks the user to choose a Site or a
-Supervisor. Active duty blocks changes. PostgreSQL driver and asset exclusion
-constraints remain the concurrency authority.
+Supervisor. Active duty blocks ordinary assignment changes. PostgreSQL driver
+and asset exclusion constraints remain the concurrency authority.
 
 Driver current-assignment responses expose every active Site supervisor. Owner
 People views expose a Driver's current asset and Site. Reports continue to join
@@ -444,6 +448,14 @@ membership, asset, deployment, assignment, duty, Site, and Supervisor-access
 state and returns business-language dependencies, blockers, and planned changes.
 The UI does not provide authoritative relationship state.
 
+Normal Asset and Person management uses contextual forms with human-readable
+Driver and Site selectors. The browser keeps preview, state-token, and execute
+as an internal safety protocol instead of presenting the planner as a four-step
+Current state / Choose changes / Review / Result wizard. A relationship-changing
+or destructive action may use one concise confirmation. Complex Site
+deactivation retains the dependency-review workflow because it can affect
+multiple relationships and requires explicit resolution choices.
+
 Every preview includes a SHA-256 state token over the normalized intent and the
 scoped authoritative rows. Execute repeats the preview with row locks and rejects
 a changed token with `409 State changed. Review the operation again.` before any
@@ -458,6 +470,23 @@ Sites with optional setup. Asset reactivation may remain undeployed, add a Site,
 or atomically reactivate, deploy, and assign an eligible Driver; selecting a
 Driver requires a deployment Site and activating an inactive Driver role is
 always explicit. It ends effective-dated rows and creates replacements when Site
-context changes; it never rewrites historical Site or Driver attribution. Active
-duty is an explicit blocker and is never ended or synthesized by an Owner
-operation.
+context changes; it never rewrites historical Site or Driver attribution.
+Active duty blocks ordinary Driver changes, Site moves/removal, and lifecycle
+teardown.
+
+`FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET` is the one narrow administrative
+exception. It is available only to an authenticated `OWNER_ADMIN`, requires a
+non-empty reason, and uses the same preview/state-token/execute boundary. Execute
+authoritatively reloads and locks the tenant-scoped asset, active duty,
+Assignment, Deployment, Driver, and Site state. In one transaction it closes the
+duty without inventing an END KM/HMR event or evidence, ends the current
+Assignment and Deployment, deactivates the asset, and appends an audit record
+containing the reason and affected relationship context. Any failure rolls back
+the complete teardown, and a changed preview token fails before mutation.
+
+Reporting continues through its existing missing-meter path: a forced close with
+no legitimate END reading produces the applicable missing END KM or END HMR
+exception and never fabricates distance, machine hours, or evidence. Driver
+clients reconcile current assignment and active-duty state from the server after
+refresh/sync; cached phone relationship state cannot override the completed
+server transition.

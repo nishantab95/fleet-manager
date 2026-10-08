@@ -80,6 +80,7 @@ function operationLabel(action: OwnerOperationIntent["action"]) {
     REASSIGN_DRIVER: "Change Driver / Operator",
     END_ASSIGNMENT: "End assignment",
     DEACTIVATE_ASSET: "Deactivate asset",
+  FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET: "Force close duty and deactivate asset",
     REACTIVATE_ASSET: "Reactivate asset",
     DEACTIVATE_SITE: "Deactivate Site",
     REACTIVATE_SITE: "Reactivate Site",

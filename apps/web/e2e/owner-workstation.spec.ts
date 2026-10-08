@@ -172,9 +172,10 @@ async function mockOwnerApi(page: Page, options: { ownerOperationsAvailable?: bo
       });
       return;
     }
-    const intent = path.endsWith("/owner/operations/preview")
-      ? route.request().postDataJSON() as { action: string; asset_id?: string; target_site_id?: string; site_id?: string; driver_membership_id?: string; activate_membership?: boolean }
+    const operationBody = path.includes("/owner/operations/")
+      ? route.request().postDataJSON() as { action: string; asset_id?: string; target_site_id?: string; site_id?: string; driver_membership_id?: string; activate_membership?: boolean; reason?: string; state_token?: string }
       : null;
+    const intent = path.endsWith("/owner/operations/preview") ? operationBody : null;
     const selectedDriver = people.find((person) => person.membership_id === intent?.driver_membership_id);
     const reactivateBlockers = intent?.action === "REACTIVATE_ASSET" ? [
       ...(selectedDriver && !intent.site_id ? ["Choose a Site before assigning a Driver / Operator."] : []),
@@ -198,6 +199,33 @@ async function mockOwnerApi(page: Page, options: { ownerOperationsAvailable?: bo
       blocked_reasons: reactivateBlockers,
       planned_changes: ["Reactivate Inactive Grader"],
       can_execute: reactivateBlockers.length === 0,
+    } : intent?.action === "DEACTIVATE_ASSET" && intent.asset_id === "asset-assigned" ? {
+      action: intent.action,
+      state_token: "b".repeat(64),
+      title: "Deactivate Green Tipper",
+      summary: "The active duty must be resolved first.",
+      current_state: [{ kind: "ASSET", id: "asset-assigned", label: "Green Tipper", status: "ACTIVE", details: {} }],
+      dependencies: [
+        { kind: "ASSIGNMENT", id: "assignment-1", label: "Ravi Kumar", status: "ON_DUTY", details: { driver_membership_id: "driver-active" } },
+        { kind: "DUTY", id: "duty-1", label: "Active duty", status: "ACTIVE", details: { started_at: "2026-10-08T02:45:00Z" } },
+      ],
+      warnings: ["The active duty must be force-closed before deactivation."],
+      allowed_resolutions: ["FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET"],
+      blocked_reasons: ["The active duty must be resolved first."],
+      planned_changes: [],
+      can_execute: false,
+    } : intent?.action === "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET" ? {
+      action: intent.action,
+      state_token: "c".repeat(64),
+      title: "Force close duty and deactivate Green Tipper",
+      summary: "Resolve the active duty without fabricating a meter reading.",
+      current_state: [{ kind: "DUTY", id: "duty-1", label: "Active duty", status: "ACTIVE", details: { started_at: "2026-10-08T02:45:00Z" } }],
+      dependencies: [{ kind: "ASSET", id: "asset-assigned", label: "Green Tipper", status: "ACTIVE", details: {} }],
+      warnings: ["END KM will remain missing."],
+      allowed_resolutions: ["FORCE_CLOSE"],
+      blocked_reasons: [],
+      planned_changes: ["Force close Ravi Kumar's active duty", "Deactivate Green Tipper"],
+      can_execute: Boolean(intent.reason?.trim()),
     } : intent ? {
       action: intent.action,
       state_token: "a".repeat(64),
@@ -213,6 +241,9 @@ async function mockOwnerApi(page: Page, options: { ownerOperationsAvailable?: bo
       planned_changes: intent.action === "MOVE_DEPLOYMENT" && intent.target_site_id ? ["Move North Excavator to River Yard"] : ["End Ravi Kumar's assignment to Green Tipper"],
       can_execute: intent.action !== "MOVE_DEPLOYMENT" || Boolean(intent.target_site_id),
     } : null;
+    const operationResult = path.endsWith("/owner/operations/execute") && operationBody
+      ? { action: operationBody.action, completed_changes: [`Applied ${operationBody.action}`], message: "Relationship updated." }
+      : null;
     const body = path.endsWith("/auth/web-refresh")
       ? { access_token: "owner-test-token", expires_in: 3600, membership_id: "owner-membership", company_id: "company-1", role: "OWNER_ADMIN" }
       : path.endsWith("/auth/me")
@@ -225,6 +256,8 @@ async function mockOwnerApi(page: Page, options: { ownerOperationsAvailable?: bo
               ? sites
               : operationPlan
                 ? operationPlan
+                : operationResult
+                  ? operationResult
               : path.endsWith("/owner/assets/asset-unassigned/eligible-drivers")
                 ? [{ membership_id: "driver-invited", display_name: "Asha Singh", phone: "+919900000002", status: "INVITED" }]
                 : [];
@@ -276,12 +309,18 @@ test.describe("mocked Owner workstation", () => {
     await expect(page.getByLabel("Asset").locator('option[value="asset-undeployed"]')).toContainText("Yard Roller");
     const deploymentRow = page.getByRole("table", { name: "Current deployments" }).getByRole("row").filter({ hasText: "North Excavator" });
     await deploymentRow.getByRole("button", { name: "Move", exact: true }).click();
-    const moveDialog = page.getByRole("dialog", { name: "Move North Excavator" });
+    const moveDialog = page.getByRole("dialog", { name: "North Excavator" });
     await expect(moveDialog).toBeVisible();
-    await moveDialog.getByRole("button", { name: "Continue" }).click();
-    await expect(moveDialog.getByLabel("Destination Site").locator('option[value="site-1"]')).toHaveCount(0);
-    await expect(moveDialog.getByLabel("Destination Site").locator('option[value="site-2"]')).toContainText("River Yard");
-    await moveDialog.getByRole("button", { name: "Close operation" }).click();
+    await expect(moveDialog.getByRole("region", { name: "Asset activity" })).toContainText("Off duty");
+    await expect(moveDialog.getByRole("list", { name: "Operation progress" })).toHaveCount(0);
+    await expect(moveDialog.getByRole("button", { name: "Continue" })).toHaveCount(0);
+    await expect(moveDialog.getByLabel("Site").locator('option[value="site-2"]')).toContainText("River Yard");
+    await moveDialog.getByLabel("Site").selectOption("site-2");
+    await moveDialog.getByRole("button", { name: "Save changes" }).click();
+    const moveConfirmation = page.getByRole("dialog", { name: "Move North Excavator?" });
+    await expect(moveConfirmation).toContainText("new historical deployment");
+    await moveConfirmation.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("dialog", { name: "North Excavator" }).getByRole("button", { name: "Close management form" }).click();
 
     await page.getByRole("button", { name: "Assignments", exact: true }).click();
     await page.getByLabel("Assignment asset").selectOption("asset-unassigned");
@@ -292,15 +331,18 @@ test.describe("mocked Owner workstation", () => {
     await expect(assignmentRow).toContainText("+919900000001");
     await expect(assignmentRow).toContainText("10 hours");
     await assignmentRow.getByRole("button", { name: "End assignment" }).click();
-    const endDialog = page.getByRole("dialog", { name: "End Ravi Kumar's assignment" });
+    const endDialog = page.getByRole("dialog", { name: "Green Tipper" });
     await expect(endDialog).toContainText("Ravi Kumar");
-    await endDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(endDialog.getByRole("region", { name: "Asset activity" })).toContainText("On duty");
+    await expect(endDialog.getByLabel("Driver / Operator")).toBeDisabled();
+    await expect(endDialog.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    await endDialog.getByRole("button", { name: "Close management form" }).click();
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
   });
 
-  test("reactivates an inactive asset with optional Site and Driver setup in the shared wizard", async ({ page }) => {
+  test("reactivates an inactive asset with simple Site and Driver setup", async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 });
     await openOwner(page);
 
@@ -308,25 +350,82 @@ test.describe("mocked Owner workstation", () => {
     const assetRow = page.getByRole("table", { name: "Fleet assets" }).getByRole("row").filter({ hasText: "Inactive Grader" });
     await assetRow.getByRole("button", { name: "Reactivate", exact: true }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Reactivate Inactive Grader" });
-    await expect(dialog.getByRole("region", { name: "Asset current state" })).toContainText("Grader");
-    await expect(dialog).toContainText("Old Yard");
-    await dialog.getByRole("button", { name: "Continue" }).click();
-    await expect(dialog.getByLabel("Reactivation Site")).toHaveValue("");
-    await expect(dialog.getByLabel("Reactivation Driver / Operator")).toHaveValue("");
-    await dialog.getByLabel("Reactivation Site").selectOption("site-2");
-    await dialog.getByLabel("Reactivation Driver / Operator").selectOption("driver-inactive");
-    await expect(dialog).toContainText("Currently inactive");
-    await expect(dialog).not.toContainText(/before\s+assignment/i);
-    await dialog.getByRole("checkbox", { name: "Reactivate role as part of this setup" }).check();
-    await dialog.getByRole("button", { name: "Review changes" }).click();
+    const dialog = page.getByRole("dialog", { name: "Inactive Grader" });
+    await expect(dialog.getByRole("region", { name: "Asset activity" })).toContainText("Inactive");
+    await expect(dialog.getByLabel("Site")).toHaveValue("");
+    await expect(dialog.getByLabel("Driver / Operator")).toHaveValue("");
+    await expect(dialog.getByRole("list", { name: "Operation progress" })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Continue" })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Review changes" })).toHaveCount(0);
+    await dialog.getByLabel("Site").selectOption("site-2");
+    await dialog.getByLabel("Driver / Operator").selectOption("driver-inactive");
+    await dialog.getByRole("checkbox", { name: "Include Driver / Operator role reactivation" }).check();
 
-    const review = dialog.getByRole("group", { name: "Final setup" });
-    await expect(review).toContainText("Inactive Grader → Active");
-    await expect(review).toContainText("River Yard");
-    await expect(review).toContainText("Kiran Rao");
-    await expect(review).toContainText("Driver / Operator → Reactivate");
-    await expect(dialog.getByRole("button", { name: "REACTIVATE & SET UP" })).toBeEnabled();
+    const previewRequest = page.waitForRequest((request) => request.url().endsWith("/owner/operations/preview") && request.postDataJSON().action === "REACTIVATE_ASSET");
+    const executeRequest = page.waitForRequest((request) => request.url().endsWith("/owner/operations/execute") && request.postDataJSON().action === "REACTIVATE_ASSET");
+    await dialog.getByRole("button", { name: "REACTIVATE & SET UP" }).click();
+    const [preview, execute] = await Promise.all([previewRequest, executeRequest]);
+    expect(preview.postDataJSON()).toMatchObject({
+      action: "REACTIVATE_ASSET",
+      asset_id: "asset-inactive",
+      site_id: "site-2",
+      driver_membership_id: "driver-inactive",
+      activate_membership: true,
+    });
+    expect(execute.postDataJSON()).toMatchObject({ action: "REACTIVATE_ASSET", state_token: "a".repeat(64) });
+    await expect(page.getByRole("status")).toContainText("Relationship updated.");
+  });
+
+  test("offers an explicit Owner force-close path when an Asset is on duty", async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await openOwner(page);
+
+    await page.getByRole("button", { name: "Fleet", exact: true }).click();
+    const assetRow = page.getByRole("table", { name: "Fleet assets" }).getByRole("row").filter({ hasText: "Green Tipper" });
+    await assetRow.getByRole("button", { name: "Manage", exact: true }).click();
+
+    let dialog = page.getByRole("dialog", { name: "Green Tipper" });
+    await expect(dialog.getByRole("region", { name: "Asset activity" })).toContainText("On duty");
+    await expect(dialog).toContainText("Ravi Kumar");
+    await expect(dialog).toContainText("North Pit");
+    await expect(dialog.getByLabel("Driver / Operator")).toBeDisabled();
+    await expect(dialog.getByLabel("Site")).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Deactivate asset" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "Deactivate asset" }).click();
+
+    dialog = page.getByRole("dialog", { name: "Deactivate Green Tipper" });
+    await expect(dialog).toContainText("This asset currently has an active duty.");
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "View duty" })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "Force close duty & deactivate" })).toBeEnabled();
+    await expect(dialog.getByLabel("Force-close reason")).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Force close duty & deactivate" }).click();
+
+    dialog = page.getByRole("dialog", { name: "Why must this duty be force-closed?" });
+    await dialog.getByRole("button", { name: "Continue" }).click();
+    await expect(dialog.getByText("Enter a reason for force-closing this duty.").first()).toBeVisible();
+    await dialog.getByLabel("Force-close reason").fill("Driver forgot to end duty");
+    await dialog.getByRole("button", { name: "Continue" }).click();
+
+    dialog = page.getByRole("dialog", { name: "Force close duty & deactivate Green Tipper?" });
+    await expect(dialog).toContainText("Mark END KM as missing");
+    await expect(dialog).toContainText("Preserve all existing history and evidence");
+    const previewRequest = page.waitForRequest((request) => request.url().endsWith("/owner/operations/preview") && request.postDataJSON().action === "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET");
+    const executeRequest = page.waitForRequest((request) => request.url().endsWith("/owner/operations/execute") && request.postDataJSON().action === "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET");
+    await dialog.getByRole("button", { name: "Force close & deactivate" }).click();
+    const [preview, execute] = await Promise.all([previewRequest, executeRequest]);
+    expect(preview.postDataJSON()).toEqual({
+      action: "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+      asset_id: "asset-assigned",
+      reason: "Driver forgot to end duty",
+    });
+    expect(execute.postDataJSON()).toMatchObject({
+      action: "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+      asset_id: "asset-assigned",
+      reason: "Driver forgot to end duty",
+      state_token: "c".repeat(64),
+    });
+    await expect(page.getByRole("status")).toContainText("Relationship updated.");
   });
 
   test("mobile layout keeps navigation and table cards within the page", async ({ page }) => {
@@ -354,12 +453,11 @@ test.describe("mocked Owner workstation", () => {
     const deploymentRow = page.getByRole("table", { name: "Current deployments" }).getByRole("row").filter({ hasText: "North Excavator" });
     await deploymentRow.getByRole("button", { name: "Remove deployment" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Remove asset from Site" });
-    await expect(dialog.getByRole("alert")).toContainText("Server update required");
-    await expect(dialog).toContainText("This management action is not supported by the currently running Fleet Manager server. Update the Fleet Manager server and try again.");
+    const dialog = page.getByRole("dialog", { name: "North Excavator" });
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    await expect(dialog.getByRole("alert")).toContainText("Fleet Manager server must be updated");
     await expect(dialog.getByText("Not Found", { exact: true })).toHaveCount(0);
     await expect(dialog.getByRole("button", { name: "Continue" })).toHaveCount(0);
-    await expect(dialog.getByRole("button", { name: "Retry" })).toBeEnabled();
-    await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "Close management form" })).toBeEnabled();
   });
 });

@@ -263,6 +263,14 @@ class SyncEngine {
     try {
       final server = await lookup.currentAssignment();
       if (server == null) {
+        if (await _confirmServerEndedDuty(local, lookup)) {
+          await cacheCurrentAssignment(null);
+          return const DriverStateReconciliation(
+            assignment: null,
+            duty: DriverDutyState.none(),
+            authority: DriverAssignmentAuthority.serverNoAssignment,
+          );
+        }
         final protected = await _protectedLocalState(local);
         if (protected != null) return protected;
         await cacheCurrentAssignment(null);
@@ -304,6 +312,31 @@ class SyncEngine {
     }
   }
 
+  Future<bool> _confirmServerEndedDuty(
+    DriverAssignment? localAssignment,
+    DriverStateLookup lookup,
+  ) async {
+    if (localAssignment == null) return false;
+    final localDuty = await database.latestLocalDutySession(
+      assignmentId: localAssignment.assignmentId,
+    );
+    if (localDuty == null ||
+        _localState(localDuty.state) != LocalDutyState.activeConfirmed) {
+      return false;
+    }
+
+    final serverDuty = await lookup.currentDuty();
+    if (serverDuty.status != DriverDutyStatus.none) return false;
+
+    await database.updateLocalDutySession(
+      localDuty.copyWith(
+        state: LocalDutyState.closedConfirmed.name,
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+    return true;
+  }
+
   Future<DriverStateReconciliation?> _protectedLocalState(
     DriverAssignment? local,
   ) async {
@@ -336,27 +369,39 @@ class SyncEngine {
       assignmentId: assignmentId,
     );
     if (row == null) return serverDuty;
+    var effectiveRow = row;
     var state = _localState(row.state);
     if (state == LocalDutyState.startPendingSync && serverDuty.isActive) {
       state = LocalDutyState.activeConfirmed;
-      await database.updateLocalDutySession(
-        row.copyWith(
-          state: 'activeConfirmed',
-          serverSessionId: serverDuty.sessionId,
-          updatedAt: DateTime.now().toUtc(),
-        ),
+      effectiveRow = row.copyWith(
+        state: LocalDutyState.activeConfirmed.name,
+        serverSessionId: serverDuty.sessionId,
+        updatedAt: DateTime.now().toUtc(),
       );
+      await database.updateLocalDutySession(effectiveRow);
     } else if (state == LocalDutyState.endPendingSync &&
         serverDuty.status == DriverDutyStatus.closed) {
       state = LocalDutyState.closedConfirmed;
-      await database.updateLocalDutySession(
-        row.copyWith(
-          state: 'closedConfirmed',
-          updatedAt: DateTime.now().toUtc(),
-        ),
+      effectiveRow = row.copyWith(
+        state: LocalDutyState.closedConfirmed.name,
+        updatedAt: DateTime.now().toUtc(),
       );
+      await database.updateLocalDutySession(effectiveRow);
+    } else if (state == LocalDutyState.activeConfirmed &&
+        serverDuty.status == DriverDutyStatus.closed &&
+        _isMatchingDuty(row, serverDuty)) {
+      state = LocalDutyState.closedConfirmed;
+      effectiveRow = row.copyWith(
+        state: LocalDutyState.closedConfirmed.name,
+        serverSessionId: serverDuty.sessionId,
+        endKm: serverDuty.endKm,
+        endHmr: serverDuty.endHmr,
+        endedAt: serverDuty.endedAt,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await database.updateLocalDutySession(effectiveRow);
     }
-    return _fromLocal(row, state: state, serverDuty: serverDuty);
+    return _fromLocal(effectiveRow, state: state, serverDuty: serverDuty);
   }
 
   Future<int> syncPending() async {
@@ -584,6 +629,25 @@ class SyncEngine {
       state == LocalDutyState.startPendingSync.name ||
       state == LocalDutyState.activeConfirmed.name ||
       state == LocalDutyState.needsAttention.name;
+
+  static bool _isMatchingDuty(
+    local.LocalDutySession localDuty,
+    DriverDutyState serverDuty,
+  ) {
+    if (serverDuty.assignmentId != localDuty.assignmentId ||
+        serverDuty.tipperId != localDuty.tipperId ||
+        serverDuty.siteId != localDuty.siteId) {
+      return false;
+    }
+    final localServerId = localDuty.serverSessionId;
+    final serverId = serverDuty.sessionId;
+    if (localServerId != null && serverId != null) {
+      return localServerId == serverId;
+    }
+    final serverStartedAt = serverDuty.startedAt;
+    return serverStartedAt != null &&
+        serverStartedAt.toUtc().isAtSameMomentAs(localDuty.startedAt.toUtc());
+  }
 
   static LocalDutyState _localState(String value) =>
       LocalDutyState.values.firstWhere(

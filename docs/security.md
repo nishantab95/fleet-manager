@@ -80,9 +80,11 @@ controls.
 - Asset codes and non-null registrations remain company-unique. Registration
   is normalized server-side, rental ownership rules are validated in the
   domain service, and every lifecycle mutation writes an audit entry.
-- Deactivation is rejected for an effective assignment or active duty session.
-  No hard-delete route exists, so operational and verification history remains
-  reachable through the original asset UUID.
+- The direct Fleet lifecycle route rejects deactivation for an effective
+  assignment or active duty session. Only the relationship orchestrator's
+  documented atomic teardown paths may transition such an asset. No hard-delete
+  route exists, so operational and verification history remains reachable
+  through the original asset UUID.
 
 ## Phase 4 driver controls
 
@@ -236,11 +238,12 @@ Tokens and OTP values are never written to handover audit records.
   uniqueness and exclusion constraints protect the one-current, non-overlapping
   deployment invariant during concurrent requests.
 - Move and removal operations lock and recheck the deployment, Assignment, and
-  duty state. Active duty is always blocked. An off-duty Assignment is ended
-  with the old deployment; a move creates a Site-consistent replacement only
-  when the Owner explicitly keeps the Driver. A preview token detects stale
-  browser state. Site and asset deactivation cannot leave a hidden live
-  placement.
+  duty state. Active duty blocks ordinary relationship changes. An off-duty
+  Assignment is ended with the old deployment; a move creates a Site-consistent
+  replacement only when the Owner explicitly keeps the Driver. A preview token
+  detects stale browser state. Site and ordinary asset deactivation cannot leave
+  a hidden live placement. The narrowly scoped Owner force-close operation below
+  is the only active-duty teardown exception.
 - Supervisor asset lists require existing same-company Site access and expose
   only active assets currently deployed to that Site. Driver sessions cannot
   call Owner deployment mutations.
@@ -266,6 +269,30 @@ Tokens and OTP values are never written to handover audit records.
   existing tipper capability gate are checked before writes. Cross-company
   identifiers cannot be used to infer or create relationships.
 - Asset/Driver row locks plus PostgreSQL exclusion constraints protect
-  concurrent current assignments. Active duty prevents unassign/reassign.
+  concurrent current assignments. Active duty prevents ordinary
+  unassign/reassign.
 - Assignment audit records contain relationship UUIDs only. They never include
   credentials, tokens, OTPs, evidence bytes, or local runtime data.
+
+## Owner force-close controls
+
+- `FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET` is authorized only through the
+  backend `OWNER_ADMIN` boundary. Company scope comes from the authenticated
+  membership; foreign asset, duty, Driver, Assignment, Deployment, or Site
+  identifiers cannot be used to select another tenant's state.
+- The intent requires a non-empty administrative reason. Preview produces the
+  state token, and execute authoritatively reloads and row-locks the complete
+  tenant-scoped relationship set. A stale token returns a conflict before any
+  mutation; client-provided relationship state is never trusted.
+- Duty closure, Assignment end, Deployment end, asset deactivation, and audit
+  creation are one database transaction. A failure rolls back every change.
+  The service does not manufacture an END KM/HMR event, meter value, timestamped
+  evidence, or evidence object to make the teardown appear complete.
+- The audit entry records the actor, mandatory reason, affected duty, Driver,
+  asset and Site context, and whether the expected END meter is missing. It
+  excludes credentials, OTPs, tokens, evidence bytes, and unnecessary PII.
+- Existing reporting remains authoritative and exposes the applicable missing
+  END KM or END HMR exception; it does not report invented distance or machine
+  hours. Driver refresh/sync reconciliation accepts the server's current
+  Assignment and duty state instead of retaining a stale phone-side relationship
+  as authoritative.

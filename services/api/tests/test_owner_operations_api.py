@@ -24,7 +24,10 @@ from fleet_api.db.models import (
     Company,
     CompanyMembership,
     DutySession,
+    EvidenceObject,
     FleetAsset,
+    HourMeterReading,
+    KmReading,
     OperationalEvent,
     Site,
     SupervisorSiteAccess,
@@ -38,6 +41,8 @@ from fleet_api.domain.enums import (
     DutySessionStatus,
     FleetAssetStatus,
     FleetAssetType,
+    HourMeterReadingType,
+    KmReadingType,
     MembershipStatus,
     OperationalEventType,
     SiteStatus,
@@ -92,10 +97,16 @@ def client_for(db: Session, membership: CompanyMembership) -> TestClient:
     return client
 
 
-def add_asset(db: Session, company: Company, code: str) -> FleetAsset:
+def add_asset(
+    db: Session,
+    company: Company,
+    code: str,
+    *,
+    asset_type: FleetAssetType = FleetAssetType.TIPPER,
+) -> FleetAsset:
     asset = FleetAsset(
         company_id=company.id,
-        asset_type=FleetAssetType.TIPPER,
+        asset_type=asset_type,
         ownership_type=AssetOwnershipType.OWNED,
         asset_code=code,
         registration_number=f"REG-{code}",
@@ -158,14 +169,21 @@ def assign(
     )
 
 
-def add_active_duty(db: Session, assignment: Assignment) -> DutySession:
+def add_active_duty(
+    db: Session,
+    assignment: Assignment,
+    *,
+    hour_meter: bool = False,
+) -> DutySession:
     started_at = datetime.now(UTC) - timedelta(minutes=2)
     event = OperationalEvent(
         company_id=assignment.company_id,
         assignment_id=assignment.id,
         client_event_uuid=uuid4(),
         device_created_at=started_at,
-        event_type=OperationalEventType.KM_READING,
+        event_type=(
+            OperationalEventType.HMR_READING if hour_meter else OperationalEventType.KM_READING
+        ),
         verification_status=VerificationStatus.PENDING_VERIFICATION,
     )
     db.add(event)
@@ -178,7 +196,8 @@ def add_active_duty(db: Session, assignment: Assignment) -> DutySession:
         site_id=assignment.site_id,
         operational_date=date.today(),
         start_event_id=event.id,
-        start_km=Decimal("10"),
+        start_km=None if hour_meter else Decimal("10"),
+        start_hmr=Decimal("10") if hour_meter else None,
         started_at=started_at,
         configured_regular_duty_minutes=600,
         regular_duty_ends_at=started_at + timedelta(minutes=600),
@@ -186,7 +205,46 @@ def add_active_duty(db: Session, assignment: Assignment) -> DutySession:
     )
     db.add(duty)
     db.flush()
+    event.duty_session_id = duty.id
+    db.flush()
     return duty
+
+
+def add_start_meter_evidence(db: Session, duty: DutySession) -> EvidenceObject:
+    event = db.get(OperationalEvent, duty.start_event_id)
+    assert event is not None
+    event.verification_status = VerificationStatus.APPROVED
+    object_key = f"owner-force-close-tests/{uuid4()}.jpg"
+    evidence = EvidenceObject(
+        company_id=duty.company_id,
+        membership_id=duty.driver_membership_id,
+        client_event_uuid=event.client_event_uuid,
+        object_key=object_key,
+        content_type="image/jpeg",
+        size_bytes=128,
+    )
+    db.add(evidence)
+    if duty.start_hmr is not None:
+        db.add(
+            HourMeterReading(
+                event_id=event.id,
+                reading_type=HourMeterReadingType.START_READING,
+                reading_value=duty.start_hmr,
+                object_reference=object_key,
+            )
+        )
+    else:
+        assert duty.start_km is not None
+        db.add(
+            KmReading(
+                event_id=event.id,
+                reading_type=KmReadingType.START_READING,
+                reading_value=duty.start_km,
+                object_reference=object_key,
+            )
+        )
+    db.flush()
+    return evidence
 
 
 def preview(client: TestClient, payload: dict[str, object]) -> dict[str, object]:
@@ -1411,3 +1469,326 @@ def test_reactivate_asset_preserves_history_and_marks_previous_context(
         assert assignments[-1].ends_at is None
     finally:
         client.close()
+
+
+@pytest.mark.parametrize(
+    ("asset_type", "hour_meter", "expected_exception", "meter_type"),
+    [
+        (FleetAssetType.TIPPER, False, "MISSING_END_READING", "KM"),
+        (FleetAssetType.EXCAVATOR, True, "MISSING_END_HMR", "HMR"),
+    ],
+)
+def test_owner_force_closes_duty_and_deactivates_without_fabricating_end_meter(
+    db_session: Session,
+    tenant_records: dict[str, object],
+    asset_type: FleetAssetType,
+    hour_meter: bool,
+    expected_exception: str,
+    meter_type: str,
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    site = add_site(db_session, company, f"Recovery {asset_type.value}")
+    asset = add_asset(
+        db_session,
+        company,
+        f"FORCE-{asset_type.value}",
+        asset_type=asset_type,
+    )
+    deployment = deploy(db_session, asset, site)
+    assignment = assign(db_session, tenant_records, asset, site)
+    duty = add_active_duty(db_session, assignment, hour_meter=hour_meter)
+    evidence = add_start_meter_evidence(db_session, duty)
+    start_event_id = duty.start_event_id
+    started_at = duty.started_at
+    operational_date = duty.operational_date
+    evidence_id = evidence.id
+    db_session.commit()
+
+    owner_membership = value(tenant_records, "owner_a", CompanyMembership)
+    owner = client_for(db_session, owner_membership)
+    owner.headers["X-Request-ID"] = "owner-force-close-test"
+    payload: dict[str, object] = {
+        "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "reason": "  Driver cannot safely complete the stuck duty  ",
+    }
+    try:
+        plan = preview(owner, payload)
+        assert plan["can_execute"] is True
+        assert plan["allowed_resolutions"] == ["FORCE_CLOSE_DUTY_AND_DEACTIVATE"]
+        duty_item = next(
+            item
+            for item in cast(list[dict[str, object]], plan["dependencies"])
+            if item["kind"] == "DUTY"
+        )
+        assert cast(dict[str, object], duty_item["details"])["started_at"] == (
+            started_at.isoformat()
+        )
+
+        response = execute(owner, payload, plan)
+        assert response.status_code == 200, response.text
+        db_session.expire_all()
+
+        persisted_duty = db_session.get(DutySession, duty.id)
+        persisted_assignment = db_session.get(Assignment, assignment.id)
+        persisted_deployment = db_session.get(AssetSiteDeployment, deployment.id)
+        persisted_asset = db_session.get(FleetAsset, asset.id)
+        assert persisted_duty is not None
+        assert persisted_assignment is not None
+        assert persisted_deployment is not None
+        assert persisted_asset is not None
+        assert persisted_duty.status == DutySessionStatus.CLOSED
+        assert persisted_duty.ended_at is not None
+        assert persisted_duty.end_event_id is None
+        assert persisted_duty.end_km is None
+        assert persisted_duty.end_hmr is None
+        assert persisted_duty.start_event_id == start_event_id
+        assert persisted_duty.started_at == started_at
+        assert persisted_assignment.ends_at is not None
+        assert persisted_deployment.ends_at is not None
+        assert persisted_asset.status == FleetAssetStatus.INACTIVE
+        assert db_session.get(OperationalEvent, start_event_id) is not None
+        assert db_session.get(EvidenceObject, evidence_id) is not None
+
+        audit = db_session.scalar(
+            select(AuditLog)
+            .where(
+                AuditLog.action == "OWNER_DUTY_FORCE_CLOSED_AND_ASSET_DEACTIVATED",
+                AuditLog.entity_id == asset.id,
+            )
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        )
+        assert audit is not None
+        assert audit.company_id == company.id
+        assert audit.actor_membership_id == owner_membership.id
+        assert audit.request_id == "owner-force-close-test"
+        assert audit.reason == "Driver cannot safely complete the stuck duty"
+        assert audit.old_values is not None
+        assert audit.old_values["asset_id"] == str(asset.id)
+        assert audit.old_values["duty_session_id"] == str(duty.id)
+        assert audit.old_values["driver_membership_id"] == str(assignment.driver_membership_id)
+        assert audit.old_values["site_id"] == str(site.id)
+        assert audit.old_values["missing_end_meter"] is True
+        assert audit.old_values["missing_end_meter_type"] == meter_type
+        assert audit.new_values is not None
+        assert audit.new_values["end_event_fabricated"] is False
+        assert audit.new_values["end_meter_fabricated"] is False
+        assert audit.new_values["history_preserved"] is True
+        assert set(cast(list[str], audit.new_values["lifecycle_effects"])) == {
+            "DUTY_ADMINISTRATIVELY_CLOSED",
+            "ASSIGNMENT_ENDED",
+            "DEPLOYMENT_ENDED",
+            "ASSET_DEACTIVATED",
+        }
+
+        report = owner.get(
+            f"/api/v1/reports/sites/{site.id}/daily",
+            params={"operational_date": operational_date.isoformat()},
+        )
+        assert report.status_code == 200, report.text
+        report_row = next(
+            row for row in report.json()["tippers"] if row["tipper_id"] == str(asset.id)
+        )
+        assert expected_exception in {item["code"] for item in report_row["exceptions"]}
+    finally:
+        owner.close()
+
+    driver = client_for(
+        db_session,
+        value(tenant_records, "driver_a", CompanyMembership),
+    )
+    try:
+        assert driver.get("/api/v1/driver/assignment/current").json() is None
+        assert driver.get("/api/v1/driver/duty/current").json()["status"] == "NONE"
+    finally:
+        driver.close()
+
+
+@pytest.mark.parametrize("reason", [None, "", "   "])
+def test_force_close_requires_a_nonblank_reason(
+    db_session: Session,
+    tenant_records: dict[str, object],
+    reason: str | None,
+) -> None:
+    asset = value(tenant_records, "tipper_a", FleetAsset)
+    payload: dict[str, object] = {
+        "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+    }
+    if reason is not None:
+        payload["reason"] = reason
+    owner = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        response = owner.post("/api/v1/owner/operations/preview", json=payload)
+        assert response.status_code == 422
+        assert "reason is required for administrative duty closure" in response.text
+        execute_response = owner.post(
+            "/api/v1/owner/operations/execute",
+            json={**payload, "state_token": "0" * 64},
+        )
+        assert execute_response.status_code == 422
+        assert "reason is required for administrative duty closure" in execute_response.text
+    finally:
+        owner.close()
+
+
+def test_force_close_is_owner_only_and_tenant_scoped(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    local_asset = value(tenant_records, "tipper_a", FleetAsset)
+    foreign_asset = value(tenant_records, "tipper_b", FleetAsset)
+    reason = "Administrative recovery"
+    supervisor = client_for(
+        db_session,
+        value(tenant_records, "supervisor_a", CompanyMembership),
+    )
+    try:
+        forbidden = supervisor.post(
+            "/api/v1/owner/operations/preview",
+            json={
+                "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+                "asset_id": str(local_asset.id),
+                "reason": reason,
+            },
+        )
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"]["code"] == "FORBIDDEN"
+        forbidden_execute = supervisor.post(
+            "/api/v1/owner/operations/execute",
+            json={
+                "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+                "asset_id": str(local_asset.id),
+                "reason": reason,
+                "state_token": "0" * 64,
+            },
+        )
+        assert forbidden_execute.status_code == 403
+    finally:
+        supervisor.close()
+
+    owner = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        missing = owner.post(
+            "/api/v1/owner/operations/preview",
+            json={
+                "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+                "asset_id": str(foreign_asset.id),
+                "reason": reason,
+            },
+        )
+        assert missing.status_code == 404
+        assert missing.json()["detail"]["code"] == "NOT_FOUND"
+        missing_execute = owner.post(
+            "/api/v1/owner/operations/execute",
+            json={
+                "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+                "asset_id": str(foreign_asset.id),
+                "reason": reason,
+                "state_token": "0" * 64,
+            },
+        )
+        assert missing_execute.status_code == 404
+    finally:
+        owner.close()
+
+
+def test_force_close_rejects_a_stale_preview_if_driver_closes_duty_first(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    site = add_site(db_session, company, "Force Close Race")
+    asset = add_asset(db_session, company, "FORCE-RACE")
+    deployment = deploy(db_session, asset, site)
+    assignment = assign(db_session, tenant_records, asset, site)
+    duty = add_active_duty(db_session, assignment)
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "reason": "Recover stuck duty",
+    }
+    owner = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    try:
+        plan = preview(owner, payload)
+        duty.status = DutySessionStatus.CLOSED
+        duty.ended_at = datetime.now(UTC)
+        duty.final_overtime_minutes = 0
+        db_session.commit()
+
+        response = execute(owner, payload, plan)
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "CONFLICT",
+            "message": "State changed. Review the operation again.",
+        }
+        db_session.expire_all()
+        persisted_asset = db_session.get(FleetAsset, asset.id)
+        persisted_assignment = db_session.get(Assignment, assignment.id)
+        persisted_deployment = db_session.get(AssetSiteDeployment, deployment.id)
+        assert persisted_asset is not None
+        assert persisted_assignment is not None
+        assert persisted_deployment is not None
+        assert persisted_asset.status == FleetAssetStatus.ACTIVE
+        assert persisted_assignment.ends_at is None
+        assert persisted_deployment.ends_at is None
+    finally:
+        owner.close()
+
+
+def test_force_close_rolls_back_every_effect_if_final_audit_fails(
+    db_session: Session,
+    tenant_records: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    site = add_site(db_session, company, "Force Close Rollback")
+    asset = add_asset(db_session, company, "FORCE-ROLLBACK")
+    deployment = deploy(db_session, asset, site)
+    assignment = assign(db_session, tenant_records, asset, site)
+    duty = add_active_duty(db_session, assignment)
+    db_session.commit()
+    payload: dict[str, object] = {
+        "action": "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+        "asset_id": str(asset.id),
+        "reason": "Recover stuck duty",
+    }
+    owner = client_for(db_session, value(tenant_records, "owner_a", CompanyMembership))
+    plan = preview(owner, payload)
+
+    def fail_final_audit(*args: object, **kwargs: object) -> AuditLog:
+        if kwargs.get("action") == "OWNER_DUTY_FORCE_CLOSED_AND_ASSET_DEACTIVATED":
+            raise ConflictError("forced audit failure")
+        return real_write_audit_log(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(operations_domain, "write_audit_log", fail_final_audit)
+    try:
+        response = execute(owner, payload, plan)
+        assert response.status_code == 409
+        assert response.json()["detail"]["message"] == "forced audit failure"
+        db_session.expire_all()
+        persisted_duty = db_session.get(DutySession, duty.id)
+        persisted_assignment = db_session.get(Assignment, assignment.id)
+        persisted_deployment = db_session.get(AssetSiteDeployment, deployment.id)
+        persisted_asset = db_session.get(FleetAsset, asset.id)
+        assert persisted_duty is not None
+        assert persisted_assignment is not None
+        assert persisted_deployment is not None
+        assert persisted_asset is not None
+        assert persisted_duty.status == DutySessionStatus.ACTIVE
+        assert persisted_duty.ended_at is None
+        assert persisted_assignment.ends_at is None
+        assert persisted_deployment.ends_at is None
+        assert persisted_asset.status == FleetAssetStatus.ACTIVE
+        assert (
+            db_session.scalar(
+                select(func.count(AuditLog.id)).where(
+                    AuditLog.action == "OWNER_DUTY_FORCE_CLOSED_AND_ASSET_DEACTIVATED",
+                    AuditLog.entity_id == asset.id,
+                )
+            )
+            == 0
+        )
+    finally:
+        owner.close()

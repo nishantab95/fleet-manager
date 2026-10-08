@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { pcRoleLabEnabled } from "../../lib/auth/config";
-import type { OwnerAsset, OwnerPerson, OwnerSite } from "../../lib/types";
+import type { OwnerAsset, OwnerOperationIntent, OwnerOperationPlan, OwnerOperationResult, OwnerPerson, OwnerSite } from "../../lib/types";
 import { useAuth } from "../auth/AuthProvider";
 import { FleetAmbientScene } from "./FleetAmbientScene";
 import { AssignmentsPanel, DeploymentsPanel, FleetOverview, FleetPanel, PeoplePanel, SitesPanel } from "./OwnerManagement";
 import { OwnerOperations } from "./OwnerOperations";
+import { OwnerRelationshipManager, type OwnerRelationshipTarget } from "./OwnerRelationshipManager";
 import { ReportTemplates } from "./ReportTemplates";
 
 type Tab = "operations" | "fleet" | "deployments" | "assignments" | "people" | "sites" | "reports" | "templates";
@@ -69,6 +70,8 @@ export function OwnerWorkspace() {
   const { session, request, logout } = useAuth();
   const [tab, setTab] = useState<Tab>("operations");
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [relationshipTarget, setRelationshipTarget] = useState<OwnerRelationshipTarget | null>(null);
   const [assets, setAssets] = useState<OwnerAsset[]>([]);
   const [people, setPeople] = useState<OwnerPerson[]>([]);
   const [sites, setSites] = useState<OwnerSite[]>([]);
@@ -95,6 +98,26 @@ export function OwnerWorkspace() {
     } finally {
       setInitialLoading(false);
     }
+  }, [request]);
+
+  const forceCloseDutyAndDeactivate = useCallback(async (assetId: string, reason: string) => {
+    const intent: OwnerOperationIntent = {
+      action: "FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET",
+      asset_id: assetId,
+      reason,
+    };
+    const plan = await request<OwnerOperationPlan>("/api/v1/owner/operations/preview", {
+      method: "POST",
+      body: JSON.stringify(intent),
+    });
+    if (!plan.can_execute) {
+      throw new Error(plan.blocked_reasons.join(" ") || "This administrative action is no longer available.");
+    }
+    const result = await request<OwnerOperationResult>("/api/v1/owner/operations/execute", {
+      method: "POST",
+      body: JSON.stringify({ ...intent, state_token: plan.state_token }),
+    });
+    return result.message;
   }, [request]);
 
   useEffect(() => { void Promise.resolve().then(reload); }, [reload]);
@@ -140,6 +163,7 @@ export function OwnerWorkspace() {
 
   const showTab = (nextTab: Tab) => {
     setError("");
+    setSuccess("");
     setTab(nextTab);
     window.scrollTo({ top: 0 });
   };
@@ -177,20 +201,32 @@ export function OwnerWorkspace() {
 
       <section aria-busy={initialLoading} className="content owner-content">
         {error && <div aria-live="assertive" className="notice error owner-feedback" role="alert">{error}</div>}
+        {success && <div aria-live="polite" className="owner-feedback owner-feedback--success" role="status">{success}</div>}
         {initialLoading ? <WorkspaceSkeleton /> : <div className="owner-panel" key={tab}>
           {tab === "operations" && <>
             <FleetOverview assets={assets} />
             <div aria-label="Quick operations" className="owner-overview-shortcuts" role="group"><span>Quick operations</span><div className="owner-overview-actions"><button className="secondary" onClick={() => showTab("fleet")} type="button">Review fleet</button><button className="secondary" onClick={() => showTab("deployments")} type="button">Deploy assets</button><button onClick={() => showTab("assignments")} type="button">Assign operators</button></div></div>
           </>}
-          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
-          {tab === "people" && <PeoplePanel people={people} assets={assets} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
-          {tab === "sites" && <SitesPanel sites={sites} people={people} assets={assets} apiRequest={request} reload={reload} setError={setError} />}
-          {tab === "deployments" && <DeploymentsPanel assets={assets} sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} onViewAssignments={() => showTab("assignments")} />}
-          {tab === "assignments" && <AssignmentsPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} />}
+          {tab === "fleet" && <FleetPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
+          {tab === "people" && <PeoplePanel people={people} assets={assets} sites={sites} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
+          {tab === "sites" && <SitesPanel sites={sites} people={people} assets={assets} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
+          {tab === "deployments" && <DeploymentsPanel assets={assets} sites={sites} people={people} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
+          {tab === "assignments" && <AssignmentsPanel assets={assets} people={people} sites={sites} apiRequest={request} reload={reload} setError={setError} openRelationshipManager={setRelationshipTarget} />}
           {tab === "reports" && <OwnerOperations accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} />}
           {tab === "templates" && <ReportTemplates accessToken={session?.access_token ?? ""} apiRequest={request} setError={setError} sites={sites} />}
         </div>}
       </section>
     </div>
+    <OwnerRelationshipManager
+      apiRequest={request}
+      assets={assets}
+      onClose={() => setRelationshipTarget(null)}
+      onComplete={(message) => { setSuccess(message); void reload(); }}
+      onForceCloseDutyAndDeactivate={forceCloseDutyAndDeactivate}
+      onViewActiveDuty={() => showTab("reports")}
+      people={people}
+      sites={sites}
+      target={relationshipTarget}
+    />
   </main>;
 }

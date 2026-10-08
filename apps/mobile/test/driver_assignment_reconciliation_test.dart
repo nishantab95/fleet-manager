@@ -171,6 +171,164 @@ void main() {
     expect(state.warning, contains('active or unsynced work'));
     expect(await sync.pendingCount(), 1);
   });
+
+  test('server none preserves an unsynced local-only duty start', () async {
+    final database = local.LocalDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final remote = _StateRemote(assignment: null);
+    final sync = _engine(database, remote);
+    await _activate(sync);
+    await sync.cacheCurrentAssignment(_owned);
+    await sync.enqueue(
+      assignment: _owned,
+      eventType: DriverEventType.kmReading,
+      payload: const {
+        'reading_type': 'START_READING',
+        'reading_value': '12000',
+      },
+    );
+
+    final state = await sync.reconcileDriverState();
+
+    expect(state.authority, DriverAssignmentAuthority.protectedLocalWork);
+    expect(state.assignment?.assignmentId, _owned.assignmentId);
+    expect(state.duty.localState, LocalDutyState.startPendingSync);
+    expect(state.duty.isOperationallyActive, isTrue);
+    expect(await sync.pendingCount(), 1);
+  });
+
+  test('inconclusive server-none refresh keeps confirmed local duty', () async {
+    final database = local.LocalDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final remote = _StateRemote(assignment: null, dutyUnavailable: true);
+    final sync = _engine(database, remote);
+    await _activate(sync);
+    await sync.cacheCurrentAssignment(_owned);
+    await database.saveLocalDutySession(
+      _activeDuty(startedAt: DateTime.utc(2026, 10, 8, 2)),
+      makeCurrent: true,
+    );
+
+    final state = await sync.reconcileDriverState();
+
+    expect(state.authority, DriverAssignmentAuthority.offlineCache);
+    expect(state.assignment?.assignmentId, _owned.assignmentId);
+    expect(state.duty.localState, LocalDutyState.activeConfirmed);
+    expect(state.duty.isOperationallyActive, isTrue);
+  });
+
+  test(
+    'server-closed duty overrides the matching active local snapshot',
+    () async {
+      final database = local.LocalDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final startedAt = DateTime.utc(2026, 10, 8, 2);
+      final endedAt = startedAt.add(const Duration(hours: 3));
+      final remote = _StateRemote(
+        assignment: _owned,
+        duty: _closedServerDuty(startedAt: startedAt, endedAt: endedAt),
+      );
+      final sync = _engine(database, remote);
+      await _activate(sync);
+      await sync.cacheCurrentAssignment(_owned);
+      await database.saveLocalDutySession(
+        _activeDuty(startedAt: startedAt),
+        makeCurrent: true,
+      );
+
+      var state = await sync.reconcileDriverState();
+
+      expect(state.authority, DriverAssignmentAuthority.serverAssignment);
+      expect(state.assignment?.assignmentId, _owned.assignmentId);
+      expect(state.duty.status, DriverDutyStatus.closed);
+      expect(state.duty.localState, LocalDutyState.closedConfirmed);
+      expect(state.duty.isOperationallyActive, isFalse);
+      expect(state.duty.canStart, isTrue);
+      expect(state.duty.canEnd, isFalse);
+      expect(state.duty.endedAt, endedAt);
+
+      state = await sync.reconcileDriverState();
+      expect(state.duty.status, DriverDutyStatus.closed);
+      expect(state.duty.localState, LocalDutyState.closedConfirmed);
+      expect(state.duty.isOperationallyActive, isFalse);
+      expect(
+        (await database.allLocalDutySessions()).single.state,
+        LocalDutyState.closedConfirmed.name,
+      );
+    },
+  );
+
+  test(
+    'force-close server none clears duty and preserves idempotent event retry',
+    () async {
+      final database = local.LocalDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final remote = _StateRemote(assignment: _owned);
+      final sync = _engine(database, remote);
+      await _activate(sync);
+      await sync.cacheCurrentAssignment(_owned);
+
+      final startId = await sync.enqueue(
+        assignment: _owned,
+        eventType: DriverEventType.kmReading,
+        payload: const {
+          'reading_type': 'START_READING',
+          'reading_value': '12000',
+        },
+      );
+      expect(await sync.syncPending(), 1);
+      final startedAt =
+          (await database.allLocalDutySessions()).single.startedAt;
+      remote.duty = _activeServerDuty(startedAt: startedAt);
+      expect(
+        (await sync.reconcileDriverState()).duty.status,
+        DriverDutyStatus.active,
+      );
+
+      final tripId = await sync.enqueue(
+        assignment: _owned,
+        eventType: DriverEventType.tripComplete,
+      );
+      remote.failAfterCommitOnce.add(tripId);
+      expect(await sync.syncPending(), 0);
+      expect(await sync.eventSyncState(tripId), SyncState.syncFailed.name);
+      expect(remote.logicalEvents, containsAll(<String>{startId, tripId}));
+
+      remote
+        ..assignment = null
+        ..duty = const DriverDutyState.none();
+      var state = await sync.reconcileDriverState();
+      expect(state.authority, DriverAssignmentAuthority.serverNoAssignment);
+      expect(state.assignment, isNull);
+      expect(state.duty.status, DriverDutyStatus.none);
+      expect(state.duty.isOperationallyActive, isFalse);
+      expect(state.duty.canStart, isTrue);
+      expect(
+        (await database.allLocalDutySessions()).single.state,
+        LocalDutyState.closedConfirmed.name,
+      );
+      expect(await sync.eventSyncState(tripId), SyncState.syncFailed.name);
+      expect(await sync.pendingCount(), 1);
+
+      state = await sync.reconcileDriverState();
+      expect(state.authority, DriverAssignmentAuthority.serverNoAssignment);
+      expect(state.assignment, isNull);
+      expect(state.duty.status, DriverDutyStatus.none);
+      expect(state.duty.isOperationallyActive, isFalse);
+
+      expect(await sync.syncPending(), 1);
+      expect(await sync.eventSyncState(tripId), SyncState.synced.name);
+      expect(remote.submitAttempts[tripId], 2);
+      expect(remote.logicalEvents.where((id) => id == tripId), hasLength(1));
+
+      remote.unavailable = true;
+      state = await sync.reconcileDriverState();
+      expect(state.authority, DriverAssignmentAuthority.offlineCache);
+      expect(state.assignment, isNull);
+      expect(state.duty.status, DriverDutyStatus.none);
+      expect(state.duty.isOperationallyActive, isFalse);
+    },
+  );
 }
 
 SyncEngine _engine(local.LocalDatabase database, _StateRemote remote) =>
@@ -211,12 +369,72 @@ local.LocalDutySession _closedDuty() {
   );
 }
 
+local.LocalDutySession _activeDuty({required DateTime startedAt}) {
+  return local.LocalDutySession(
+    localSessionId: 'active-duty',
+    assignmentId: _owned.assignmentId,
+    tipperId: _owned.tipperId,
+    tipperRegistrationNumber: _owned.tipperRegistrationNumber,
+    tipperShortName: _owned.tipperShortName,
+    siteId: _owned.siteId,
+    siteName: _owned.siteName,
+    supervisorName: _owned.supervisorName,
+    startClientEventUuid: 'active-start',
+    startKm: 12000,
+    startedAt: startedAt,
+    endClientEventUuid: null,
+    endKm: null,
+    endedAt: null,
+    state: LocalDutyState.activeConfirmed.name,
+    serverSessionId: 'server-duty',
+    lastEventUuid: 'active-start',
+    createdAt: startedAt,
+    updatedAt: startedAt,
+  );
+}
+
+DriverDutyState _activeServerDuty({required DateTime startedAt}) {
+  return DriverDutyState(
+    status: DriverDutyStatus.active,
+    sessionId: 'server-duty',
+    assignmentId: _owned.assignmentId,
+    tipperId: _owned.tipperId,
+    siteId: _owned.siteId,
+    startedAt: startedAt,
+    startKm: 12000,
+  );
+}
+
+DriverDutyState _closedServerDuty({
+  required DateTime startedAt,
+  required DateTime endedAt,
+}) {
+  return DriverDutyState(
+    status: DriverDutyStatus.closed,
+    sessionId: 'server-duty',
+    assignmentId: _owned.assignmentId,
+    tipperId: _owned.tipperId,
+    siteId: _owned.siteId,
+    startedAt: startedAt,
+    startKm: 12000,
+    endedAt: endedAt,
+  );
+}
+
 class _StateRemote implements DriverRemoteApi, DriverStateLookup {
-  _StateRemote({required this.assignment});
+  _StateRemote({
+    required this.assignment,
+    this.duty = const DriverDutyState.none(),
+    this.dutyUnavailable = false,
+  });
 
   DriverAssignment? assignment;
   bool unavailable = false;
-  DriverDutyState duty = const DriverDutyState.none();
+  bool dutyUnavailable;
+  DriverDutyState duty;
+  final Set<String> failAfterCommitOnce = <String>{};
+  final Set<String> logicalEvents = <String>{};
+  final Map<String, int> submitAttempts = <String, int>{};
 
   @override
   Future<DriverAssignment?> currentAssignment() async {
@@ -226,7 +444,9 @@ class _StateRemote implements DriverRemoteApi, DriverStateLookup {
 
   @override
   Future<DriverDutyState> currentDuty() async {
-    if (unavailable) throw const ApiException(503, 'offline');
+    if (unavailable || dutyUnavailable) {
+      throw const ApiException(503, 'offline');
+    }
     return duty;
   }
 
@@ -245,7 +465,17 @@ class _StateRemote implements DriverRemoteApi, DriverStateLookup {
   Future<void> submitEvent({
     required PendingEvent event,
     required String installationIdentifier,
-  }) async {}
+  }) async {
+    submitAttempts.update(
+      event.clientEventUuid,
+      (count) => count + 1,
+      ifAbsent: () => 1,
+    );
+    logicalEvents.add(event.clientEventUuid);
+    if (failAfterCommitOnce.remove(event.clientEventUuid)) {
+      throw const ApiException(503, 'response lost after server commit');
+    }
+  }
 
   @override
   Future<String> uploadEvidence({
