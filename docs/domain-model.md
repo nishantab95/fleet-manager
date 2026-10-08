@@ -304,7 +304,9 @@ Maintenance has five persisted layers:
 - `MaintenanceProofSubmission` and evidence links for Driver-to-Supervisor
   proof review.
 
-Each plan item has one or more criteria. `CALENDAR_DAYS`, `ODOMETER_KM`, and
+Each active plan item may have zero or more criteria. A zero-criterion item is a
+visible starter task whose interval is intentionally unset and whose due state
+is `UNKNOWN`. `CALENDAR_DAYS`, `ODOMETER_KM`, and
 `HOUR_METER_HOURS` are allowed for wheeled assets; non-wheeled assets reject KM.
 Due state is the most urgent usable criterion (`OVERDUE`, `DUE`, `DUE_SOON`,
 `NOT_DUE`). A
@@ -324,9 +326,18 @@ still captures its configured KM/HMR, duty, diesel, emergency, and report data.
 `maintenance_responsibility` separately identifies `OWNER_COMPANY`,
 `RENTER_COMPANY`, or `SHARED`. The current Pilot implements company maintenance
 only for owned assets with `OWNER_COMPANY` or `SHARED`; rented assets default to
-their external rental Owner and expose history without editable plans, due
-alerts, work-order mutations, Driver maintenance items, or current-company
-completion.
+their external rental Owner and are excluded from the renting company's normal
+maintenance selectors, history, due alerts, work orders, Driver maintenance
+items, and current-company completion. A direct plan context exposes only the
+external-responsibility state.
+
+Every maintenance template persists `template_type`, `confidence`, category,
+wheeled/non-wheeled applicability, source name/reference, notes, version, and
+optional exact manufacturer/model/year metadata. Company starters are always
+`SUGGESTED`; OEM-verified templates require an exact manufacturer/model and an
+auditable source. Applying a template produces an independent Asset-plan
+snapshot. The standard source registry is documented in
+`docs/maintenance-template-sources.md`.
 
 A Driver sees only `DUE` and `OVERDUE` items for the current assignment and may
 submit one or more private service photos under a client-generated idempotency

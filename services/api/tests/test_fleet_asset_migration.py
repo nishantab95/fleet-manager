@@ -53,7 +53,7 @@ def test_database_is_at_the_single_model_complete_head(postgres_engine: Engine) 
     script = ScriptDirectory.from_config(config)
     with postgres_engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
-    assert script.get_heads() == ["0021_maintenance_responsibility"]
+    assert script.get_heads() == ["0022_maintenance_starter_catalog"]
     assert current == script.get_current_head()
     command.check(config)
 
@@ -1006,6 +1006,100 @@ def test_0021_upgrades_legacy_wheeled_assets_to_dual_meter_capabilities(
                 text("DELETE FROM report_templates WHERE company_id = :company"),
                 {"company": company_id},
             )
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :company"),
+                {"company": company_id},
+            )
+
+
+def test_0022_backfills_existing_template_catalog_metadata(postgres_engine: Engine) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("a0000000-0000-0000-0000-000000000001")
+    user_id = UUID("a0000000-0000-0000-0000-000000000002")
+    membership_id = UUID("a0000000-0000-0000-0000-000000000003")
+    starter_id = UUID("a0000000-0000-0000-0000-000000000004")
+    oem_id = UUID("a0000000-0000-0000-0000-000000000005")
+    command.downgrade(config, "0021_maintenance_responsibility")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'Template Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, phone_number, display_name, status) VALUES "
+                    "(:id, '+919100000221', 'Template Owner', 'ACTIVE')"
+                ),
+                {"id": user_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO company_memberships "
+                    "(id, company_id, user_id, role, status, display_name) VALUES "
+                    "(:id, :company, :user, 'OWNER_ADMIN', 'ACTIVE', 'Template Owner')"
+                ),
+                {"id": membership_id, "company": company_id, "user": user_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO maintenance_templates "
+                    "(id, company_id, name, version, source_type, source_reference, "
+                    "verification_status, asset_type, manufacturer, model, is_generic, "
+                    "created_by_membership_id) VALUES "
+                    "(:starter, :company, 'Legacy Tipper', '1', 'COMPANY_DEFAULT', NULL, "
+                    "'UNVERIFIED', 'TIPPER', NULL, NULL, true, :membership), "
+                    "(:oem, :company, 'Legacy JCB', '1', 'OEM', 'JCB-REF', "
+                    "'VERIFIED', 'EXCAVATOR', 'JCB', 'NXT 205', false, :membership)"
+                ),
+                {
+                    "starter": starter_id,
+                    "oem": oem_id,
+                    "company": company_id,
+                    "membership": membership_id,
+                },
+            )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.connect() as connection:
+            rows = {
+                row.id: row
+                for row in connection.execute(
+                    text(
+                        "SELECT id, template_type::text AS template_type, "
+                        "confidence::text AS confidence, category::text AS category, "
+                        "applicability::text AS applicability, source_name "
+                        "FROM maintenance_templates WHERE company_id = :company"
+                    ),
+                    {"company": company_id},
+                )
+            }
+        assert rows[starter_id].template_type == "COMPANY_STARTER"
+        assert rows[starter_id].confidence == "SUGGESTED"
+        assert rows[starter_id].category == "HEAVY_TIPPER_10_WHEEL"
+        assert rows[starter_id].applicability == "WHEELED"
+        assert rows[oem_id].template_type == "OEM_VERIFIED"
+        assert rows[oem_id].confidence == "VERIFIED"
+        assert rows[oem_id].category == "TRACKED_EXCAVATOR"
+        assert rows[oem_id].applicability == "NON_WHEELED"
+        assert rows[oem_id].source_name == "Verified manufacturer source"
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM maintenance_templates WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(
+                text("DELETE FROM company_memberships WHERE company_id = :company"),
+                {"company": company_id},
+            )
+            connection.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
             connection.execute(
                 text("DELETE FROM companies WHERE id = :company"),
                 {"company": company_id},

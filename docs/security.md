@@ -186,8 +186,12 @@ controls.
 - Ownership never suppresses operational capture or reporting. Maintenance
   mutations separately require current-company maintenance authority. Current
   Pilot rented assets default to external Owner maintenance, are excluded from
-  due counts/work orders/Driver maintenance prompts, and retain readable
-  same-tenant history.
+  selectors, history, due counts, work orders, and Driver maintenance prompts.
+  A direct context exposes only the external-responsibility message.
+- Company starters are explicitly unverified/suggested. An OEM-verified
+  template requires source, manufacturer, and exact model metadata. Template
+  matching is exact and application copies an independent snapshot, preventing
+  later catalog edits from silently altering an Asset plan.
 - A proof binds the authenticated Driver's current assignment, asset, Site,
   optional active duty, schedule, and evidence metadata on the server. Evidence
   must belong to that same Driver and company. Repeated client submission UUIDs

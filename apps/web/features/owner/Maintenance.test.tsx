@@ -107,10 +107,10 @@ describe("Owner maintenance", () => {
     const apiRequest = maintenanceApi();
     render(<Maintenance assets={[trackedAsset, wheeledAsset]} apiRequest={apiRequest as unknown as WebRequest} initialAssetId={trackedAsset.id} />);
 
-    await screen.findByText("MAINTENANCE SETUP");
-    expect(screen.getByText(/No model-specific maintenance template/)).toBeInTheDocument();
+    await screen.findByText("Maintenance plan");
+    expect(screen.getByText(/No matching template/)).toBeInTheDocument();
     expect(screen.getByLabelText("Copy maintenance plan from Asset")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "+ Add custom item" }));
+    fireEvent.click(screen.getByRole("button", { name: "+ Custom item" }));
     expect(screen.getByLabelText("Every days")).toBeInTheDocument();
     expect(screen.getByLabelText("Every hours")).toBeInTheDocument();
     expect(screen.queryByLabelText("Every KM")).not.toBeInTheDocument();
@@ -120,21 +120,24 @@ describe("Owner maintenance", () => {
     const apiRequest = maintenanceApi();
     render(<Maintenance assets={[trackedAsset, wheeledAsset]} apiRequest={apiRequest as unknown as WebRequest} initialAssetId={wheeledAsset.id} />);
 
-    await screen.findByText("MAINTENANCE SETUP");
-    fireEvent.click(screen.getByRole("button", { name: "+ Add custom item" }));
+    await screen.findByText("Maintenance plan");
+    fireEvent.click(screen.getByRole("button", { name: "+ Custom item" }));
     expect(screen.getByLabelText("Every days")).toBeInTheDocument();
     expect(screen.getByLabelText("Every KM")).toBeInTheDocument();
     expect(screen.getByLabelText("Every hours")).toBeInTheDocument();
   });
 
-  it("keeps routine intervals inline and saves all dual-meter criteria", async () => {
+  it("keeps the normal list compact and edits all dual-meter criteria on demand", async () => {
     const apiRequest = maintenanceApi();
     render(<Maintenance assets={[trackedAsset, wheeledAsset]} apiRequest={apiRequest as unknown as WebRequest} initialAssetId={wheeledAsset.id} />);
 
-    await screen.findByLabelText("Days — Engine Oil");
-    expect(screen.getByLabelText("KM — Engine Oil")).toHaveValue(5000);
-    expect(screen.getByLabelText("Hours — Engine Oil")).toHaveValue(250);
-    fireEvent.change(screen.getByLabelText("KM — Engine Oil"), { target: { value: "6000" } });
+    await screen.findByText("Engine Oil");
+    expect(screen.queryByLabelText("Every KM")).not.toBeInTheDocument();
+    expect(screen.getByText("5,000 km")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Every KM")).toHaveValue(5000);
+    expect(screen.getByLabelText("Every hours")).toHaveValue(250);
+    fireEvent.change(screen.getByLabelText("Every KM"), { target: { value: "6000" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
@@ -149,13 +152,36 @@ describe("Owner maintenance", () => {
     ]));
   });
 
-  it("shows rented assets as operational but externally maintained", async () => {
+  it("excludes rented assets from pickers and keeps direct context read-only", async () => {
     const apiRequest = maintenanceApi();
     render(<Maintenance assets={[rentedAsset]} apiRequest={apiRequest as unknown as WebRequest} initialAssetId={rentedAsset.id} />);
 
-    await screen.findByText("Managed by rental owner");
-    expect(screen.getByText(/Operational KM\/HMR continues to be recorded/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "+ Add custom item" })).not.toBeInTheDocument();
+    await screen.findByText("Maintenance managed by rental owner.");
+    expect(screen.queryByLabelText("Maintenance Asset")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "+ Custom item" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Copy maintenance plan from Asset")).not.toBeInTheDocument();
+  });
+
+  it("keeps rented assets out of maintenance and work-order selectors", async () => {
+    const apiRequest = maintenanceApi();
+    render(<Maintenance assets={[wheeledAsset, rentedAsset]} apiRequest={apiRequest as unknown as WebRequest} initialAssetId={wheeledAsset.id} />);
+
+    const picker = await screen.findByLabelText("Maintenance Asset");
+    expect(picker).toHaveTextContent("Dual meter tipper");
+    expect(picker).not.toHaveTextContent("Rented dual-meter tipper");
+    fireEvent.click(screen.getByRole("tab", { name: "Work Orders" }));
+    expect(screen.getByLabelText("Work order Asset")).not.toHaveTextContent("Rented dual-meter tipper");
+  });
+
+  it("uses a separated compact plan header and one wrapped trigger column", async () => {
+    const apiRequest = maintenanceApi();
+    render(<Maintenance assets={[wheeledAsset]} apiRequest={apiRequest as unknown as WebRequest} initialAssetId={wheeledAsset.id} />);
+
+    await screen.findByText("Maintenance plan");
+    expect(screen.getByText("TIP-01")).toBeInTheDocument();
+    expect(screen.getByText("CAT · 320 · 2024")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Triggers" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Days" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/MAINTENANCE SETUPTIP-01/)).not.toBeInTheDocument();
   });
 });

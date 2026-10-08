@@ -178,8 +178,9 @@ immutable maintenance history. Ownership, operational responsibility, and
 maintenance responsibility are separate concepts: rental never disables duty,
 KM/HMR, diesel, emergency, or reports. In the current Pilot an `OWNED` asset
 with `OWNER_COMPANY` or `SHARED` responsibility is maintained by its tenant;
-a `RENTED` asset defaults to `OWNER_COMPANY` and is therefore shown as
-externally maintained with read-only historical records.
+a `RENTED` asset defaults to `OWNER_COMPANY` and is therefore absent from the
+renting company's maintenance selectors. A direct Asset context returns only a
+compact external-responsibility state; operational capture remains unchanged.
 
 Maintenance triggers are configured per plan item. Wheeled assets may use any
 non-empty combination of calendar date, odometer kilometres, and hour-meter
@@ -210,18 +211,22 @@ meters, uses the confirmation date as the calendar baseline, appends immutable
 history, and recalculates due state. Maintenance appears only in Supervisor
 pending notifications; the four operational attention tiles remain unchanged.
 
-Maintenance templates are versioned setup data. Applying a template copies
+Maintenance templates are versioned setup data. They explicitly distinguish
+editable `COMPANY_STARTER` / `SUGGESTED` policy from exact-model
+`OEM_VERIFIED` / `VERIFIED` references and retain auditable source metadata.
+Applying a template copies
 compatible task definitions into an asset-owned plan; later template changes do
 not rewrite that plan. Specific manufacturer/model/year matches are preferred
-deterministically, a generic template may provide descriptive starter tasks,
-and no invented OEM interval is supplied. Copying another asset's plan copies
+deterministically and never fuzzily cross-applied. A generic starter may include
+a task with no interval where a precise value is not defensible, and no invented
+OEM interval is supplied. Copying another asset's plan copies
 only compatible task definitions and resets all service baselines; it never
 copies maintenance history. Work-order completion records decimal costs,
 optional notes and references, supplied meter baselines, and the calendar
 completion date in an immutable history row.
 
-Migrations `0019_asset_meters`, `0020_maintenance_v2`, and
-`0021_maintenance_responsibility` add independent asset capabilities, grouped
+Migrations `0019_asset_meters`, `0020_maintenance_v2`,
+`0021_maintenance_responsibility`, and `0022_maintenance_starter_catalog` add independent asset capabilities, grouped
 meter captures, templates, plans, criteria, work orders, history, proof review,
 and attachment metadata. Migration 0021 corrects the earlier conservative
 legacy default by making every existing `is_wheeled=true` asset dual KM/HMR;

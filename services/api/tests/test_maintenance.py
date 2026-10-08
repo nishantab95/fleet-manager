@@ -33,7 +33,10 @@ from fleet_api.domain.enums import (
     MaintenanceDueState,
     MaintenanceProofStatus,
     MaintenanceTaskCode,
+    MaintenanceTemplateCategory,
+    MaintenanceTemplateConfidence,
     MaintenanceTemplateSourceType,
+    MaintenanceTemplateType,
     MaintenanceTemplateVerificationStatus,
     MaintenanceWorkOrderStatus,
     MembershipRole,
@@ -544,6 +547,128 @@ def test_template_matching_copy_isolation_generic_fallback_and_applicability(
     assert copied_baseline.baseline_value is None
 
 
+def test_standard_starter_catalog_is_explicit_editable_and_model_safe(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    service = MaintenanceService(db_session, owner_context(tenant_records))
+
+    assert service.ensure_starter_catalog() == 10
+    assert service.ensure_starter_catalog() == 0
+    templates = service.list_templates()
+    standards = [template for template in templates if template.name.endswith("Starter")]
+    assert {template.category for template in standards} == {
+        MaintenanceTemplateCategory.HEAVY_TIPPER_10_WHEEL,
+        MaintenanceTemplateCategory.TRACKED_EXCAVATOR,
+        MaintenanceTemplateCategory.BACKHOE_LOADER,
+        MaintenanceTemplateCategory.ROAD_ROLLER_COMPACTOR,
+        MaintenanceTemplateCategory.WHEEL_LOADER,
+        MaintenanceTemplateCategory.MOTOR_GRADER,
+    }
+    assert all(
+        template.template_type == MaintenanceTemplateType.COMPANY_STARTER for template in standards
+    )
+    assert all(
+        template.confidence == MaintenanceTemplateConfidence.SUGGESTED for template in standards
+    )
+    assert all(template.source_name and template.notes for template in standards)
+
+    references = [
+        template
+        for template in templates
+        if template.template_type == MaintenanceTemplateType.OEM_VERIFIED
+    ]
+    assert {template.manufacturer for template in references} == {
+        "TATA MOTORS",
+        "JCB",
+        "VOLVO",
+        "CATERPILLAR",
+    }
+    assert all(
+        template.confidence == MaintenanceTemplateConfidence.VERIFIED for template in references
+    )
+    assert all(
+        template.model and template.source_name and template.source_reference
+        for template in references
+    )
+
+    tracked = create_fleet_asset(
+        db_session,
+        company_id=company.id,
+        asset_type=FleetAssetType.EXCAVATOR,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="STARTER-TRACKED",
+        registration_number=None,
+        short_name="Starter tracked",
+        manufacturer="JCB",
+        model="Different model",
+    )
+    tracked_matches = service.matching_templates(tracked.id)
+    assert all(
+        template.category == MaintenanceTemplateCategory.TRACKED_EXCAVATOR
+        for template in tracked_matches
+    )
+    assert all(template.name != "JCB NXT 205 Reference" for template in tracked_matches)
+    tracked_starter = next(
+        template
+        for template in standards
+        if template.category == MaintenanceTemplateCategory.TRACKED_EXCAVATOR
+    )
+    assert all(
+        criterion.basis != MaintenanceCriterionBasis.ODOMETER_KM
+        for _item, criteria in service.template_items(tracked_starter.id)
+        for criterion in criteria
+    )
+
+    tipper = create_fleet_asset(
+        db_session,
+        company_id=company.id,
+        asset_type=FleetAssetType.TIPPER,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="STARTER-TIPPER",
+        registration_number="KA09ST0001",
+        short_name="Starter tipper",
+    )
+    heavy = next(
+        template
+        for template in standards
+        if template.category == MaintenanceTemplateCategory.HEAVY_TIPPER_10_WHEEL
+    )
+    service.apply_template(tipper.id, heavy.id)
+    _, copied = service.list_plan(tipper.id)
+    air_filter = next(item for item in copied if item.custom_label == "Air filter")
+    assert service.criteria_for(air_filter.id) == []
+
+    master_item, master_criteria = service.template_items(heavy.id)[0]
+    copied_before = {
+        item.custom_label: [criterion.interval_value for criterion in service.criteria_for(item.id)]
+        for item in copied
+    }
+    service.update_template_item(
+        heavy.id,
+        master_item.id,
+        task_code=master_item.task_code,
+        custom_label=master_item.custom_label,
+        action_type=master_item.action_type,
+        description=master_item.description,
+        enabled=master_item.enabled,
+        criteria=[
+            CriterionInput(
+                basis=criterion.basis,
+                interval_value=criterion.interval_value + Decimal("1"),
+                warning_value=criterion.warning_value,
+            )
+            for criterion in master_criteria
+        ],
+    )
+    _, copied_after = service.list_plan(tipper.id)
+    assert {
+        item.custom_label: [criterion.interval_value for criterion in service.criteria_for(item.id)]
+        for item in copied_after
+    } == copied_before
+
+
 def test_maintenance_routes_are_owner_only_and_history_has_no_mutation_route(
     db_session: Session,
     tenant_records: dict[str, object],
@@ -559,7 +684,7 @@ def test_maintenance_routes_are_owner_only_and_history_has_no_mutation_route(
         owner.close()
 
 
-def test_rented_asset_keeps_history_but_is_excluded_from_company_maintenance(
+def test_rented_asset_is_excluded_from_all_company_maintenance_surfaces(
     db_session: Session,
     tenant_records: dict[str, object],
 ) -> None:
@@ -597,7 +722,7 @@ def test_rented_asset_keeps_history_but_is_excluded_from_company_maintenance(
         description=None,
         scheduled_for=None,
     )
-    _completed, record = service.complete_work_order(
+    _completed, _record = service.complete_work_order(
         order.id,
         service_date=date(2026, 2, 1),
         odometer_km=None,
@@ -613,7 +738,8 @@ def test_rented_asset_keeps_history_but_is_excluded_from_company_maintenance(
 
     assert service.evaluations() == []
     assert service.alert_counts()[MaintenanceDueState.OVERDUE] == 0
-    assert service.list_history(asset.id) == [record]
+    assert service.list_work_orders() == []
+    assert service.list_history(asset.id) == []
     with pytest.raises(DomainError, match="rental owner"):
         service.ensure_plan(asset.id)
     with pytest.raises(DomainError, match="rental owner"):
@@ -624,6 +750,23 @@ def test_rented_asset_keeps_history_but_is_excluded_from_company_maintenance(
             description=None,
             scheduled_for=None,
         )
+
+    owner = client_for(
+        db_session,
+        value(tenant_records, "owner_a_membership", CompanyMembership),
+    )
+    try:
+        response = owner.get(f"/api/v1/owner/maintenance/plans/{asset.id}")
+        assert response.status_code == 200
+        assert response.json()["managed_by_current_company"] is False
+        assert response.json()["management_message"] == ("Maintenance managed by rental owner.")
+        assert response.json()["items"] == []
+        assert owner.get("/api/v1/owner/maintenance/work-orders").json() == []
+        assert owner.get("/api/v1/owner/maintenance/history").json() == []
+        assert owner.get(f"/api/v1/owner/maintenance/catalog/{asset.id}").json() == []
+        assert owner.get(f"/api/v1/owner/maintenance/templates/matches/{asset.id}").json() == []
+    finally:
+        owner.close()
 
 
 def test_driver_proof_requires_supervisor_review_and_rejection_keeps_due(

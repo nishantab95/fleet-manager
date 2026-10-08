@@ -235,3 +235,28 @@ class MaintenanceTemplateSourceType(StrEnum):
 class MaintenanceTemplateVerificationStatus(StrEnum):
     VERIFIED = "VERIFIED"
     UNVERIFIED = "UNVERIFIED"
+
+
+class MaintenanceTemplateType(StrEnum):
+    COMPANY_STARTER = "COMPANY_STARTER"
+    OEM_VERIFIED = "OEM_VERIFIED"
+
+
+class MaintenanceTemplateConfidence(StrEnum):
+    SUGGESTED = "SUGGESTED"
+    VERIFIED = "VERIFIED"
+
+
+class MaintenanceTemplateCategory(StrEnum):
+    HEAVY_TIPPER_10_WHEEL = "HEAVY_TIPPER_10_WHEEL"
+    TRACKED_EXCAVATOR = "TRACKED_EXCAVATOR"
+    BACKHOE_LOADER = "BACKHOE_LOADER"
+    ROAD_ROLLER_COMPACTOR = "ROAD_ROLLER_COMPACTOR"
+    WHEEL_LOADER = "WHEEL_LOADER"
+    MOTOR_GRADER = "MOTOR_GRADER"
+    CUSTOM = "CUSTOM"
+
+
+class MaintenanceTemplateApplicability(StrEnum):
+    WHEELED = "WHEELED"
+    NON_WHEELED = "NON_WHEELED"

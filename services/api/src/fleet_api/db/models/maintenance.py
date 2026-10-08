@@ -30,7 +30,11 @@ from fleet_api.domain.enums import (
     MaintenancePlanSource,
     MaintenanceProofStatus,
     MaintenanceTaskCode,
+    MaintenanceTemplateApplicability,
+    MaintenanceTemplateCategory,
+    MaintenanceTemplateConfidence,
     MaintenanceTemplateSourceType,
+    MaintenanceTemplateType,
     MaintenanceTemplateVerificationStatus,
     MaintenanceWorkOrderStatus,
 )
@@ -44,6 +48,26 @@ class MaintenanceTemplate(UpdatedTimestampModel):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     version: Mapped[str] = mapped_column(String(40), nullable=False)
+    template_type: Mapped[MaintenanceTemplateType] = mapped_column(
+        SAEnum(MaintenanceTemplateType, name="maintenance_template_type_enum"),
+        nullable=False,
+    )
+    confidence: Mapped[MaintenanceTemplateConfidence] = mapped_column(
+        SAEnum(MaintenanceTemplateConfidence, name="maintenance_template_confidence_enum"),
+        nullable=False,
+    )
+    category: Mapped[MaintenanceTemplateCategory] = mapped_column(
+        SAEnum(MaintenanceTemplateCategory, name="maintenance_template_category_enum"),
+        nullable=False,
+    )
+    applicability: Mapped[MaintenanceTemplateApplicability] = mapped_column(
+        SAEnum(
+            MaintenanceTemplateApplicability,
+            name="maintenance_template_applicability_enum",
+        ),
+        nullable=False,
+    )
+    source_name: Mapped[str] = mapped_column(String(200), nullable=False)
     source_type: Mapped[MaintenanceTemplateSourceType] = mapped_column(
         SAEnum(MaintenanceTemplateSourceType, name="maintenance_template_source_enum"),
         nullable=False,
@@ -63,6 +87,7 @@ class MaintenanceTemplate(UpdatedTimestampModel):
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     model_year_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
     model_year_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_generic: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
@@ -90,6 +115,14 @@ class MaintenanceTemplate(UpdatedTimestampModel):
         CheckConstraint(
             "model_year_min IS NULL OR model_year_max IS NULL OR model_year_max >= model_year_min",
             name="model_year_ordered",
+        ),
+        CheckConstraint("length(btrim(source_name)) > 0", name="source_name_required"),
+        CheckConstraint(
+            "template_type <> 'OEM_VERIFIED' OR "
+            "(confidence = 'VERIFIED' AND source_type = 'OEM' "
+            "AND verification_status = 'VERIFIED' AND source_reference IS NOT NULL "
+            "AND manufacturer IS NOT NULL AND model IS NOT NULL)",
+            name="verified_oem_metadata_required",
         ),
     )
 

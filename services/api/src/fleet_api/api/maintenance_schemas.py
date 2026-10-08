@@ -16,7 +16,11 @@ from fleet_api.domain.enums import (
     MaintenanceProofStatus,
     MaintenanceResponsibility,
     MaintenanceTaskCode,
+    MaintenanceTemplateApplicability,
+    MaintenanceTemplateCategory,
+    MaintenanceTemplateConfidence,
     MaintenanceTemplateSourceType,
+    MaintenanceTemplateType,
     MaintenanceTemplateVerificationStatus,
     MaintenanceWorkOrderStatus,
 )
@@ -37,7 +41,7 @@ class MaintenanceScheduleRequest(BaseModel):
     action_type: MaintenanceActionType
     description: str | None = Field(default=None, max_length=2000)
     enabled: bool = True
-    criteria: list[MaintenanceCriterionRequest] = Field(min_length=1, max_length=3)
+    criteria: list[MaintenanceCriterionRequest] = Field(default_factory=list, max_length=3)
 
 
 class MaintenanceCriterionResponse(BaseModel):
@@ -176,6 +180,11 @@ class MaintenanceHistoryResponse(BaseModel):
 class MaintenanceTemplateCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     version: str = Field(min_length=1, max_length=40)
+    template_type: MaintenanceTemplateType | None = None
+    confidence: MaintenanceTemplateConfidence | None = None
+    category: MaintenanceTemplateCategory | None = None
+    applicability: MaintenanceTemplateApplicability | None = None
+    source_name: str = Field(default="Company maintenance policy", min_length=1, max_length=200)
     source_type: MaintenanceTemplateSourceType
     source_reference: str | None = Field(default=None, max_length=500)
     verification_status: MaintenanceTemplateVerificationStatus
@@ -184,16 +193,39 @@ class MaintenanceTemplateCreateRequest(BaseModel):
     model: str | None = Field(default=None, max_length=100)
     model_year_min: int | None = Field(default=None, ge=1900, le=2200)
     model_year_max: int | None = Field(default=None, ge=1900, le=2200)
+    notes: str | None = Field(default=None, max_length=4000)
     is_generic: bool = False
 
     @model_validator(mode="after")
     def validate_oem_metadata(self) -> MaintenanceTemplateCreateRequest:
-        if (
-            self.source_type == MaintenanceTemplateSourceType.OEM
+        resolved_type = self.template_type or (
+            MaintenanceTemplateType.OEM_VERIFIED
+            if self.source_type == MaintenanceTemplateSourceType.OEM
             and self.verification_status == MaintenanceTemplateVerificationStatus.VERIFIED
-            and not self.source_reference
+            else MaintenanceTemplateType.COMPANY_STARTER
+        )
+        resolved_confidence = self.confidence or (
+            MaintenanceTemplateConfidence.VERIFIED
+            if resolved_type == MaintenanceTemplateType.OEM_VERIFIED
+            else MaintenanceTemplateConfidence.SUGGESTED
+        )
+        if (
+            resolved_type == MaintenanceTemplateType.COMPANY_STARTER
+            and resolved_confidence != MaintenanceTemplateConfidence.SUGGESTED
         ):
-            raise ValueError("verified OEM templates require a source reference")
+            raise ValueError("company starter templates must be marked suggested")
+        if resolved_type == MaintenanceTemplateType.OEM_VERIFIED and (
+            resolved_confidence != MaintenanceTemplateConfidence.VERIFIED
+            or self.source_type != MaintenanceTemplateSourceType.OEM
+            or self.verification_status != MaintenanceTemplateVerificationStatus.VERIFIED
+            or not self.source_reference
+            or not self.manufacturer
+            or not self.model
+        ):
+            raise ValueError(
+                "OEM verified templates require verified confidence, source, "
+                "manufacturer, and model"
+            )
         return self
 
 
@@ -201,6 +233,11 @@ class MaintenanceTemplateResponse(BaseModel):
     id: UUID
     name: str
     version: str
+    template_type: MaintenanceTemplateType
+    confidence: MaintenanceTemplateConfidence
+    category: MaintenanceTemplateCategory
+    applicability: MaintenanceTemplateApplicability
+    source_name: str
     source_type: MaintenanceTemplateSourceType
     source_reference: str | None
     verification_status: MaintenanceTemplateVerificationStatus
@@ -209,6 +246,7 @@ class MaintenanceTemplateResponse(BaseModel):
     model: str | None
     model_year_min: int | None
     model_year_max: int | None
+    notes: str | None
     is_generic: bool
     created_at: datetime
     updated_at: datetime
@@ -220,7 +258,7 @@ class MaintenanceTemplateItemRequest(BaseModel):
     action_type: MaintenanceActionType
     description: str | None = Field(default=None, max_length=2000)
     enabled: bool = True
-    criteria: list[MaintenanceCriterionRequest] = Field(min_length=1, max_length=3)
+    criteria: list[MaintenanceCriterionRequest] = Field(default_factory=list, max_length=3)
 
 
 class MaintenanceTemplateCriterionResponse(BaseModel):

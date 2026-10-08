@@ -140,6 +140,27 @@ def _template_response(template: object) -> MaintenanceTemplateResponse:
     return MaintenanceTemplateResponse.model_validate(template, from_attributes=True)
 
 
+def _template_item_response(
+    service: MaintenanceService, template_id: UUID, item_id: UUID
+) -> MaintenanceTemplateItemResponse:
+    item, criteria = next(
+        row for row in service.template_items(template_id) if row[0].id == item_id
+    )
+    return MaintenanceTemplateItemResponse(
+        id=item.id,
+        template_id=item.template_id,
+        task_code=item.task_code,
+        task_label=task_label(item.task_code, item.custom_label),
+        action_type=item.action_type,
+        description=item.description,
+        enabled=item.enabled,
+        criteria=[
+            MaintenanceTemplateCriterionResponse.model_validate(criterion, from_attributes=True)
+            for criterion in criteria
+        ],
+    )
+
+
 @router.get("/overview", response_model=MaintenanceOverviewResponse)
 def overview(
     service: MaintenanceService = Depends(get_maintenance_service),
@@ -197,7 +218,7 @@ def get_plan(
         supports_hour_meter=asset.supports_hour_meter,
         maintenance_responsibility=asset.maintenance_responsibility,
         managed_by_current_company=managed,
-        management_message=None if managed else "Managed by rental owner",
+        management_message=None if managed else "Maintenance managed by rental owner.",
         source=plan.source if plan else None,
         source_template_id=plan.source_template_id if plan else None,
         source_template_version=plan.source_template_version if plan else None,
@@ -381,7 +402,10 @@ def history(
 @router.get("/templates", response_model=list[MaintenanceTemplateResponse])
 def list_templates(
     service: MaintenanceService = Depends(get_maintenance_service),
+    db: Session = Depends(get_db),
 ) -> list[MaintenanceTemplateResponse]:
+    if service.ensure_starter_catalog():
+        db.commit()
     return [_template_response(item) for item in service.list_templates()]
 
 
@@ -452,21 +476,35 @@ def add_template_item(
             criteria=_criterion_inputs(payload.criteria),
         )
         db.commit()
-        criteria = service.template_items(template_id)
-        created_item, created_criteria = next(row for row in criteria if row[0].id == item.id)
-        return MaintenanceTemplateItemResponse(
-            id=created_item.id,
-            template_id=created_item.template_id,
-            task_code=created_item.task_code,
-            task_label=task_label(created_item.task_code, created_item.custom_label),
-            action_type=created_item.action_type,
-            description=created_item.description,
-            enabled=created_item.enabled,
-            criteria=[
-                MaintenanceTemplateCriterionResponse.model_validate(criterion, from_attributes=True)
-                for criterion in created_criteria
-            ],
+        return _template_item_response(service, template_id, item.id)
+    except DomainError as exc:
+        _fail(db, exc)
+
+
+@router.put(
+    "/templates/{template_id}/items/{template_item_id}",
+    response_model=MaintenanceTemplateItemResponse,
+)
+def update_template_item(
+    template_id: UUID,
+    template_item_id: UUID,
+    payload: MaintenanceTemplateItemRequest,
+    service: MaintenanceService = Depends(get_maintenance_service),
+    db: Session = Depends(get_db),
+) -> MaintenanceTemplateItemResponse:
+    try:
+        item = service.update_template_item(
+            template_id,
+            template_item_id,
+            task_code=payload.task_code,
+            custom_label=payload.custom_label,
+            action_type=payload.action_type,
+            description=payload.description,
+            enabled=payload.enabled,
+            criteria=_criterion_inputs(payload.criteria),
         )
+        db.commit()
+        return _template_item_response(service, template_id, item.id)
     except DomainError as exc:
         _fail(db, exc)
 
@@ -475,9 +513,12 @@ def add_template_item(
 def matching_templates(
     asset_id: UUID,
     service: MaintenanceService = Depends(get_maintenance_service),
+    db: Session = Depends(get_db),
 ) -> list[MaintenanceTemplateResponse]:
     if not company_manages_maintenance(service._asset(asset_id)):
         return []
+    if service.ensure_starter_catalog():
+        db.commit()
     return [_template_response(item) for item in service.matching_templates(asset_id)]
 
 

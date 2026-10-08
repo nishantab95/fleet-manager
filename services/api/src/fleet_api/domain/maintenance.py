@@ -36,12 +36,17 @@ from fleet_api.domain.enums import (
     MaintenancePlanSource,
     MaintenanceResponsibility,
     MaintenanceTaskCode,
+    MaintenanceTemplateApplicability,
+    MaintenanceTemplateCategory,
+    MaintenanceTemplateConfidence,
     MaintenanceTemplateSourceType,
+    MaintenanceTemplateType,
     MaintenanceTemplateVerificationStatus,
     MaintenanceWorkOrderStatus,
     VerificationStatus,
 )
 from fleet_api.domain.errors import ConflictError, DomainError, NotFoundError
+from fleet_api.domain.maintenance_starters import MAINTENANCE_STARTER_CATALOG
 
 
 @dataclass(frozen=True)
@@ -456,7 +461,7 @@ class MaintenanceService:
 
     def _validate_criteria(self, asset: FleetAsset, criteria: list[CriterionInput]) -> None:
         enabled = [criterion for criterion in criteria if criterion.enabled]
-        if not enabled:
+        if criteria and not enabled:
             raise DomainError("at least one maintenance trigger must be enabled")
         bases = [criterion.basis for criterion in criteria]
         if len(bases) != len(set(bases)):
@@ -923,7 +928,26 @@ class MaintenanceService:
         )
 
     def list_history(self, asset_id: UUID | None = None) -> list[MaintenanceRecord]:
-        query = select(MaintenanceRecord).where(MaintenanceRecord.company_id == self.company_id)
+        query = (
+            select(MaintenanceRecord)
+            .join(
+                FleetAsset,
+                and_(
+                    FleetAsset.company_id == MaintenanceRecord.company_id,
+                    FleetAsset.id == MaintenanceRecord.asset_id,
+                ),
+            )
+            .where(
+                MaintenanceRecord.company_id == self.company_id,
+                FleetAsset.ownership_type == AssetOwnershipType.OWNED,
+                FleetAsset.maintenance_responsibility.in_(
+                    [
+                        MaintenanceResponsibility.OWNER_COMPANY,
+                        MaintenanceResponsibility.SHARED,
+                    ]
+                ),
+            )
+        )
         if asset_id is not None:
             self._asset(asset_id)
             query = query.where(MaintenanceRecord.asset_id == asset_id)
@@ -947,16 +971,73 @@ class MaintenanceService:
         model_year_min: int | None,
         model_year_max: int | None,
         is_generic: bool,
+        template_type: MaintenanceTemplateType | None = None,
+        confidence: MaintenanceTemplateConfidence | None = None,
+        category: MaintenanceTemplateCategory | None = None,
+        applicability: MaintenanceTemplateApplicability | None = None,
+        source_name: str = "Company maintenance policy",
+        notes: str | None = None,
     ) -> MaintenanceTemplate:
         clean_name, clean_version = name.strip(), version.strip()
+        clean_source_name = source_name.strip()
+        resolved_type = template_type or (
+            MaintenanceTemplateType.OEM_VERIFIED
+            if source_type == MaintenanceTemplateSourceType.OEM
+            and verification_status == MaintenanceTemplateVerificationStatus.VERIFIED
+            else MaintenanceTemplateType.COMPANY_STARTER
+        )
+        resolved_confidence = confidence or (
+            MaintenanceTemplateConfidence.VERIFIED
+            if resolved_type == MaintenanceTemplateType.OEM_VERIFIED
+            else MaintenanceTemplateConfidence.SUGGESTED
+        )
+        resolved_category = (
+            category
+            or {
+                FleetAssetType.TIPPER: MaintenanceTemplateCategory.HEAVY_TIPPER_10_WHEEL,
+                FleetAssetType.EXCAVATOR: MaintenanceTemplateCategory.TRACKED_EXCAVATOR,
+                FleetAssetType.BACKHOE_LOADER: MaintenanceTemplateCategory.BACKHOE_LOADER,
+                FleetAssetType.ROLLER: MaintenanceTemplateCategory.ROAD_ROLLER_COMPACTOR,
+                FleetAssetType.GRADER: MaintenanceTemplateCategory.MOTOR_GRADER,
+                None: MaintenanceTemplateCategory.CUSTOM,
+            }[asset_type]
+        )
         if not clean_name or not clean_version:
             raise DomainError("template name and version are required")
+        if not clean_source_name:
+            raise DomainError("template source name is required")
         if model_year_min and model_year_max and model_year_max < model_year_min:
             raise DomainError("template model-year range is invalid")
+        if resolved_type == MaintenanceTemplateType.COMPANY_STARTER and (
+            resolved_confidence != MaintenanceTemplateConfidence.SUGGESTED
+        ):
+            raise DomainError("company starter templates must be marked suggested")
+        if resolved_type == MaintenanceTemplateType.OEM_VERIFIED and (
+            resolved_confidence != MaintenanceTemplateConfidence.VERIFIED
+            or source_type != MaintenanceTemplateSourceType.OEM
+            or verification_status != MaintenanceTemplateVerificationStatus.VERIFIED
+            or not source_reference
+            or not manufacturer
+            or not model
+        ):
+            raise DomainError(
+                "OEM verified templates require verified confidence, source, "
+                "manufacturer, and model"
+            )
+        resolved_applicability = applicability or (
+            MaintenanceTemplateApplicability.NON_WHEELED
+            if asset_type == FleetAssetType.EXCAVATOR
+            else MaintenanceTemplateApplicability.WHEELED
+        )
         template = MaintenanceTemplate(
             company_id=self.company_id,
             name=clean_name,
             version=clean_version,
+            template_type=resolved_type,
+            confidence=resolved_confidence,
+            category=resolved_category,
+            applicability=resolved_applicability,
+            source_name=clean_source_name,
             source_type=source_type,
             source_reference=source_reference.strip() if source_reference else None,
             verification_status=verification_status,
@@ -965,6 +1046,7 @@ class MaintenanceService:
             model=model.strip() if model else None,
             model_year_min=model_year_min,
             model_year_max=model_year_max,
+            notes=notes.strip() if notes else None,
             is_generic=is_generic,
             created_by_membership_id=self.actor_membership_id,
         )
@@ -977,6 +1059,69 @@ class MaintenanceService:
             new_values={"name": clean_name, "version": clean_version},
         )
         return template
+
+    def ensure_starter_catalog(self) -> int:
+        """Install missing versioned starters without rewriting tenant edits."""
+
+        existing = set(
+            self.session.execute(
+                select(MaintenanceTemplate.name, MaintenanceTemplate.version).where(
+                    MaintenanceTemplate.company_id == self.company_id
+                )
+            ).all()
+        )
+        created = 0
+        for definition in MAINTENANCE_STARTER_CATALOG:
+            if (definition.name, definition.version) in existing:
+                continue
+            source_type = (
+                MaintenanceTemplateSourceType.OEM
+                if definition.template_type == MaintenanceTemplateType.OEM_VERIFIED
+                else MaintenanceTemplateSourceType.COMPANY_DEFAULT
+            )
+            verification_status = (
+                MaintenanceTemplateVerificationStatus.VERIFIED
+                if definition.confidence == MaintenanceTemplateConfidence.VERIFIED
+                else MaintenanceTemplateVerificationStatus.UNVERIFIED
+            )
+            template = self.create_template(
+                name=definition.name,
+                version=definition.version,
+                source_type=source_type,
+                source_reference=definition.source_reference,
+                verification_status=verification_status,
+                asset_type=definition.asset_type,
+                manufacturer=definition.manufacturer,
+                model=definition.model,
+                model_year_min=definition.year_from,
+                model_year_max=definition.year_to,
+                is_generic=definition.template_type == MaintenanceTemplateType.COMPANY_STARTER,
+                template_type=definition.template_type,
+                confidence=definition.confidence,
+                category=definition.category,
+                applicability=definition.applicability,
+                source_name=definition.source_name,
+                notes=definition.notes,
+            )
+            for template_item in definition.items:
+                self.add_template_item(
+                    template.id,
+                    task_code=template_item.task_code,
+                    custom_label=template_item.label,
+                    action_type=template_item.action,
+                    description=template_item.description,
+                    enabled=True,
+                    criteria=[
+                        CriterionInput(
+                            basis=criterion.basis,
+                            interval_value=criterion.interval,
+                            warning_value=criterion.warning,
+                        )
+                        for criterion in template_item.criteria
+                    ],
+                )
+            created += 1
+        return created
 
     def list_templates(self) -> list[MaintenanceTemplate]:
         return list(
@@ -991,7 +1136,21 @@ class MaintenanceService:
         asset = self._maintenance_asset(asset_id)
         templates = self.list_templates()
 
+        asset_category = {
+            FleetAssetType.TIPPER: MaintenanceTemplateCategory.HEAVY_TIPPER_10_WHEEL,
+            FleetAssetType.EXCAVATOR: MaintenanceTemplateCategory.TRACKED_EXCAVATOR,
+            FleetAssetType.BACKHOE_LOADER: MaintenanceTemplateCategory.BACKHOE_LOADER,
+            FleetAssetType.ROLLER: MaintenanceTemplateCategory.ROAD_ROLLER_COMPACTOR,
+            FleetAssetType.GRADER: MaintenanceTemplateCategory.MOTOR_GRADER,
+        }[asset.asset_type]
+
         def matches(template: MaintenanceTemplate) -> bool:
+            if template.category not in {MaintenanceTemplateCategory.CUSTOM, asset_category}:
+                return False
+            if (
+                template.applicability == MaintenanceTemplateApplicability.WHEELED
+            ) != asset.is_wheeled:
+                return False
             if template.asset_type is not None and template.asset_type != asset.asset_type:
                 return False
             if template.manufacturer and (
@@ -1014,9 +1173,7 @@ class MaintenanceService:
             return True
 
         def score(template: MaintenanceTemplate) -> tuple[int, int, int, str, str]:
-            verified = int(
-                template.verification_status == MaintenanceTemplateVerificationStatus.VERIFIED
-            )
+            verified = int(template.confidence == MaintenanceTemplateConfidence.VERIFIED)
             specificity = sum(
                 value is not None
                 for value in (
@@ -1059,8 +1216,6 @@ class MaintenanceService:
         clean_label = custom_label.strip() if custom_label else None
         if task_code == MaintenanceTaskCode.CUSTOM and not clean_label:
             raise DomainError("custom maintenance tasks require a label")
-        if not criteria:
-            raise DomainError("template item requires at least one trigger")
         bases = [criterion.basis for criterion in criteria]
         if len(bases) != len(set(bases)):
             raise DomainError("a template trigger type may appear only once")
@@ -1098,6 +1253,73 @@ class MaintenanceService:
             "MAINTENANCE_TEMPLATE_ITEM",
             item.id,
             new_values={"template_id": str(template.id), "task_code": task_code.value},
+        )
+        return item
+
+    def update_template_item(
+        self,
+        template_id: UUID,
+        template_item_id: UUID,
+        *,
+        task_code: MaintenanceTaskCode,
+        custom_label: str | None,
+        action_type: MaintenanceActionType,
+        description: str | None,
+        enabled: bool,
+        criteria: list[CriterionInput],
+    ) -> MaintenanceTemplateItem:
+        item = self.session.scalar(
+            select(MaintenanceTemplateItem).where(
+                MaintenanceTemplateItem.company_id == self.company_id,
+                MaintenanceTemplateItem.template_id == template_id,
+                MaintenanceTemplateItem.id == template_item_id,
+            )
+        )
+        if item is None:
+            raise NotFoundError("maintenance template item was not found")
+        clean_label = custom_label.strip() if custom_label else None
+        if task_code == MaintenanceTaskCode.CUSTOM and not clean_label:
+            raise DomainError("custom maintenance tasks require a label")
+        bases = [criterion.basis for criterion in criteria]
+        if len(bases) != len(set(bases)):
+            raise DomainError("a template trigger type may appear only once")
+        for criterion in criteria:
+            if (
+                criterion.interval_value <= 0
+                or criterion.warning_value < 0
+                or criterion.warning_value >= criterion.interval_value
+            ):
+                raise DomainError("template interval and warning values are invalid")
+        item.task_code = task_code
+        item.custom_label = clean_label
+        item.action_type = action_type
+        item.description = description.strip() if description else None
+        item.enabled = enabled
+        existing = self.session.scalars(
+            select(MaintenanceTemplateCriterion).where(
+                MaintenanceTemplateCriterion.company_id == self.company_id,
+                MaintenanceTemplateCriterion.template_item_id == item.id,
+            )
+        ).all()
+        for existing_criterion in existing:
+            self.session.delete(existing_criterion)
+        self.session.flush()
+        for criterion in criteria:
+            self.session.add(
+                MaintenanceTemplateCriterion(
+                    company_id=self.company_id,
+                    template_item_id=item.id,
+                    basis=criterion.basis,
+                    interval_value=criterion.interval_value,
+                    warning_value=criterion.warning_value,
+                )
+            )
+        self.session.flush()
+        self._audit(
+            "MAINTENANCE_TEMPLATE_ITEM_UPDATED",
+            "MAINTENANCE_TEMPLATE_ITEM",
+            item.id,
+            new_values={"template_id": str(template_id), "task_code": task_code.value},
         )
         return item
 
@@ -1187,8 +1409,6 @@ class MaintenanceService:
                     and not asset.supports_hour_meter
                 )
             ]
-            if not compatible_criteria:
-                continue
             schedule = self.save_schedule(
                 asset_id,
                 task_code=item.task_code,
