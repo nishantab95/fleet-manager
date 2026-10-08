@@ -63,6 +63,7 @@ class OwnerOperationIntent:
     assignment_action: AssignmentResolution | None = None
     activate_membership: bool = False
     regular_duty_minutes: int = 600
+    reason: str | None = None
 
 
 OperationDetailValue = str | int | bool | None
@@ -289,6 +290,7 @@ class OwnerOperationPlanner:
             "assignment_action": intent.assignment_action,
             "activate_membership": intent.activate_membership,
             "regular_duty_minutes": intent.regular_duty_minutes,
+            "reason": intent.reason,
         }
 
     def _token(self, intent: OwnerOperationIntent, snapshot: list[dict[str, object]]) -> str:
@@ -340,6 +342,9 @@ class OwnerOperationPlanner:
             OwnerOperationAction.REASSIGN_DRIVER: self._preview_reassign_driver,
             OwnerOperationAction.END_ASSIGNMENT: self._preview_end_assignment,
             OwnerOperationAction.DEACTIVATE_ASSET: self._preview_deactivate_asset,
+            OwnerOperationAction.FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET: (
+                self._preview_force_close_duty_and_deactivate_asset
+            ),
             OwnerOperationAction.REACTIVATE_ASSET: self._preview_reactivate_asset,
             OwnerOperationAction.DEACTIVATE_SITE: self._preview_deactivate_site,
             OwnerOperationAction.REACTIVATE_SITE: self._preview_reactivate_site,
@@ -404,6 +409,13 @@ class OwnerOperationPlanner:
                 duty,
                 assignment_id=str(duty.assignment_id) if duty else None,
                 status=duty.status.value if duty else None,
+                started_at=duty.started_at.isoformat() if duty else None,
+                end_event_id=(str(duty.end_event_id) if duty and duty.end_event_id else None),
+                end_km=(str(duty.end_km) if duty and duty.end_km is not None else None),
+                end_hmr=(str(duty.end_hmr) if duty and duty.end_hmr is not None else None),
+                ended_at=(
+                    duty.ended_at.isoformat() if duty and duty.ended_at is not None else None
+                ),
             ),
         ]
         if site is not None:
@@ -477,6 +489,9 @@ class OwnerOperationPlanner:
                     {
                         "asset_id": str(asset.id),
                         "assignment_id": str(duty.assignment_id),
+                        "driver_membership_id": str(duty.driver_membership_id),
+                        "site_id": str(duty.site_id),
+                        "started_at": duty.started_at.isoformat(),
                     },
                 )
             )
@@ -1420,6 +1435,75 @@ class OwnerOperationPlanner:
             snapshot=snapshot,
         )
 
+    def _preview_force_close_duty_and_deactivate_asset(
+        self, intent: OwnerOperationIntent, lock: bool
+    ) -> OwnerOperationPlan:
+        if intent.asset_id is None:
+            raise DomainError("asset_id is required")
+        reason = (intent.reason or "").strip()
+        if not reason:
+            raise DomainError("reason is required for administrative duty closure")
+        asset, deployment, site, assignment, membership, user, duty, snapshot = (
+            self._asset_relationship_state(intent.asset_id, lock=lock)
+        )
+        current, dependencies = self._asset_items(
+            asset, deployment, site, assignment, membership, user, duty
+        )
+        capabilities = capabilities_for(asset.asset_type)
+        if capabilities.supports_odometer:
+            missing_meter_label = "END KM"
+            missing_exception_code = "MISSING_END_READING"
+        elif capabilities.supports_hour_meter:
+            missing_meter_label = "END HMR"
+            missing_exception_code = "MISSING_END_HMR"
+        else:
+            missing_meter_label = "END meter"
+            missing_exception_code = "MISSING_END_READING"
+
+        blocked: list[str] = []
+        warnings: list[str] = []
+        changes: list[str] = []
+        if duty is not None:
+            changes.extend(
+                [
+                    "Administratively close the active duty without fabricating "
+                    f"{missing_meter_label}",
+                    "Preserve the duty start, operational events, and evidence",
+                    f"Leave reporting to record {missing_exception_code}",
+                ]
+            )
+        else:
+            warnings.append(
+                "The active duty has already closed. Safe asset deactivation will continue."
+            )
+            if asset.status == FleetAssetStatus.INACTIVE:
+                blocked.append("Asset is already inactive and has no active duty to close.")
+        if assignment is not None and membership is not None and user is not None:
+            changes.append(
+                f"End {self._person_label(membership, user)}'s assignment to "
+                f"{self._asset_label(asset)}"
+            )
+        if deployment is not None and site is not None:
+            changes.append(f"Remove {self._asset_label(asset)} from {site.short_name}")
+        if asset.status != FleetAssetStatus.INACTIVE:
+            changes.append(f"Deactivate {self._asset_label(asset)}")
+        changes.append("Preserve assignment, deployment, event, and evidence history")
+        return self._plan(
+            intent,
+            title=f"Force close duty and deactivate {self._asset_label(asset)}",
+            summary=(
+                "This restricted Owner action closes the stuck duty without an END meter "
+                "reading, then ends its relationships and deactivates the asset atomically."
+            ),
+            current_state=current,
+            dependencies=dependencies,
+            warnings=warnings,
+            allowed_resolutions=["FORCE_CLOSE_DUTY_AND_DEACTIVATE"],
+            blocked_reasons=blocked,
+            planned_changes=changes,
+            snapshot=snapshot,
+        )
+
     def _preview_reactivate_asset(
         self, intent: OwnerOperationIntent, lock: bool
     ) -> OwnerOperationPlan:
@@ -1946,6 +2030,9 @@ class OwnerOperationPlanner:
             OwnerOperationAction.REASSIGN_DRIVER: self._execute_reassign_driver,
             OwnerOperationAction.END_ASSIGNMENT: self._execute_end_assignment,
             OwnerOperationAction.DEACTIVATE_ASSET: self._execute_deactivate_asset,
+            OwnerOperationAction.FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET: (
+                self._execute_force_close_duty_and_deactivate_asset
+            ),
             OwnerOperationAction.REACTIVATE_ASSET: self._execute_reactivate_asset,
             OwnerOperationAction.DEACTIVATE_SITE: self._execute_deactivate_site,
             OwnerOperationAction.REACTIVATE_SITE: self._execute_reactivate_site,
@@ -1969,6 +2056,7 @@ class OwnerOperationPlanner:
         entity_id: UUID,
         old_values: dict[str, object] | None = None,
         new_values: dict[str, object] | None = None,
+        reason: str | None = None,
     ) -> None:
         write_audit_log(
             self.session,
@@ -1979,6 +2067,7 @@ class OwnerOperationPlanner:
             entity_id=entity_id,
             old_values=old_values,
             new_values=new_values,
+            reason=reason,
             request_id=self.request_id,
         )
 
@@ -2296,6 +2385,119 @@ class OwnerOperationPlanner:
                 old_values={"status": FleetAssetStatus.ACTIVE.value},
                 new_values={"status": FleetAssetStatus.INACTIVE.value},
             )
+
+    def _execute_force_close_duty_and_deactivate_asset(self, intent: OwnerOperationIntent) -> None:
+        assert intent.asset_id is not None
+        reason = (intent.reason or "").strip()
+        if not reason:
+            raise DomainError("reason is required for administrative duty closure")
+
+        asset = self._asset(intent.asset_id, lock=True)
+        now = datetime.now(UTC)
+        duty = self._duty(asset.id, lock=True)
+        assignment = self._assignment(asset.id, at=now, lock=True)
+        deployment = self._deployment(asset.id, lock=True)
+        capabilities = capabilities_for(asset.asset_type)
+
+        duty_id = duty.id if duty is not None else None
+        driver_membership_id = (
+            duty.driver_membership_id
+            if duty is not None
+            else assignment.driver_membership_id
+            if assignment is not None
+            else None
+        )
+        site_id = (
+            duty.site_id
+            if duty is not None
+            else deployment.site_id
+            if deployment is not None
+            else None
+        )
+        duty_started_at = duty.started_at if duty is not None else None
+        old_duty_status = duty.status.value if duty is not None else None
+        old_end_event_id = duty.end_event_id if duty is not None else None
+        old_end_km = duty.end_km if duty is not None else None
+        old_end_hmr = duty.end_hmr if duty is not None else None
+        missing_end_meter = bool(
+            duty is not None
+            and (
+                (capabilities.supports_odometer and duty.end_km is None)
+                or (capabilities.supports_hour_meter and duty.end_hmr is None)
+            )
+        )
+        missing_end_meter_type = (
+            "KM"
+            if duty is not None and capabilities.supports_odometer
+            else "HMR"
+            if duty is not None and capabilities.supports_hour_meter
+            else None
+        )
+        lifecycle_effects: list[str] = []
+
+        if duty is not None:
+            duty.status = DutySessionStatus.CLOSED
+            duty.ended_at = now
+            duty.final_overtime_minutes = max(
+                0,
+                int((now - duty.regular_duty_ends_at).total_seconds() // 60),
+            )
+            lifecycle_effects.append("DUTY_ADMINISTRATIVELY_CLOSED")
+        if assignment is not None:
+            self._end_assignment(assignment, now)
+            lifecycle_effects.append("ASSIGNMENT_ENDED")
+        if deployment is not None:
+            self._end_deployment(deployment, now)
+            lifecycle_effects.append("DEPLOYMENT_ENDED")
+        old_asset_status = asset.status
+        if asset.status != FleetAssetStatus.INACTIVE:
+            asset.status = FleetAssetStatus.INACTIVE
+            self._audit(
+                action="OWNER_ASSET_DEACTIVATED",
+                entity_type="FLEET_ASSET",
+                entity_id=asset.id,
+                old_values={"status": old_asset_status.value},
+                new_values={"status": FleetAssetStatus.INACTIVE.value},
+            )
+            lifecycle_effects.append("ASSET_DEACTIVATED")
+
+        self._audit(
+            action="OWNER_DUTY_FORCE_CLOSED_AND_ASSET_DEACTIVATED",
+            entity_type="FLEET_ASSET",
+            entity_id=asset.id,
+            old_values={
+                "asset_id": str(asset.id),
+                "asset_status": old_asset_status.value,
+                "duty_session_id": str(duty_id) if duty_id is not None else None,
+                "duty_status": old_duty_status,
+                "duty_started_at": (
+                    duty_started_at.isoformat() if duty_started_at is not None else None
+                ),
+                "driver_membership_id": (
+                    str(driver_membership_id) if driver_membership_id is not None else None
+                ),
+                "site_id": str(site_id) if site_id is not None else None,
+                "assignment_id": str(assignment.id) if assignment is not None else None,
+                "deployment_id": str(deployment.id) if deployment is not None else None,
+                "end_event_id": (str(old_end_event_id) if old_end_event_id is not None else None),
+                "end_km": str(old_end_km) if old_end_km is not None else None,
+                "end_hmr": str(old_end_hmr) if old_end_hmr is not None else None,
+                "missing_end_meter": missing_end_meter,
+                "missing_end_meter_type": missing_end_meter_type,
+            },
+            new_values={
+                "asset_status": FleetAssetStatus.INACTIVE.value,
+                "duty_status": (
+                    DutySessionStatus.CLOSED.value if duty is not None else "NO_ACTIVE_DUTY"
+                ),
+                "duty_ended_at": now.isoformat() if duty is not None else None,
+                "end_event_fabricated": False,
+                "end_meter_fabricated": False,
+                "history_preserved": True,
+                "lifecycle_effects": lifecycle_effects,
+            },
+            reason=reason,
+        )
 
     def _execute_reactivate_asset(self, intent: OwnerOperationIntent) -> None:
         assert intent.asset_id is not None

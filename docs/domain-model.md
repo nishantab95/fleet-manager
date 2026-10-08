@@ -163,10 +163,12 @@ append-only and requires an owner reason.
 24. A rented tipper requires `rental_party_name`. An owned tipper carries no
     rental-only values; `RENTED -> OWNED` clears party and rental dates, while
     `OWNED -> RENTED` requires an explicit party.
-25. Fleet Asset edits preserve the asset UUID. Deactivation is rejected while
-    an effective assignment or active duty session exists and never removes
-    assignments, duty sessions, events, verification history, evidence, or
-    report history.
+25. Fleet Asset edits preserve the asset UUID. Direct lifecycle deactivation is
+    rejected while an effective assignment or active duty session exists. The
+    Owner relationship orchestrator may perform only the documented atomic
+    off-duty teardown or the force-close exception in invariant 43. Neither
+    path removes assignments, duty sessions, events, verification history,
+    evidence, or report history.
 26. A People invitation creates or reuses the normalized global `User` and
     creates a tenant-scoped `CompanyMembership` in `INVITED` state. A valid OTP
     session selection activates that same membership UUID. Existing identities
@@ -192,8 +194,9 @@ append-only and requires an owner reason.
     then optionally creating Site-consistent replacement rows; it never rewrites
     the old Site. Removing a deployment with an off-duty effective Assignment
     atomically ends both relationships at the same timestamp. Active duty blocks
-    move, removal, and lifecycle teardown. Assignment and deployment rows remain
-    historical records.
+    ordinary move, removal, and lifecycle teardown; only the narrow
+    Owner-admin force-close operation in invariant 43 may end it. Assignment and
+    deployment rows remain historical records.
 33. Supervisor Site asset visibility is derived from current deployment and
     `SupervisorSiteAccess`, not from event existence. Authorized Supervisors see
     active deployed assets with nullable Driver/duty data; unauthorized Sites
@@ -210,8 +213,8 @@ append-only and requires an owner reason.
     derived from current `SupervisorSiteAccess`; the nullable legacy supervisor
     column is retained only to read preserved history.
 37. Reassignment closes the prior half-open interval and inserts a new row.
-    Active duty blocks unassign/reassign, while events before the old end remain
-    valid and events at or after it cannot attach to that history.
+    Active duty blocks ordinary unassign/reassign, while events before the old
+    end remain valid and events at or after it cannot attach to that history.
 38. Asset reactivation is a lifecycle transition with optional operational
     setup. Reactivate-only leaves the asset undeployed and unassigned;
     reactivation with a Site creates a new deployment interval; adding a Driver
@@ -246,6 +249,19 @@ append-only and requires an owner reason.
     event. Exceptions count non-pending structured report exceptions, each
     non-emergency disputed event once. Rejected and amended history remains
     visible in daily status but is not counted as unresolved.
+43. `FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET` is an exceptional composite
+    operation available only to the authenticated `OWNER_ADMIN`. It requires a
+    non-empty reason and a current orchestration state token. Execute reloads
+    and locks the same-company asset, active Duty Session, Assignment,
+    Deployment, Driver, and Site before writing. It closes the duty without
+    creating an END KM/HMR event or evidence, ends the Assignment and Deployment
+    at the same effective time, deactivates the asset, and appends an audit entry
+    with the actor, reason, affected duty/Driver/asset/Site context, and missing
+    meter condition. The complete teardown commits or rolls back as one unit;
+    stale state conflicts before mutation. Existing reporting emits the
+    applicable missing END reading/HMR exception and never derives a false
+    distance or machine-hour value. Driver clients treat the server's current
+    Assignment and active-duty result as authoritative during reconciliation.
 
 ## PC V1 emergency contract
 

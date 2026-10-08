@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fleet_api.domain.enums import (
     AssetOwnershipType,
@@ -272,6 +272,18 @@ class OwnerOperationRequest(BaseModel):
     assignment_action: Literal["KEEP", "END"] | None = None
     activate_membership: bool = False
     regular_duty_minutes: int = Field(default=600, ge=1, le=1440)
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_force_close_reason(self) -> OwnerOperationRequest:
+        if self.reason is not None:
+            self.reason = self.reason.strip()
+        if (
+            self.action == OwnerOperationAction.FORCE_CLOSE_DUTY_AND_DEACTIVATE_ASSET
+            and not self.reason
+        ):
+            raise ValueError("reason is required for administrative duty closure")
+        return self
 
 
 class OwnerOperationExecuteRequest(OwnerOperationRequest):
