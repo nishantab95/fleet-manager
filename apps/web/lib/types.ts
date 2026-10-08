@@ -126,6 +126,7 @@ export type OwnerAsset = {
   asset_code: string;
   asset_type: FleetAssetType;
   ownership_type: AssetOwnershipType;
+  maintenance_responsibility?: "OWNER_COMPANY" | "RENTER_COMPANY" | "SHARED";
   registration_number: string | null;
   short_name: string | null;
   manufacturer: string | null;

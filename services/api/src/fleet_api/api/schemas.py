@@ -14,6 +14,7 @@ from fleet_api.domain.enums import (
     FleetAssetStatus,
     FleetAssetType,
     KmReadingType,
+    MaintenanceResponsibility,
     MembershipRole,
     MembershipStatus,
     OperationalEventType,
@@ -355,6 +356,7 @@ class OwnerAssetResponse(BaseModel):
     asset_code: str
     asset_type: FleetAssetType
     ownership_type: AssetOwnershipType
+    maintenance_responsibility: MaintenanceResponsibility
     registration_number: str | None
     short_name: str | None
     manufacturer: str | None
@@ -519,6 +521,7 @@ class DriverAssignmentResponse(BaseModel):
     asset_type: FleetAssetType
     supports_odometer_km: bool
     supports_hour_meter: bool
+    company_maintenance_managed: bool
     tipper_registration_number: str | None
     tipper_short_name: str | None
     site_id: UUID

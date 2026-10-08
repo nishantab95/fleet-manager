@@ -28,11 +28,13 @@ from fleet_api.db.models import (
 )
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
+    AssetOwnershipType,
     FleetAssetType,
     MaintenanceActionType,
     MaintenanceCriterionBasis,
     MaintenanceDueState,
     MaintenancePlanSource,
+    MaintenanceResponsibility,
     MaintenanceTaskCode,
     MaintenanceTemplateSourceType,
     MaintenanceTemplateVerificationStatus,
@@ -338,6 +340,25 @@ def task_label(code: MaintenanceTaskCode, custom_label: str | None) -> str:
     return custom_label or TASK_BY_CODE[code].label
 
 
+def company_manages_maintenance(asset: FleetAsset) -> bool:
+    """Return whether the Asset's current tenant is authoritative for service.
+
+    Current Pilot rental links are disabled, so a rented Asset remains
+    externally maintained even though its operational meters stay fully active.
+    The explicit responsibility value keeps this rule extensible without
+    conflating meter capabilities with ownership.
+    """
+
+    return (
+        asset.ownership_type == AssetOwnershipType.OWNED
+        and asset.maintenance_responsibility
+        in {
+            MaintenanceResponsibility.OWNER_COMPANY,
+            MaintenanceResponsibility.SHARED,
+        }
+    )
+
+
 class MaintenanceService:
     """Owner-only tenant boundary for plans, templates, work orders, and history."""
 
@@ -391,6 +412,12 @@ class MaintenanceService:
             raise NotFoundError("maintenance item was not found")
         return schedule
 
+    def _maintenance_asset(self, asset_id: UUID) -> FleetAsset:
+        asset = self._asset(asset_id)
+        if not company_manages_maintenance(asset):
+            raise DomainError("maintenance is managed by the rental owner")
+        return asset
+
     def ensure_plan(
         self,
         asset_id: UUID,
@@ -399,7 +426,7 @@ class MaintenanceService:
         source_template: MaintenanceTemplate | None = None,
         source_asset_id: UUID | None = None,
     ) -> MaintenancePlan:
-        self._asset(asset_id)
+        self._maintenance_asset(asset_id)
         plan = self.session.scalar(
             select(MaintenancePlan).where(
                 MaintenancePlan.company_id == self.company_id,
@@ -472,7 +499,7 @@ class MaintenanceService:
         criteria: list[CriterionInput],
         schedule_id: UUID | None = None,
     ) -> MaintenanceSchedule:
-        asset = self._asset(asset_id)
+        asset = self._maintenance_asset(asset_id)
         self._validate_criteria(asset, criteria)
         old_values: dict[str, object] | None
         clean_label = custom_label.strip() if custom_label else None
@@ -547,7 +574,7 @@ class MaintenanceService:
         return schedule
 
     def list_plan(self, asset_id: UUID) -> tuple[MaintenancePlan | None, list[MaintenanceSchedule]]:
-        self._asset(asset_id)
+        self._maintenance_asset(asset_id)
         plan = self.session.scalar(
             select(MaintenancePlan).where(
                 MaintenancePlan.company_id == self.company_id,
@@ -582,6 +609,7 @@ class MaintenanceService:
 
     def remove_custom_schedule(self, schedule_id: UUID) -> None:
         schedule = self._schedule(schedule_id)
+        self._maintenance_asset(schedule.asset_id)
         if schedule.task_code != MaintenanceTaskCode.CUSTOM:
             raise DomainError("catalog tasks must be disabled instead of removed")
         self._audit(
@@ -626,7 +654,13 @@ class MaintenanceService:
         evaluation_date = as_of or datetime.now(UTC).date()
         query = (
             select(MaintenanceSchedule, FleetAsset, Site.short_name)
-            .join(FleetAsset, FleetAsset.id == MaintenanceSchedule.asset_id)
+            .join(
+                FleetAsset,
+                and_(
+                    FleetAsset.company_id == MaintenanceSchedule.company_id,
+                    FleetAsset.id == MaintenanceSchedule.asset_id,
+                ),
+            )
             .outerjoin(
                 AssetSiteDeployment,
                 and_(
@@ -635,9 +669,22 @@ class MaintenanceService:
                     AssetSiteDeployment.ends_at.is_(None),
                 ),
             )
-            .outerjoin(Site, Site.id == AssetSiteDeployment.site_id)
+            .outerjoin(
+                Site,
+                and_(
+                    Site.company_id == AssetSiteDeployment.company_id,
+                    Site.id == AssetSiteDeployment.site_id,
+                ),
+            )
             .where(
                 MaintenanceSchedule.company_id == self.company_id,
+                FleetAsset.ownership_type == AssetOwnershipType.OWNED,
+                FleetAsset.maintenance_responsibility.in_(
+                    [
+                        MaintenanceResponsibility.OWNER_COMPANY,
+                        MaintenanceResponsibility.SHARED,
+                    ]
+                ),
             )
             .order_by(FleetAsset.asset_code, MaintenanceSchedule.task_code)
         )
@@ -687,7 +734,7 @@ class MaintenanceService:
         description: str | None,
         scheduled_for: date | None,
     ) -> MaintenanceWorkOrder:
-        self._asset(asset_id)
+        self._maintenance_asset(asset_id)
         if schedule_id is not None and self._schedule(schedule_id).asset_id != asset_id:
             raise DomainError("maintenance item does not belong to this asset")
         clean_title = title.strip()
@@ -729,6 +776,7 @@ class MaintenanceService:
         self, work_order_id: UUID, target: MaintenanceWorkOrderStatus
     ) -> MaintenanceWorkOrder:
         order = self._work_order(work_order_id, lock=True)
+        self._maintenance_asset(order.asset_id)
         allowed = {
             MaintenanceWorkOrderStatus.DRAFT: {
                 MaintenanceWorkOrderStatus.SCHEDULED,
@@ -782,7 +830,7 @@ class MaintenanceService:
             MaintenanceWorkOrderStatus.IN_PROGRESS,
         }:
             raise ConflictError("only an open work order can be completed")
-        asset = self._asset(order.asset_id)
+        asset = self._maintenance_asset(order.asset_id)
         if odometer_km is not None and not asset.supports_odometer_km:
             raise DomainError("odometer completion is unavailable for this asset")
         if hour_meter is not None and not asset.supports_hour_meter:
@@ -853,7 +901,23 @@ class MaintenanceService:
         return list(
             self.session.scalars(
                 select(MaintenanceWorkOrder)
+                .join(
+                    FleetAsset,
+                    and_(
+                        FleetAsset.company_id == MaintenanceWorkOrder.company_id,
+                        FleetAsset.id == MaintenanceWorkOrder.asset_id,
+                    ),
+                )
                 .where(MaintenanceWorkOrder.company_id == self.company_id)
+                .where(
+                    FleetAsset.ownership_type == AssetOwnershipType.OWNED,
+                    FleetAsset.maintenance_responsibility.in_(
+                        [
+                            MaintenanceResponsibility.OWNER_COMPANY,
+                            MaintenanceResponsibility.SHARED,
+                        ]
+                    ),
+                )
                 .order_by(MaintenanceWorkOrder.created_at.desc(), MaintenanceWorkOrder.id)
             ).all()
         )
@@ -924,7 +988,7 @@ class MaintenanceService:
         )
 
     def matching_templates(self, asset_id: UUID) -> list[MaintenanceTemplate]:
-        asset = self._asset(asset_id)
+        asset = self._maintenance_asset(asset_id)
         templates = self.list_templates()
 
         def matches(template: MaintenanceTemplate) -> bool:
@@ -1074,7 +1138,7 @@ class MaintenanceService:
         ]
 
     def apply_template(self, asset_id: UUID, template_id: UUID) -> MaintenancePlan:
-        asset = self._asset(asset_id)
+        asset = self._maintenance_asset(asset_id)
         if (
             self.session.scalar(
                 select(MaintenancePlan.id).where(
@@ -1147,8 +1211,8 @@ class MaintenanceService:
         return plan
 
     def copy_plan(self, asset_id: UUID, source_asset_id: UUID) -> MaintenancePlan:
-        asset = self._asset(asset_id)
-        self._asset(source_asset_id)
+        asset = self._maintenance_asset(asset_id)
+        self._maintenance_asset(source_asset_id)
         if asset_id == source_asset_id:
             raise DomainError("an asset cannot copy its own maintenance plan")
         if (
@@ -1215,7 +1279,7 @@ class MaintenanceService:
         return plan
 
     def generic_starter(self, asset_id: UUID) -> list[TaskCatalogEntry]:
-        asset = self._asset(asset_id)
+        asset = self._maintenance_asset(asset_id)
         return [
             item
             for item in TASK_CATALOG
@@ -1234,6 +1298,18 @@ class MaintenanceService:
             self.session.scalar(
                 select(func.count(MaintenanceWorkOrder.id)).where(
                     MaintenanceWorkOrder.company_id == self.company_id,
+                    MaintenanceWorkOrder.asset_id.in_(
+                        select(FleetAsset.id).where(
+                            FleetAsset.company_id == self.company_id,
+                            FleetAsset.ownership_type == AssetOwnershipType.OWNED,
+                            FleetAsset.maintenance_responsibility.in_(
+                                [
+                                    MaintenanceResponsibility.OWNER_COMPANY,
+                                    MaintenanceResponsibility.SHARED,
+                                ]
+                            ),
+                        )
+                    ),
                     MaintenanceWorkOrder.status.not_in(
                         [
                             MaintenanceWorkOrderStatus.COMPLETED,

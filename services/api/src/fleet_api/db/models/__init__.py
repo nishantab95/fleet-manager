@@ -23,6 +23,8 @@ from fleet_api.db.models.maintenance import (
     MaintenanceAttachment,
     MaintenanceCriterion,
     MaintenancePlan,
+    MaintenanceProofEvidence,
+    MaintenanceProofSubmission,
     MaintenanceRecord,
     MaintenanceSchedule,
     MaintenanceTemplate,
@@ -31,6 +33,7 @@ from fleet_api.db.models.maintenance import (
     MaintenanceWorkOrder,
 )
 from fleet_api.db.models.membership import CompanyMembership, SupervisorSiteAccess
+from fleet_api.db.models.rental import InterCompanyAssetRental
 from fleet_api.db.models.report_template import ReportTemplate
 
 __all__ = [
@@ -48,10 +51,13 @@ __all__ = [
     "EvidenceObject",
     "FleetAsset",
     "HourMeterReading",
+    "InterCompanyAssetRental",
     "KmReading",
     "MaintenanceAttachment",
     "MaintenanceCriterion",
     "MaintenancePlan",
+    "MaintenanceProofEvidence",
+    "MaintenanceProofSubmission",
     "MaintenanceRecord",
     "MaintenanceSchedule",
     "MaintenanceTemplate",

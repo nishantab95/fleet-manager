@@ -6,6 +6,7 @@ import 'package:fleet_manager_mobile/data/local_database.dart'
     hide PendingEvent;
 import 'package:fleet_manager_mobile/data/sync_engine.dart';
 import 'package:fleet_manager_mobile/domain/driver_models.dart';
+import 'package:fleet_manager_mobile/domain/role_models.dart';
 
 void main() {
   test(
@@ -99,6 +100,73 @@ void main() {
     expect((await database.eventById(id))?.syncState, 'syncFailed');
     await database.close();
   });
+
+  test(
+    'maintenance proof uploads first and survives a retryable submit failure',
+    () async {
+      final database = LocalDatabase(NativeDatabase.memory());
+      final remote = _ControlledRemote()..maintenanceFailures = 1;
+      final engine = SyncEngine(
+        database: database,
+        remote: remote,
+        installationIdentifier: 'test-device',
+      );
+      final id = await engine.enqueue(
+        assignment: _assignment,
+        eventType: DriverEventType.maintenanceProof,
+        payload: {'schedule_id': 'schedule-1'},
+        evidencePath: 'service.jpg',
+      );
+
+      expect(await engine.syncPending(), 0);
+      expect((await database.eventById(id))?.syncState, 'syncFailed');
+      expect(remote.submitAttempts, 0);
+
+      expect(await engine.syncPending(), 1);
+      expect((await database.eventById(id))?.syncState, 'synced');
+      expect(remote.maintenanceSubmissions, 2);
+      expect(remote.lastMaintenancePayload?['schedule_id'], 'schedule-1');
+      expect(
+        remote.lastMaintenancePayload?['object_reference'],
+        'evidence/$id',
+      );
+      await database.close();
+    },
+  );
+
+  test('due maintenance list survives an offline restart cache read', () async {
+    final database = LocalDatabase(NativeDatabase.memory());
+    final engine = SyncEngine(
+      database: database,
+      remote: _ControlledRemote(),
+      installationIdentifier: 'test-device',
+    );
+    await engine.cacheDueMaintenance(const [
+      DriverMaintenanceItem(
+        scheduleId: 'schedule-1',
+        assetId: 'asset-1',
+        taskLabel: 'Engine oil',
+        status: 'OVERDUE',
+      ),
+    ], assignmentId: 'assignment');
+
+    final restarted = SyncEngine(
+      database: database,
+      remote: _ControlledRemote(),
+      installationIdentifier: 'test-device',
+    );
+    final cached = await restarted.localDueMaintenance(
+      assignmentId: 'assignment',
+    );
+    expect(cached, hasLength(1));
+    expect(cached.single.taskLabel, 'Engine oil');
+    expect(cached.single.status, 'OVERDUE');
+    expect(
+      await restarted.localDueMaintenance(assignmentId: 'other-assignment'),
+      isEmpty,
+    );
+    await database.close();
+  });
 }
 
 const _assignment = DriverAssignment(
@@ -111,12 +179,15 @@ const _assignment = DriverAssignment(
   supervisorName: 'Pilot Supervisor',
 );
 
-class _ControlledRemote implements DriverRemoteApi {
+class _ControlledRemote implements DriverRemoteApi, DriverMaintenanceRemote {
   int submitFailures = 0;
   int evidenceFailures = 0;
+  int maintenanceFailures = 0;
   bool unauthorizedOnce = false;
   bool commitThenFail = false;
   int submitAttempts = 0;
+  int maintenanceSubmissions = 0;
+  Map<String, dynamic>? lastMaintenancePayload;
   final Set<String> logicalEvents = <String>{};
 
   @override
@@ -160,6 +231,16 @@ class _ControlledRemote implements DriverRemoteApi {
     if (commitThenFail) {
       commitThenFail = false;
       throw const ApiException(503, 'response lost after commit');
+    }
+  }
+
+  @override
+  Future<void> submitMaintenanceProof({required PendingEvent event}) async {
+    maintenanceSubmissions++;
+    lastMaintenancePayload = event.payload;
+    if (maintenanceFailures > 0) {
+      maintenanceFailures--;
+      throw const ApiException(503, 'maintenance endpoint unavailable');
     }
   }
 }

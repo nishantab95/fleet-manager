@@ -29,6 +29,7 @@ from fleet_api.domain.errors import (
     TenantConsistencyError,
 )
 from fleet_api.domain.maintenance import MaintenanceService
+from fleet_api.domain.maintenance_proof import MaintenanceProofService
 from fleet_api.domain.owner_assets import OwnerAssetService
 from fleet_api.domain.owner_operations import OwnerOperationPlanner
 from fleet_api.domain.owner_people_sites import OwnerPeopleSiteService
@@ -219,6 +220,30 @@ def get_maintenance_service(
     context: Annotated[AuthContext, Depends(require_owner_admin)],
 ) -> MaintenanceService:
     return MaintenanceService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_driver_maintenance_proof_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_driver)],
+) -> MaintenanceProofService:
+    return MaintenanceProofService(
+        db,
+        context,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
+def get_supervisor_maintenance_proof_service(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    context: Annotated[AuthContext, Depends(require_supervisor)],
+) -> MaintenanceProofService:
+    return MaintenanceProofService(
         db,
         context,
         request_id=request.headers.get("x-request-id"),

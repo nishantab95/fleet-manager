@@ -19,7 +19,12 @@ from sqlalchemy.engine.default import DefaultExecutionContext
 from sqlalchemy.orm import Mapped, mapped_column
 
 from fleet_api.db.models.common import UpdatedTimestampModel
-from fleet_api.domain.enums import AssetOwnershipType, FleetAssetStatus, FleetAssetType
+from fleet_api.domain.enums import (
+    AssetOwnershipType,
+    FleetAssetStatus,
+    FleetAssetType,
+    MaintenanceResponsibility,
+)
 
 
 def _default_supports_odometer(context: DefaultExecutionContext) -> bool:
@@ -29,9 +34,11 @@ def _default_supports_odometer(context: DefaultExecutionContext) -> bool:
     return asset_type in {
         FleetAssetType.TIPPER,
         FleetAssetType.BACKHOE_LOADER,
+        FleetAssetType.ROLLER,
         FleetAssetType.GRADER,
         FleetAssetType.TIPPER.value,
         FleetAssetType.BACKHOE_LOADER.value,
+        FleetAssetType.ROLLER.value,
         FleetAssetType.GRADER.value,
     }
 
@@ -70,6 +77,12 @@ class FleetAsset(UpdatedTimestampModel):
     )
     ownership_type: Mapped[AssetOwnershipType] = mapped_column(
         SAEnum(AssetOwnershipType, name="asset_ownership_type_enum"), nullable=False
+    )
+    maintenance_responsibility: Mapped[MaintenanceResponsibility] = mapped_column(
+        SAEnum(MaintenanceResponsibility, name="maintenance_responsibility_enum"),
+        nullable=False,
+        default=MaintenanceResponsibility.OWNER_COMPANY,
+        server_default=text("'OWNER_COMPANY'"),
     )
     asset_code: Mapped[str] = mapped_column(String(64), nullable=False)
     registration_number: Mapped[str | None] = mapped_column(String(32), nullable=True)

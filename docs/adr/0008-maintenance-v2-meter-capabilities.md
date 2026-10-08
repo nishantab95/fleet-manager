@@ -37,8 +37,9 @@ immutable history record and updates only the relevant asset plan baselines.
 - Dual-meter capture cannot leave a half-written start or end reading.
 - A missing meter yields an explicit `UNKNOWN` criterion without masking a
   usable overdue trigger.
-- Existing assets can be migrated conservatively without changing their Driver
-  workflow; Owners can opt into additional capabilities later.
+- The first migration used conservative legacy defaults. ADR 0009 records the
+  later product correction that every existing wheeled Pilot asset must be
+  dual KM/HMR regardless of ownership.
 - Physical classification, operational capture, and maintenance scheduling can
   evolve independently while retaining one canonical asset and event history.
 - Template updates do not silently alter active asset plans or past records.

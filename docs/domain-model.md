@@ -17,7 +17,8 @@ without adding a new persistence boundary.
 | `User` | Global application identity with normalized phone number and display name. |
 | `CompanyMembership` | Company-scoped role (`OWNER_ADMIN`, `SUPERVISOR`, or `DRIVER`) and status. |
 | `Site` | Company-scoped work location with company-scoped name/code uniqueness. |
-| `FleetAsset` | Canonical company fleet record with type, ownership, stable asset code, optional road registration, optional chassis/engine identifiers, status, and rental contact metadata. |
+| `FleetAsset` | Canonical company fleet record with type, ownership, maintenance responsibility, stable asset code, meter capabilities, status, and rental metadata. |
+| `InterCompanyAssetRental` | Dormant, feature-disabled agreement skeleton linking future owner/renter tenant assets and explicit opt-in sharing fields. |
 | `SupervisorSiteAccess` | Explicit company-consistent supervisor-to-site grant. |
 | `Assignment` | Effective-dated Driver/Operator-to-FleetAsset relationship linked to its deployment; Site is an immutable history snapshot. |
 | `Device` | Minimal installation identifier, platform, membership association, and active/revoked state. |
@@ -31,6 +32,8 @@ without adding a new persistence boundary.
 | `OtpChallenge` | Short-lived normalized-phone challenge with salted OTP hash, bounded attempts, cooldown, expiry, and delivery metadata hashes. |
 | `AuthSession` | Company/membership-scoped server session with hashed refresh token, rotation state, expiry, revocation, and replay family. |
 | `EvidenceObject` | Private object-storage metadata scoped to one company, driver membership, and client event UUID. |
+| `MaintenanceProofSubmission` | Driver service evidence and immutable assignment/Site context awaiting Supervisor review. |
+| `MaintenanceProofEvidence` | Tenant-safe ordered link between a maintenance proof and private evidence metadata. |
 | `SiteDailyClosure` | Company/site/operational-date closure snapshot with timezone, state, actor, and timestamps. |
 | `SiteDailyClosureHistory` | Append-only close/reopen state transitions with actor, reason, and time. |
 
@@ -269,19 +272,20 @@ append-only and requires an owner reason.
 
 ## Maintenance V2 and asset meter invariants
 
-`FleetAsset` has three independent operational facts:
+`FleetAsset` has independent classification and operational meter facts:
 
 - `is_wheeled` classifies whether kilometre-based maintenance can apply;
 - `supports_odometer_km` determines whether duty start/end captures KM; and
 - `supports_hour_meter` determines whether duty start/end captures HMR.
 
 Every asset supports at least one operational meter. A non-wheeled asset cannot
-support odometer KM. Current Pilot defaults are dual KM/HMR for tippers,
-backhoe loaders, and graders; HMR-only for excavators; and HMR-only for rollers.
-The migration preserves legacy behaviour by backfilling existing tippers as
-KM-only and existing machinery as HMR-only. Changing classification or meter
-capabilities affects future capture requirements and never rewrites historical
-events.
+support odometer KM. Current Pilot defaults are dual KM/HMR for all wheeled
+types (tippers, backhoe loaders, graders, and rollers) and HMR-only for tracked
+excavators. Migration 0021 corrects all existing `is_wheeled=true` rows to the
+dual-meter rule. The earlier schema did not persist capability provenance, so
+the migration cannot distinguish a legacy default from a later explicit edit.
+Changing capabilities affects future capture requirements and never rewrites
+historical events.
 
 A Driver meter capture contains exactly the configured meter set. Dual-meter
 assets submit KM and HMR together with distinct evidence objects and client
@@ -291,16 +295,19 @@ END reading of the same type, so KM and HMR monotonicity remain independent.
 The group is the Supervisor-facing review unit; its member events remain the
 reporting and maintenance source values.
 
-Maintenance has four layers:
+Maintenance has five persisted layers:
 
 - a versioned `MaintenanceTemplate` and its task/criterion definitions;
 - an asset-owned `MaintenancePlan` with copied, independently editable items;
 - mutable `MaintenanceWorkOrder` lifecycle state; and
-- append-only `MaintenanceHistoryRecord` completion facts.
+- append-only `MaintenanceHistoryRecord` completion facts; plus
+- `MaintenanceProofSubmission` and evidence links for Driver-to-Supervisor
+  proof review.
 
-Each plan item has one or more criteria. `DATE`, `ODOMETER_KM`, and
+Each plan item has one or more criteria. `CALENDAR_DAYS`, `ODOMETER_KM`, and
 `HOUR_METER_HOURS` are allowed for wheeled assets; non-wheeled assets reject KM.
-Due state is the most urgent usable criterion (`OVERDUE`, `DUE_SOON`, `OK`). A
+Due state is the most urgent usable criterion (`OVERDUE`, `DUE`, `DUE_SOON`,
+`NOT_DUE`). A
 criterion whose current meter or baseline is unavailable is `UNKNOWN`; that
 unknown criterion cannot conceal an overdue calendar criterion. An item is
 `UNKNOWN` only when none of its criteria has enough data.
@@ -311,6 +318,29 @@ calendar baseline always becomes the completion date. Decimal costs remain
 decimal end to end. Template application and plan copy copy task definitions,
 not history; plan copy resets every baseline so another asset's readings and
 service dates cannot leak across assets or tenants.
+
+Ownership does not decide operational responsibility. An assigned rented asset
+still captures its configured KM/HMR, duty, diesel, emergency, and report data.
+`maintenance_responsibility` separately identifies `OWNER_COMPANY`,
+`RENTER_COMPANY`, or `SHARED`. The current Pilot implements company maintenance
+only for owned assets with `OWNER_COMPANY` or `SHARED`; rented assets default to
+their external rental Owner and expose history without editable plans, due
+alerts, work-order mutations, Driver maintenance items, or current-company
+completion.
+
+A Driver sees only `DUE` and `OVERDUE` items for the current assignment and may
+submit one or more private service photos under a client-generated idempotency
+UUID. Submission changes no baseline. A permitted Site Supervisor may reject
+with a reason, leaving the item due, or approve. Approval creates/completes a
+work order, records the Supervisor as actor, snapshots current known operational
+meters, sets the calendar baseline to the approval date, appends history, and
+recalculates the next due state. Driver self-completion has no route.
+
+The dormant `InterCompanyAssetRental` model carries owner/renter tenant and
+asset identifiers, effective dates, maintenance responsibility, and explicit
+sharing booleans. Every sharing flag defaults false. The feature flag defaults
+off, no application route reads these rows, and their existence grants no
+cross-tenant access or synchronization.
 
 ## PC V1 emergency contract
 

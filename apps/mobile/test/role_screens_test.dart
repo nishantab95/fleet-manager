@@ -59,6 +59,63 @@ void main() {
   });
 
   testWidgets(
+    'maintenance approval stays in notifications and preserves four primary tiles',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _MaintenanceRoleApi();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SupervisorHomeScreen(api: api, onSignOut: () async {}),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      for (final key in const [
+        'supervisor-tile-emergency',
+        'supervisor-tile-diesel',
+        'supervisor-tile-trips',
+        'supervisor-tile-meter',
+      ]) {
+        expect(find.byKey(Key(key)), findsOneWidget);
+      }
+      expect(find.text('Maintenance approvals'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('supervisor-pending-total')))
+            .data,
+        '3',
+      );
+
+      await tester.tap(
+        find.byKey(const Key('supervisor-notification-maintenance')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('MAINTENANCE REVIEW'), findsOneWidget);
+      expect(find.text('TIPPER-12'), findsOneWidget);
+      expect(find.text('Engine oil'), findsOneWidget);
+      expect(find.text('Driver: Pilot Driver'), findsOneWidget);
+      expect(find.text('Site: Pilot Site'), findsOneWidget);
+      expect(find.text('PHOTO 1'), findsOneWidget);
+      expect(find.text('REJECT'), findsOneWidget);
+      expect(find.text('CONFIRM SERVICE DONE'), findsOneWidget);
+
+      await tester.tap(find.text('CONFIRM SERVICE DONE'));
+      await tester.pumpAndSettle();
+      expect(api.maintenanceDecision, 'APPROVE');
+      expect(
+        find.text('Service confirmed and next due values recalculated.'),
+        findsOneWidget,
+      );
+      expect(find.text('Pending 0'), findsOneWidget);
+      await tester.tap(find.text('History'));
+      await tester.pumpAndSettle();
+      expect(find.text('TIPPER-12'), findsOneWidget);
+      expect(find.text('CONFIRM SERVICE DONE'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'approved START disappears from review count while emergency stays separate',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -860,6 +917,11 @@ class _FakeRoleApi extends ApiClient {
   Future<List<SupervisorSite>> supervisorSites() async => [_site];
 
   @override
+  Future<List<MaintenanceProof>> supervisorMaintenanceProofs({
+    String? siteId,
+  }) async => const [];
+
+  @override
   Future<List<SiteDeployedAsset>> supervisorSiteAssets(String siteId) async => [
     SiteDeployedAsset.fromJson({
       'asset_id': 'pilot-asset',
@@ -1239,6 +1301,45 @@ class _ScaleRoleApi extends _FakeRoleApi {
     String? verificationStatus,
     DateTime? reviewDate,
   }) async => const [];
+}
+
+class _MaintenanceRoleApi extends _FakeRoleApi {
+  String? maintenanceDecision;
+  late MaintenanceProof proof = _proof('PROOF_SUBMITTED');
+
+  MaintenanceProof _proof(String status) => MaintenanceProof.fromJson({
+    'id': 'proof-1',
+    'asset_code': 'TIPPER-12',
+    'task_label': 'Engine oil',
+    'status': status,
+    'driver_name': 'Pilot Driver',
+    'site_id': 'site-1',
+    'site_name': 'Pilot Site',
+    'submitted_at': '2026-10-09T08:00:00Z',
+    'evidence': [
+      {
+        'evidence_id': 'evidence-1',
+        'content_type': 'image/jpeg',
+        'size_bytes': 100,
+      },
+    ],
+  });
+
+  @override
+  Future<List<MaintenanceProof>> supervisorMaintenanceProofs({
+    String? siteId,
+  }) async => [proof];
+
+  @override
+  Future<MaintenanceProof> reviewMaintenanceProof(
+    String submissionId, {
+    required String decision,
+    String? reason,
+  }) async {
+    maintenanceDecision = decision;
+    proof = _proof(decision == 'APPROVE' ? 'COMPLETED' : 'REJECTED');
+    return proof;
+  }
 }
 
 class _MultiSiteRoleApi extends _FakeRoleApi {

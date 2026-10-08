@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../domain/driver_models.dart';
+import '../domain/role_models.dart';
 import 'api_client.dart';
 import 'local_database.dart' as local;
 
@@ -31,6 +32,7 @@ class SyncEngine {
   static const lastSyncErrorCodeKey = 'last_sync_error_code';
   static const lastSyncFailureStageKey = 'last_sync_failure_stage';
   static const currentAssignmentKey = 'current_driver_assignment';
+  static const currentMaintenanceDueKey = 'current_driver_maintenance_due';
   bool _syncInProgress = false;
 
   static String accountScope({
@@ -81,6 +83,7 @@ class SyncEngine {
     final isStart = _isStartEvent(eventType, payload);
     final isEnd = _isEndEvent(eventType, payload);
     final isEmergency = eventType == DriverEventType.emergency;
+    final isMaintenanceProof = eventType == DriverEventType.maintenanceProof;
     final existing = await database.latestLocalDutySession(
       assignmentId: assignment.assignmentId,
     );
@@ -89,11 +92,13 @@ class SyncEngine {
         existing.endedAt == null &&
         _isLocallyActive(existing.state);
     final localSessionId = isStart ? _uuid.v4() : existing?.localSessionId;
-    final dependency = activeSession && !isEmergency && !isStart
+    final dependency =
+        activeSession && !isEmergency && !isMaintenanceProof && !isStart
         ? existing.lastEventUuid
         : null;
     final blockedForStartCorrection =
         !isEmergency &&
+        !isMaintenanceProof &&
         !isStart &&
         existing?.state == LocalDutyState.needsAttention.name;
     final storedPayload = <String, dynamic>{
@@ -155,7 +160,10 @@ class SyncEngine {
           ),
           makeCurrent: true,
         );
-      } else if (existing != null && activeSession && !isEmergency) {
+      } else if (existing != null &&
+          activeSession &&
+          !isEmergency &&
+          !isMaintenanceProof) {
         await database.updateLocalDutySession(
           existing.copyWith(
             endClientEventUuid: isEnd ? clientEventUuid : null,
@@ -345,6 +353,43 @@ class SyncEngine {
     );
     await cacheCurrentAssignment(assignment);
     return assignment;
+  }
+
+  Future<void> cacheDueMaintenance(
+    List<DriverMaintenanceItem> items, {
+    String? assignmentId,
+  }) {
+    return database.setAccountMetadata(
+      currentMaintenanceDueKey,
+      jsonEncode({
+        'assignment_id': assignmentId,
+        'items': items.map((item) => item.toJson()).toList(),
+      }),
+    );
+  }
+
+  Future<List<DriverMaintenanceItem>> localDueMaintenance({
+    String? assignmentId,
+  }) async {
+    final cached = await database.accountMetadata(currentMaintenanceDueKey);
+    if (cached == null) return const [];
+    try {
+      final decoded = jsonDecode(cached);
+      if (decoded is Map<String, dynamic>) {
+        if (assignmentId != null && decoded['assignment_id'] != assignmentId) {
+          return const [];
+        }
+        final items = decoded['items'];
+        if (items is! List<dynamic>) return const [];
+        return items
+            .whereType<Map<String, dynamic>>()
+            .map(DriverMaintenanceItem.fromJson)
+            .toList();
+      }
+    } on Object {
+      return const [];
+    }
+    return const [];
   }
 
   Future<DriverStateReconciliation> reconcileDriverState() async {
@@ -931,6 +976,35 @@ class SyncEngine {
             throw error.atSyncStage('EVIDENCE_UPLOAD');
           }
           payload['object_reference'] = objectReference;
+        }
+        if (event.eventType == DriverEventType.maintenanceProof) {
+          if (remote is! DriverMaintenanceRemote) {
+            throw StateError(
+              'Driver remote does not support maintenance proof submission.',
+            );
+          }
+          try {
+            await (remote as DriverMaintenanceRemote).submitMaintenanceProof(
+              event: PendingEvent(
+                clientEventUuid: event.clientEventUuid,
+                assignmentId: event.assignmentId,
+                tipperId: event.tipperId,
+                siteId: event.siteId,
+                supervisorName: event.supervisorName,
+                eventType: event.eventType,
+                deviceCreatedAt: event.deviceCreatedAt,
+                payload: payload,
+                state: event.state,
+                retryCount: event.retryCount,
+                createdAt: event.createdAt,
+                evidencePath: event.evidencePath,
+                lastSyncError: event.lastSyncError,
+              ),
+            );
+          } on ApiException catch (error) {
+            throw error.atSyncStage('MAINTENANCE_PROOF_SUBMISSION');
+          }
+          return;
         }
         try {
           await remote.submitEvent(

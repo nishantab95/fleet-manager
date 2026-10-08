@@ -248,7 +248,7 @@ def submit_hmr(
     )
 
 
-def test_machinery_hmr_duty_capabilities_and_continuity(
+def test_rented_tracked_asset_keeps_hmr_duty_reporting_and_supervisor_review(
     db_session: Session,
     tenant_records: dict[str, object],
 ) -> None:
@@ -257,7 +257,7 @@ def test_machinery_hmr_duty_capabilities_and_continuity(
         db_session,
         company_id=company.id,
         asset_type=FleetAssetType.EXCAVATOR,
-        ownership_type=AssetOwnershipType.OWNED,
+        ownership_type=AssetOwnershipType.RENTED,
         asset_code="EXC-HMR-01",
         registration_number=None,
         short_name="CAT 320",
@@ -272,6 +272,9 @@ def test_machinery_hmr_duty_capabilities_and_continuity(
     assert current.json()["asset_type"] == "EXCAVATOR"
     assert current.json()["asset_code"] == "EXC-HMR-01"
     assert current.json()["tipper_registration_number"] is None
+    assert current.json()["supports_odometer_km"] is False
+    assert current.json()["supports_hour_meter"] is True
+    assert current.json()["company_maintenance_managed"] is False
 
     unsupported_trip = client.post(
         "/api/v1/driver/events",
@@ -989,6 +992,8 @@ def test_driver_assignment_role_boundary_and_idempotent_event(
         assert current.status_code == 200
         assert current.json()["assignment_id"] == str(assignment.id)
         assert current.json()["asset_code"] == "ALPHA-ONE"
+        assert current.json()["supports_odometer_km"] is True
+        assert current.json()["company_maintenance_managed"] is True
         assert current.json()["site_name"] == "Alpha Site"
         assert current.json()["supervisor_name"] == "Assigned Supervisor"
         assert current.json()["supervisor_names"] == ["Assigned Supervisor"]

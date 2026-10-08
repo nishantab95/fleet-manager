@@ -5,6 +5,7 @@ enum DriverEventType {
   kmReading,
   hmrReading,
   meterCapture,
+  maintenanceProof,
   diesel,
   emergency,
 }
@@ -15,6 +16,7 @@ extension DriverEventTypeWire on DriverEventType {
     DriverEventType.kmReading => 'KM_READING',
     DriverEventType.hmrReading => 'HMR_READING',
     DriverEventType.meterCapture => 'METER_CAPTURE',
+    DriverEventType.maintenanceProof => 'MAINTENANCE_PROOF',
     DriverEventType.diesel => 'DIESEL',
     DriverEventType.emergency => 'EMERGENCY',
   };
@@ -131,6 +133,7 @@ class DriverAssignment {
     this.tipperAssetCode,
     this.supportsOdometerKm,
     this.supportsHourMeter,
+    this.companyMaintenanceManaged,
     required this.siteId,
     required this.siteName,
     required this.supervisorName,
@@ -145,6 +148,7 @@ class DriverAssignment {
   final String assetType;
   final bool? supportsOdometerKm;
   final bool? supportsHourMeter;
+  final bool? companyMaintenanceManaged;
   final String siteId;
   final String siteName;
   final String supervisorName;
@@ -166,6 +170,7 @@ class DriverAssignment {
           (json['asset_code'] ?? json['tipper_asset_code']) as String?,
       supportsOdometerKm: json['supports_odometer_km'] as bool?,
       supportsHourMeter: json['supports_hour_meter'] as bool?,
+      companyMaintenanceManaged: json['company_maintenance_managed'] as bool?,
       siteId: json['site_id'] as String,
       siteName: json['site_name'] as String,
       supervisorName: supervisorNames.isNotEmpty
@@ -184,6 +189,7 @@ class DriverAssignment {
     if (tipperAssetCode != null) 'asset_code': tipperAssetCode,
     'supports_odometer_km': supportsOdometerKm,
     'supports_hour_meter': supportsHourMeter,
+    'company_maintenance_managed': companyMaintenanceManaged,
     'site_id': siteId,
     'site_name': siteName,
     'supervisor_name': supervisorName,
@@ -236,7 +242,7 @@ class DriverAssetCapabilities {
   static DriverAssetCapabilities forType(String assetType) =>
       switch (assetType) {
         'TIPPER' => tipper,
-        'BACKHOE_LOADER' || 'GRADER' => wheeledMachinery,
+        'BACKHOE_LOADER' || 'ROLLER' || 'GRADER' => wheeledMachinery,
         _ => machinery,
       };
 }

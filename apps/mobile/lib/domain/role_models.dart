@@ -15,6 +15,102 @@ const bool _explicitPilotDefine = bool.fromEnvironment(
 const bool isPilotBuild =
     appFlavor == 'pilot' || (appFlavor != 'production' && _explicitPilotDefine);
 
+class DriverMaintenanceItem {
+  const DriverMaintenanceItem({
+    required this.scheduleId,
+    required this.assetId,
+    required this.taskLabel,
+    required this.status,
+  });
+
+  final String scheduleId;
+  final String assetId;
+  final String taskLabel;
+  final String status;
+
+  factory DriverMaintenanceItem.fromJson(Map<String, dynamic> json) =>
+      DriverMaintenanceItem(
+        scheduleId: '${json['schedule_id']}',
+        assetId: '${json['asset_id']}',
+        taskLabel: '${json['task_label'] ?? 'Maintenance'}',
+        status: '${json['status'] ?? 'DUE'}',
+      );
+
+  Map<String, dynamic> toJson() => {
+    'schedule_id': scheduleId,
+    'asset_id': assetId,
+    'task_label': taskLabel,
+    'status': status,
+  };
+}
+
+class MaintenanceProofEvidence {
+  const MaintenanceProofEvidence({
+    required this.evidenceId,
+    required this.contentType,
+    required this.sizeBytes,
+  });
+
+  final String evidenceId;
+  final String contentType;
+  final int sizeBytes;
+
+  factory MaintenanceProofEvidence.fromJson(Map<String, dynamic> json) =>
+      MaintenanceProofEvidence(
+        evidenceId: '${json['evidence_id']}',
+        contentType: '${json['content_type'] ?? 'application/octet-stream'}',
+        sizeBytes: (json['size_bytes'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class MaintenanceProof {
+  const MaintenanceProof({
+    required this.id,
+    required this.assetCode,
+    required this.taskLabel,
+    required this.status,
+    required this.driverName,
+    required this.siteId,
+    required this.siteName,
+    required this.submittedAt,
+    required this.evidence,
+    this.note,
+    this.reviewReason,
+  });
+
+  final String id;
+  final String assetCode;
+  final String taskLabel;
+  final String status;
+  final String driverName;
+  final String siteId;
+  final String siteName;
+  final DateTime? submittedAt;
+  final List<MaintenanceProofEvidence> evidence;
+  final String? note;
+  final String? reviewReason;
+
+  bool get isPending => status == 'PROOF_SUBMITTED';
+
+  factory MaintenanceProof.fromJson(Map<String, dynamic> json) =>
+      MaintenanceProof(
+        id: '${json['id']}',
+        assetCode: '${json['asset_code'] ?? 'Asset'}',
+        taskLabel: '${json['task_label'] ?? 'Maintenance'}',
+        status: '${json['status'] ?? 'PROOF_SUBMITTED'}',
+        driverName: '${json['driver_name'] ?? 'Driver'}',
+        siteId: '${json['site_id']}',
+        siteName: '${json['site_name'] ?? 'Site'}',
+        submittedAt: _date(json['submitted_at']),
+        evidence: (json['evidence'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(MaintenanceProofEvidence.fromJson)
+            .toList(),
+        note: json['note']?.toString(),
+        reviewReason: json['review_reason']?.toString(),
+      );
+}
+
 class SupervisorSite {
   const SupervisorSite({
     required this.id,

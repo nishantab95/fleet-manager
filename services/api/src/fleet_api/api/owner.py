@@ -48,6 +48,7 @@ def _response(view: OwnerAssetView) -> OwnerAssetResponse:
         asset_code=view.asset.asset_code,
         asset_type=view.asset.asset_type,
         ownership_type=view.asset.ownership_type,
+        maintenance_responsibility=view.asset.maintenance_responsibility,
         registration_number=view.asset.registration_number,
         short_name=view.asset.short_name,
         manufacturer=view.asset.manufacturer,

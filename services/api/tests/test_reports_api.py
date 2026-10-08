@@ -878,7 +878,7 @@ def test_simple_site_workbook_includes_unassigned_assets_and_sanitizes_excel(
         assert all(item["Days Worked"] == 0 for item in summary_rows)
         assert all(item["Driver / Operator"] == "N/A" for item in summary_rows)
         assert all(item["Approved Trips"] == "N/A" for item in summary_rows)
-        assert all(item["Distance KM"] == "N/A" for item in summary_rows)
+        assert all(item["Distance KM"] == "MISSING" for item in summary_rows)
         assert all(item["Machine Hours"] == "MISSING" for item in summary_rows)
         assert {item["Ownership"] for item in summary_rows} == {"OWNED", "RENTED"}
         injected_assets = [item["Asset"] for item in summary_rows if "Very/Long" in item["Asset"]]
@@ -892,7 +892,8 @@ def test_simple_site_workbook_includes_unassigned_assets_and_sanitizes_excel(
         repeated_asset_sheet = workbook[duplicate_sheets[0]]
         period_values = {
             row[0]: row[1]
-            for row in repeated_asset_sheet.iter_rows(min_row=13, max_row=17, values_only=True)
+            for row in repeated_asset_sheet.iter_rows(min_row=13, max_row=24, values_only=True)
+            if row[0] is not None
         }
         assert period_values["Working Days"] == 0
         assert period_values["Total Machine Hours"] == "MISSING"

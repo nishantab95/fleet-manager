@@ -11,7 +11,13 @@ from fleet_api.api.dependencies import (
     get_app_settings,
     get_object_storage,
     get_supervisor_driver_assignment_service,
+    get_supervisor_maintenance_proof_service,
     require_supervisor,
+)
+from fleet_api.api.maintenance_schemas import (
+    MaintenanceProofEvidenceResponse,
+    MaintenanceProofResponse,
+    MaintenanceProofReviewRequest,
 )
 from fleet_api.api.schemas import (
     AssetSiteDeploymentResponse,
@@ -43,10 +49,44 @@ from fleet_api.domain.errors import (
     RoleViolationError,
     TenantConsistencyError,
 )
+from fleet_api.domain.maintenance import task_label
+from fleet_api.domain.maintenance_proof import MaintenanceProofService, MaintenanceProofView
 from fleet_api.domain.supervisor import SupervisorEvent, SupervisorService
 from fleet_api.storage.objects import ObjectStorage
 
 router = APIRouter(prefix="/api/v1/supervisor", tags=["supervisor"])
+
+
+def _maintenance_proof_response(view: MaintenanceProofView) -> MaintenanceProofResponse:
+    submission = view.submission
+    return MaintenanceProofResponse(
+        id=submission.id,
+        client_submission_uuid=submission.client_submission_uuid,
+        asset_id=submission.asset_id,
+        asset_code=view.asset.asset_code,
+        schedule_id=submission.schedule_id,
+        task_label=task_label(view.schedule.task_code, view.schedule.custom_label),
+        status=submission.status,
+        driver_name=view.driver_name,
+        site_id=submission.site_id,
+        site_name=view.site.short_name,
+        assignment_id=submission.assignment_id,
+        duty_session_id=submission.duty_session_id,
+        submitted_at=submission.submitted_at,
+        note=submission.note,
+        evidence=[
+            MaintenanceProofEvidenceResponse(
+                evidence_id=item.id,
+                content_type=item.content_type,
+                size_bytes=item.size_bytes,
+            )
+            for item in view.evidence
+        ],
+        reviewed_by_membership_id=submission.reviewed_by_membership_id,
+        reviewed_at=submission.reviewed_at,
+        review_reason=submission.review_reason,
+        work_order_id=submission.work_order_id,
+    )
 
 
 def _fail(exc: DomainError) -> NoReturn:
@@ -486,6 +526,61 @@ def read_supervisor_evidence(
             content=content,
             media_type=content_type,
             headers=_evidence_headers(view),
+        )
+    except DomainError as exc:
+        _fail(exc)
+
+
+@router.get("/maintenance/proofs", response_model=list[MaintenanceProofResponse])
+def list_maintenance_proofs(
+    site_id: UUID | None = Query(default=None),
+    service: MaintenanceProofService = Depends(get_supervisor_maintenance_proof_service),
+) -> list[MaintenanceProofResponse]:
+    try:
+        return [
+            _maintenance_proof_response(item)
+            for item in service.list_supervisor_submissions(site_id=site_id)
+        ]
+    except DomainError as exc:
+        _fail(exc)
+
+
+@router.post(
+    "/maintenance/proofs/{submission_id}/review",
+    response_model=MaintenanceProofResponse,
+)
+def review_maintenance_proof(
+    submission_id: UUID,
+    payload: MaintenanceProofReviewRequest,
+    service: MaintenanceProofService = Depends(get_supervisor_maintenance_proof_service),
+    db: Session = Depends(get_db),
+) -> MaintenanceProofResponse:
+    try:
+        if payload.decision == "APPROVE":
+            view = service.approve(submission_id)
+        else:
+            view = service.reject(submission_id, reason=payload.reason or "")
+        db.commit()
+        return _maintenance_proof_response(view)
+    except DomainError as exc:
+        db.rollback()
+        _fail(exc)
+
+
+@router.get("/maintenance/proofs/{submission_id}/evidence/{evidence_id}")
+def read_maintenance_proof_evidence(
+    submission_id: UUID,
+    evidence_id: UUID,
+    storage: Annotated[ObjectStorage, Depends(get_object_storage)],
+    service: Annotated[MaintenanceProofService, Depends(get_supervisor_maintenance_proof_service)],
+) -> Response:
+    try:
+        evidence = service.evidence_for_supervisor(submission_id, evidence_id)
+        content, content_type = storage.read_private(object_key=evidence.object_key)
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={"Cache-Control": "private, no-store"},
         )
     except DomainError as exc:
         _fail(exc)

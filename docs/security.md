@@ -164,8 +164,10 @@ controls.
 
 ## Maintenance V2 security and integrity controls
 
-- Every maintenance route requires `OWNER_ADMIN`; company scope is derived
-  from the authenticated membership and never accepted from request payloads.
+- Plan, template, work-order, and history management routes require
+  `OWNER_ADMIN`. Driver proof submission requires `DRIVER`; proof review and
+  evidence reads require `SUPERVISOR`. Company scope always comes from the
+  authenticated membership and is never accepted from request payloads.
 - Asset, template, plan, work-order, and history lookups include company scope.
   Cross-company identifiers resolve through the normal tenant-safe not-found
   boundary.
@@ -181,6 +183,22 @@ controls.
 - Dual-meter Driver submissions are atomic and idempotent. Their child events
   retain company/client UUID uniqueness, and their common capture-group UUID
   prevents a partially rendered Supervisor review unit.
+- Ownership never suppresses operational capture or reporting. Maintenance
+  mutations separately require current-company maintenance authority. Current
+  Pilot rented assets default to external Owner maintenance, are excluded from
+  due counts/work orders/Driver maintenance prompts, and retain readable
+  same-tenant history.
+- A proof binds the authenticated Driver's current assignment, asset, Site,
+  optional active duty, schedule, and evidence metadata on the server. Evidence
+  must belong to that same Driver and company. Repeated client submission UUIDs
+  return one logical proof and conflicting reuse is rejected.
+- Supervisors can list, review, and read proof evidence only for Sites granted
+  through `SupervisorSiteAccess`. Approval, work-order completion, baseline
+  reset, audit, and proof state commit together; rejection requires a reason
+  and does not clear the due state. Drivers have no completion endpoint.
+- The intercompany-rental table is feature-disabled by default, has no exposed
+  route or synchronization job, and defaults every sharing field to false.
+  Merely linking tenant identifiers grants no cross-tenant read capability.
 - Costs use fixed-precision decimal storage. Notes, references, and attachment
   metadata are tenant-owned data; private object keys are never exposed as
   public URLs.

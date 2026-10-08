@@ -49,6 +49,21 @@ class AssetOwnershipType(StrEnum):
     RENTED = "RENTED"
 
 
+class MaintenanceResponsibility(StrEnum):
+    """Party responsible for authoritative periodic maintenance."""
+
+    OWNER_COMPANY = "OWNER_COMPANY"
+    RENTER_COMPANY = "RENTER_COMPANY"
+    SHARED = "SHARED"
+
+
+class InterCompanyRentalStatus(StrEnum):
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    ENDED = "ENDED"
+    CANCELLED = "CANCELLED"
+
+
 class FleetAssetStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
@@ -203,6 +218,12 @@ class MaintenanceWorkOrderStatus(StrEnum):
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
+
+
+class MaintenanceProofStatus(StrEnum):
+    PROOF_SUBMITTED = "PROOF_SUBMITTED"
+    COMPLETED = "COMPLETED"
+    REJECTED = "REJECTED"
 
 
 class MaintenanceTemplateSourceType(StrEnum):

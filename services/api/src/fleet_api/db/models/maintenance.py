@@ -28,6 +28,7 @@ from fleet_api.domain.enums import (
     MaintenanceActionType,
     MaintenanceCriterionBasis,
     MaintenancePlanSource,
+    MaintenanceProofStatus,
     MaintenanceTaskCode,
     MaintenanceTemplateSourceType,
     MaintenanceTemplateVerificationStatus,
@@ -437,4 +438,124 @@ class MaintenanceAttachment(UpdatedTimestampModel):
         ),
         UniqueConstraint("company_id", "id", name="uq_maintenance_attachments_company_id"),
         CheckConstraint("size_bytes > 0", name="size_positive"),
+    )
+
+
+class MaintenanceProofSubmission(UpdatedTimestampModel):
+    """Driver evidence awaiting an authorized Site Supervisor decision."""
+
+    __tablename__ = "maintenance_proof_submissions"
+
+    company_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    asset_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    schedule_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    driver_membership_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    assignment_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    site_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    duty_session_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
+    client_submission_uuid: Mapped[UUID] = mapped_column(nullable=False)
+    status: Mapped[MaintenanceProofStatus] = mapped_column(
+        SAEnum(MaintenanceProofStatus, name="maintenance_proof_status_enum"), nullable=False
+    )
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reviewed_by_membership_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    work_order_id: Mapped[UUID | None] = mapped_column(nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["company_id", "asset_id"],
+            ["fleet_assets.company_id", "fleet_assets.id"],
+            name="fk_maintenance_proofs_company_asset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "schedule_id"],
+            ["maintenance_schedules.company_id", "maintenance_schedules.id"],
+            name="fk_maintenance_proofs_company_schedule",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "driver_membership_id"],
+            ["company_memberships.company_id", "company_memberships.id"],
+            name="fk_maintenance_proofs_company_driver",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "assignment_id"],
+            ["assignments.company_id", "assignments.id"],
+            name="fk_maintenance_proofs_company_assignment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "site_id"],
+            ["sites.company_id", "sites.id"],
+            name="fk_maintenance_proofs_company_site",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "duty_session_id"],
+            ["duty_sessions.company_id", "duty_sessions.id"],
+            name="fk_maintenance_proofs_company_duty",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "reviewed_by_membership_id"],
+            ["company_memberships.company_id", "company_memberships.id"],
+            name="fk_maintenance_proofs_company_reviewer",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "work_order_id"],
+            ["maintenance_work_orders.company_id", "maintenance_work_orders.id"],
+            name="fk_maintenance_proofs_company_work_order",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "driver_membership_id",
+            "client_submission_uuid",
+            name="uq_maintenance_proofs_driver_submission",
+        ),
+        UniqueConstraint("company_id", "id", name="uq_maintenance_proofs_company_id"),
+        Index("ix_maintenance_proofs_site_status", "site_id", "status", "submitted_at"),
+        Index(
+            "uq_maintenance_proofs_pending_schedule",
+            "company_id",
+            "schedule_id",
+            unique=True,
+            postgresql_where=text("status = 'PROOF_SUBMITTED'"),
+        ),
+    )
+
+
+class MaintenanceProofEvidence(UpdatedTimestampModel):
+    """Tenant-safe link from a proof submission to existing private evidence."""
+
+    __tablename__ = "maintenance_proof_evidence"
+
+    company_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    submission_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    evidence_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["company_id", "submission_id"],
+            ["maintenance_proof_submissions.company_id", "maintenance_proof_submissions.id"],
+            name="fk_maintenance_proof_evidence_submission",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "evidence_id"],
+            ["evidence_objects.company_id", "evidence_objects.id"],
+            name="fk_maintenance_proof_evidence_object",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "company_id", "submission_id", "evidence_id", name="uq_maintenance_proof_evidence"
+        ),
+        CheckConstraint("display_order >= 0", name="display_order_non_negative"),
     )

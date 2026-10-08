@@ -61,8 +61,9 @@ While off duty, show only:
 1. `START DUTY`
 2. `EMERGENCY`
 
-Starting duty captures the required START odometer KM for a tipper or START
-HMR for machinery, including the existing evidence requirement.
+Starting duty captures the Asset's required START meter set, including the
+existing evidence requirement. Wheeled Pilot assets capture odometer KM and
+HMR together; tracked machinery captures HMR only.
 
 While on duty, `EMERGENCY` remains prominent. A tipper also shows
 `TRIP COMPLETE` and `DIESEL`; non-trip machinery shows `DIESEL` but never a
@@ -70,8 +71,13 @@ fake trip action. `END DUTY` stays at the bottom and captures the corresponding
 END KM or END HMR. Do not show a separate primary KM/HMR tile when duty
 start/end owns normal meter capture.
 
-A disabled `MAINTENANCE · Coming later` placeholder may communicate future
-scope, but it must not activate or implement Maintenance behavior.
+For Assets whose maintenance is managed by the current company, the on-duty
+screen may show only `DUE` and `OVERDUE` maintenance items. A Driver may attach
+service proof for Supervisor review, but cannot configure intervals, mark the
+work complete, or recalculate the next due values. Rented Assets remain fully
+operational for duty, KM/HMR, diesel, emergency, and reporting, while current
+Pilot maintenance remains managed by the rental Owner and is hidden from the
+renting company's Driver workflow.
 
 The driver must not see:
 

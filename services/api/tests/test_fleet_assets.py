@@ -6,13 +6,21 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from fleet_api.db.models import Company, CompanyMembership, FleetAsset, Site
+from fleet_api.db.models import (
+    Company,
+    CompanyMembership,
+    FleetAsset,
+    InterCompanyAssetRental,
+    Site,
+)
 from fleet_api.domain.assets import capabilities_for, create_fleet_asset
 from fleet_api.domain.assignments import create_assignment
 from fleet_api.domain.enums import (
     AssetOwnershipType,
     FleetAssetStatus,
     FleetAssetType,
+    InterCompanyRentalStatus,
+    MaintenanceResponsibility,
 )
 from fleet_api.domain.errors import DomainError
 
@@ -38,7 +46,7 @@ def test_asset_capabilities_are_centralized_and_ownership_independent() -> None:
     for asset_type, supports_odometer in (
         (FleetAssetType.EXCAVATOR, False),
         (FleetAssetType.BACKHOE_LOADER, True),
-        (FleetAssetType.ROLLER, False),
+        (FleetAssetType.ROLLER, True),
         (FleetAssetType.GRADER, True),
     ):
         machinery = capabilities_for(asset_type)
@@ -113,6 +121,51 @@ def test_non_wheeled_asset_rejects_odometer_capability(
             supports_odometer_km=True,
             supports_hour_meter=True,
         )
+
+
+def test_intercompany_rental_skeleton_requires_tenant_scoped_assets_and_shares_nothing(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company_a = value(tenant_records, "company_a", Company)
+    company_b = value(tenant_records, "company_b", Company)
+    asset_a = value(tenant_records, "tipper_a", FleetAsset)
+    asset_b = value(tenant_records, "tipper_b", FleetAsset)
+    relationship = InterCompanyAssetRental(
+        asset_owner_company_id=company_a.id,
+        renting_company_id=company_b.id,
+        owner_asset_id=asset_a.id,
+        renter_asset_id=asset_b.id,
+        starts_at=datetime(2026, 10, 1, tzinfo=UTC),
+        status=InterCompanyRentalStatus.DRAFT,
+        maintenance_responsibility=MaintenanceResponsibility.OWNER_COMPANY,
+    )
+    db_session.add(relationship)
+    db_session.flush()
+    db_session.refresh(relationship)
+
+    assert relationship.share_odometer_km is False
+    assert relationship.share_hour_meter is False
+    assert relationship.share_utilization is False
+    assert relationship.share_duty_summary is False
+    assert relationship.share_driver_identity is False
+    assert relationship.share_diesel is False
+
+    invalid_relationship = db_session.begin_nested()
+    db_session.add(
+        InterCompanyAssetRental(
+            asset_owner_company_id=company_a.id,
+            renting_company_id=company_b.id,
+            owner_asset_id=asset_b.id,
+            renter_asset_id=asset_b.id,
+            starts_at=datetime(2026, 10, 2, tzinfo=UTC),
+            status=InterCompanyRentalStatus.DRAFT,
+            maintenance_responsibility=MaintenanceResponsibility.OWNER_COMPANY,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    invalid_relationship.rollback()
 
 
 def test_asset_uniqueness_and_rental_date_constraints(

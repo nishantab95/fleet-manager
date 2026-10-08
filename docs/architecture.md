@@ -47,10 +47,11 @@ deactivation preserves assignment and event history.
 Composite `(company_id, asset_id)` foreign keys retain the database tenant
 boundary.
 
-`AssetCapabilities` is the single workflow capability map. `TIPPER` uses trip
-and odometer capture; `EXCAVATOR`, `BACKHOE_LOADER`, `ROLLER`, and `GRADER` use
-hour-meter capture. All current Pilot types support duty, diesel, and emergency
-operations. Ownership is descriptive and does not change operations.
+`AssetCapabilities` is the single workflow capability map. Operational meter
+requirements are independent of ownership: current wheeled Pilot assets use
+both odometer and hour-meter capture, while tracked assets use hour-meter
+capture. Tippers retain trip capture; non-trip machinery does not invent trip
+events. All current Pilot types support duty, diesel, emergency, and reporting.
 
 The public 1.0.4 contract remains intentionally tipper-shaped. Existing
 `/tippers` routes, report routes, workbook layout, and fields such as
@@ -170,12 +171,15 @@ with `FLEET_WEB_PUBLIC_BASE_URL`; they never embed images or object-storage keys
 
 ## Maintenance V2 and meter-capability boundary
 
-Maintenance is an Owner/Admin module built on the canonical `FleetAsset` and
-its operational history. `fleet_api.domain.maintenance` owns template matching,
-plan materialization, due-state calculation, work-order transitions, service
-completion, and immutable maintenance history. The `/api/v1/owner/maintenance`
-routes are transport adapters and derive tenant scope from the authenticated
-Owner membership.
+Maintenance is built on the canonical `FleetAsset` and its operational history.
+`fleet_api.domain.maintenance` owns template matching, plan materialization,
+due-state calculation, work-order transitions, service completion, and
+immutable maintenance history. Ownership, operational responsibility, and
+maintenance responsibility are separate concepts: rental never disables duty,
+KM/HMR, diesel, emergency, or reports. In the current Pilot an `OWNED` asset
+with `OWNER_COMPANY` or `SHARED` responsibility is maintained by its tenant;
+a `RENTED` asset defaults to `OWNER_COMPANY` and is therefore shown as
+externally maintained with read-only historical records.
 
 Maintenance triggers are configured per plan item. Wheeled assets may use any
 non-empty combination of calendar date, odometer kilometres, and hour-meter
@@ -195,6 +199,17 @@ under one `capture_group_uuid` in one transaction. Supervisor review and alert
 counts group those rows as one capture card, while reporting and maintenance
 retain the individual typed readings.
 
+Only `DUE` and `OVERDUE` plan items are exposed to the currently assigned
+Driver. A service photo is queued locally under a client submission UUID,
+uploaded through the existing private evidence pipeline, and persisted as
+`PROOF_SUBMITTED`. It does not complete maintenance. A Supervisor with explicit
+access to the submission Site can reject it with a reason or confirm service.
+Rejection preserves the submission and leaves the item due. Confirmation
+creates and completes a work order as the Supervisor, snapshots current known
+meters, uses the confirmation date as the calendar baseline, appends immutable
+history, and recalculates due state. Maintenance appears only in Supervisor
+pending notifications; the four operational attention tiles remain unchanged.
+
 Maintenance templates are versioned setup data. Applying a template copies
 compatible task definitions into an asset-owned plan; later template changes do
 not rewrite that plan. Specific manufacturer/model/year matches are preferred
@@ -205,11 +220,20 @@ copies maintenance history. Work-order completion records decimal costs,
 optional notes and references, supplied meter baselines, and the calendar
 completion date in an immutable history row.
 
-Migrations `0019_asset_meters` and `0020_maintenance_v2` add the independent
-asset capabilities, grouped meter captures, templates, plans, criteria, work
-orders, history, and attachment metadata. Historical Pilot tippers are safely
-backfilled as wheeled KM assets and historical machinery as HMR assets, so an
-upgrade does not suddenly demand a second reading from existing assignments.
+Migrations `0019_asset_meters`, `0020_maintenance_v2`, and
+`0021_maintenance_responsibility` add independent asset capabilities, grouped
+meter captures, templates, plans, criteria, work orders, history, proof review,
+and attachment metadata. Migration 0021 corrects the earlier conservative
+legacy default by making every existing `is_wheeled=true` asset dual KM/HMR;
+the schema has no provenance field that could distinguish the original default
+from a later explicit edit.
+
+`InterCompanyAssetRental` is a dormant agreement skeleton for future owner and
+renter companies, effective dates, responsibility, and individually opt-in
+sharing fields. `FLEET_INTERCOMPANY_RENTALS_ENABLED` defaults to false, there
+are no routes or sync jobs for the model, and no cross-tenant query permission
+is created. Future activation requires an explicit agreement-scoped service
+and authorization design.
 
 ## Tenant boundary
 
@@ -384,6 +408,9 @@ assets require a rental Owner/Supplier name and normalized primary phone; an
 alternate phone is optional. Changing an asset to owned clears all rental-only
 fields. Edits update the existing UUID so assignments, duty
 sessions, events, evidence, verification history, and reports remain linked.
+Maintenance responsibility is separate: rented assets default to the rental
+Owner, so the current tenant records operational meters and reports but cannot
+configure or complete that asset's periodic maintenance.
 
 Deactivation is a status transition, never a delete. The direct Fleet lifecycle
 route rejects it while the asset has an effective assignment or active duty

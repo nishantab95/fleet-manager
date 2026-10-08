@@ -32,6 +32,7 @@ class SupervisorHomeScreen extends StatefulWidget {
 class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
   List<SupervisorSite> _sites = const [];
   Map<String, List<SupervisorEvent>> _eventsBySite = const {};
+  Map<String, List<MaintenanceProof>> _maintenanceBySite = const {};
   String? _selectedSiteId;
   String _supervisorName = 'Supervisor';
   bool _loading = true;
@@ -62,6 +63,9 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
           (site) async => (
             siteId: site.id,
             events: await widget.api.supervisorEvents(site.id),
+            maintenance: await widget.api.supervisorMaintenanceProofs(
+              siteId: site.id,
+            ),
           ),
         ),
       );
@@ -70,6 +74,9 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
         _sites = sites;
         _supervisorName = supervisorName;
         _eventsBySite = {for (final item in siteData) item.siteId: item.events};
+        _maintenanceBySite = {
+          for (final item in siteData) item.siteId: item.maintenance,
+        };
         if (!sites.any((site) => site.id == _selectedSiteId)) {
           _selectedSiteId = sites.firstOrNull?.id;
         }
@@ -116,6 +123,22 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openMaintenance() async {
+    final site = _sites.where((item) => item.id == _selectedSiteId).firstOrNull;
+    if (site == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => _MaintenanceReviewScreen(
+          api: widget.api,
+          onSignOut: widget.onSignOut,
+          site: site,
+          initialProofs: _maintenanceBySite[site.id] ?? const [],
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedSite = _sites
@@ -125,6 +148,11 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
         ? const <SupervisorEvent>[]
         : _eventsBySite[selectedSite.id] ?? const <SupervisorEvent>[];
     final counts = _SupervisorCategoryCounts.fromEvents(selectedEvents);
+    final maintenanceCount = selectedSite == null
+        ? 0
+        : (_maintenanceBySite[selectedSite.id] ?? const [])
+              .where((item) => item.isPending)
+              .length;
     final siteLabel = selectedSite?.shortName?.trim().isNotEmpty == true
         ? selectedSite!.shortName!
         : selectedSite?.name ?? 'No assigned site';
@@ -173,6 +201,8 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
             _SupervisorPendingNotifications(
               counts: counts,
               onOpen: _openCategory,
+              maintenanceCount: maintenanceCount,
+              onOpenMaintenance: _openMaintenance,
             ),
           ],
         ),
@@ -648,6 +678,229 @@ class _GroupedMeterCard extends StatelessWidget {
   }
 }
 
+enum _MaintenanceReviewTab { pending, history }
+
+class _MaintenanceReviewScreen extends StatefulWidget {
+  const _MaintenanceReviewScreen({
+    required this.api,
+    required this.onSignOut,
+    required this.site,
+    required this.initialProofs,
+  });
+
+  final ApiClient api;
+  final SignOut onSignOut;
+  final SupervisorSite site;
+  final List<MaintenanceProof> initialProofs;
+
+  @override
+  State<_MaintenanceReviewScreen> createState() =>
+      _MaintenanceReviewScreenState();
+}
+
+class _MaintenanceReviewScreenState extends State<_MaintenanceReviewScreen> {
+  late List<MaintenanceProof> _proofs = [...widget.initialProofs];
+  _MaintenanceReviewTab _tab = _MaintenanceReviewTab.pending;
+  bool _loading = false;
+  String? _error;
+  String? _message;
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final proofs = await widget.api.supervisorMaintenanceProofs(
+        siteId: widget.site.id,
+      );
+      if (mounted) setState(() => _proofs = proofs);
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) {
+        await widget.onSignOut();
+        return;
+      }
+      if (mounted) setState(() => _error = _friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<String?> _rejectionReason() => showDialog<String>(
+    context: context,
+    builder: (context) => SimpleDialog(
+      title: const Text('Why are you rejecting this proof?'),
+      children: [
+        for (final reason in const [
+          'Wrong photo',
+          'Service not completed',
+          'Cannot verify',
+          'Other',
+        ])
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, reason),
+            child: Text(reason),
+          ),
+      ],
+    ),
+  );
+
+  Future<void> _review(MaintenanceProof proof, String decision) async {
+    final reason = decision == 'REJECT' ? await _rejectionReason() : null;
+    if (decision == 'REJECT' && reason == null) return;
+    setState(() => _loading = true);
+    try {
+      final updated = await widget.api.reviewMaintenanceProof(
+        proof.id,
+        decision: decision,
+        reason: reason,
+      );
+      if (!mounted) return;
+      setState(() {
+        _proofs = _proofs
+            .map((item) => item.id == updated.id ? updated : item)
+            .toList();
+        _message = decision == 'APPROVE'
+            ? 'Service confirmed and next due values recalculated.'
+            : 'Proof rejected. Maintenance remains due.';
+        _error = null;
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = _friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _showEvidence(
+    MaintenanceProof proof,
+    MaintenanceProofEvidence evidence,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _EvidenceDialog(
+        title: '${proof.assetCode} · ${proof.taskLabel}',
+        loader: () => widget.api.maintenanceProofEvidenceBytes(
+          proof.id,
+          evidence.evidenceId,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = _proofs.where((item) => item.isPending).toList();
+    final history = _proofs.where((item) => !item.isPending).toList();
+    final visible = _tab == _MaintenanceReviewTab.pending ? pending : history;
+    return _RoleScaffold(
+      title: 'MAINTENANCE REVIEW',
+      subtitle: widget.site.shortName ?? widget.site.name,
+      onRefresh: _load,
+      onSignOut: widget.onSignOut,
+      offline: false,
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: [
+            SegmentedButton<_MaintenanceReviewTab>(
+              segments: [
+                ButtonSegment(
+                  value: _MaintenanceReviewTab.pending,
+                  label: Text('Pending ${pending.length}'),
+                ),
+                const ButtonSegment(
+                  value: _MaintenanceReviewTab.history,
+                  label: Text('History'),
+                ),
+              ],
+              selected: {_tab},
+              onSelectionChanged: (value) =>
+                  setState(() => _tab = value.single),
+            ),
+            if (_loading) const LinearProgressIndicator(),
+            if (_error != null) _ErrorBanner(message: _error!, onRetry: _load),
+            if (_message != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(_message!),
+              ),
+            if (visible.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Text('No Maintenance submissions in this view.'),
+              ),
+            for (final proof in visible)
+              Card(
+                key: Key('maintenance-proof-${proof.id}'),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        proof.assetCode,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      Text(
+                        proof.taskLabel,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Driver: ${proof.driverName}'),
+                      Text('Site: ${proof.siteName}'),
+                      Text('Submitted: ${_formatDate(proof.submittedAt)}'),
+                      if (proof.reviewReason != null)
+                        Text('Reason: ${proof.reviewReason}'),
+                      const SizedBox(height: 8),
+                      const Text('Evidence:'),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          for (
+                            var index = 0;
+                            index < proof.evidence.length;
+                            index++
+                          )
+                            OutlinedButton.icon(
+                              onPressed: () =>
+                                  _showEvidence(proof, proof.evidence[index]),
+                              icon: const Icon(Icons.photo_outlined),
+                              label: Text('PHOTO ${index + 1}'),
+                            ),
+                        ],
+                      ),
+                      if (proof.isPending)
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: _loading
+                                    ? null
+                                    : () => _review(proof, 'REJECT'),
+                                child: const Text('REJECT'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: _loading
+                                    ? null
+                                    : () => _review(proof, 'APPROVE'),
+                                child: const Text('CONFIRM SERVICE DONE'),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SupervisorAttentionGrid extends StatelessWidget {
   const _SupervisorAttentionGrid({required this.counts, required this.onOpen});
 
@@ -778,10 +1031,14 @@ class _SupervisorPendingNotifications extends StatelessWidget {
   const _SupervisorPendingNotifications({
     required this.counts,
     required this.onOpen,
+    required this.maintenanceCount,
+    required this.onOpenMaintenance,
   });
 
   final _SupervisorCategoryCounts counts;
   final ValueChanged<_SupervisorReviewCategory> onOpen;
+  final int maintenanceCount;
+  final VoidCallback onOpenMaintenance;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -800,7 +1057,7 @@ class _SupervisorPendingNotifications extends StatelessWidget {
                 ),
               ),
               Text(
-                '${counts.total}',
+                '${counts.total + maintenanceCount}',
                 key: const Key('supervisor-pending-total'),
                 style: Theme.of(
                   context,
@@ -808,10 +1065,25 @@ class _SupervisorPendingNotifications extends StatelessWidget {
               ),
             ],
           ),
-          if (counts.total == 0) ...[
+          if (counts.total + maintenanceCount == 0) ...[
             const SizedBox(height: FleetSpacing.sm),
             const Text('Nothing requires your attention.'),
-          ] else
+          ] else if (maintenanceCount > 0)
+            ListTile(
+              key: const Key('supervisor-notification-maintenance'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Maintenance approvals'),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('$maintenanceCount'),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+              onTap: onOpenMaintenance,
+            ),
+          if (counts.total > 0)
             for (final category in _SupervisorReviewCategory.values)
               if (counts.forCategory(category) > 0)
                 ListTile(

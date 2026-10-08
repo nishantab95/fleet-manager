@@ -674,6 +674,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   bool _busy = false;
   DateTime? _lastQueuedAt;
   DriverEventType? _lastQueuedEventType;
+  List<DriverMaintenanceItem> _maintenanceItems = const [];
+  bool _maintenanceLoading = false;
 
   @override
   void initState() {
@@ -681,6 +683,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _duty = widget.duty;
     unawaited(_refreshQueue());
     unawaited(_syncQueuedEvents());
+    unawaited(_refreshMaintenance());
   }
 
   @override
@@ -707,6 +710,43 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         oldWidget.duty.sessionId != widget.duty.sessionId ||
         oldWidget.duty.localState != widget.duty.localState) {
       _duty = widget.duty;
+    }
+    if (oldWidget.assignment?.assignmentId != widget.assignment?.assignmentId ||
+        oldWidget.assignment?.companyMaintenanceManaged !=
+            widget.assignment?.companyMaintenanceManaged) {
+      unawaited(_refreshMaintenance());
+    }
+  }
+
+  Future<void> _refreshMaintenance() async {
+    final assignment = widget.assignment;
+    if (assignment == null || assignment.companyMaintenanceManaged != true) {
+      await widget.dependencies.sync.cacheDueMaintenance(
+        const [],
+        assignmentId: assignment?.assignmentId,
+      );
+      if (mounted) setState(() => _maintenanceItems = const []);
+      return;
+    }
+    if (mounted) setState(() => _maintenanceLoading = true);
+    try {
+      final items = await widget.dependencies.api.driverDueMaintenance();
+      await widget.dependencies.sync.cacheDueMaintenance(
+        items,
+        assignmentId: assignment.assignmentId,
+      );
+      if (mounted) setState(() => _maintenanceItems = items);
+    } on ApiException catch (error) {
+      if (error.isUnauthorized) {
+        await widget.onSignOut();
+        return;
+      }
+      final cached = await widget.dependencies.sync.localDueMaintenance(
+        assignmentId: assignment.assignmentId,
+      );
+      if (mounted) setState(() => _maintenanceItems = cached);
+    } finally {
+      if (mounted) setState(() => _maintenanceLoading = false);
     }
   }
 
@@ -770,6 +810,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final refresh = widget.onRefreshState;
     if (refresh != null) return refresh();
     await _refreshDuty();
+    await _refreshMaintenance();
     return null;
   }
 
@@ -812,6 +853,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           DriverEventType.kmReading => 'KM reading saved',
           DriverEventType.hmrReading => 'HMR saved',
           DriverEventType.meterCapture => 'KM + HMR readings saved',
+          DriverEventType.maintenanceProof =>
+            'Maintenance proof saved for Supervisor review',
         };
         _showMessage(label);
       }
@@ -1058,6 +1101,74 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
+  Future<void> _showMaintenanceItem(DriverMaintenanceItem item) async {
+    final addPhoto = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(item.taskLabel.toUpperCase()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Status: ${item.status.replaceAll('_', ' ')}'),
+            const SizedBox(height: 16),
+            const Text('Upload service photos'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('CANCEL'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.add_a_photo_outlined),
+            label: const Text('+ ADD PHOTO'),
+          ),
+        ],
+      ),
+    );
+    if (addPhoto != true || !mounted) return;
+    final photo = await _pickEvidence(mustChoose: true);
+    if (photo == null || !mounted) return;
+    final submit = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(item.taskLabel.toUpperCase()),
+        content: const Text(
+          '1 service photo attached. A Supervisor must confirm the service before the next interval is calculated.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('CANCEL'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('SUBMIT FOR SUPERVISOR REVIEW'),
+          ),
+        ],
+      ),
+    );
+    if (submit != true) return;
+    final queued = await _queue(
+      DriverEventType.maintenanceProof,
+      payload: {'schedule_id': item.scheduleId},
+      evidencePath: photo.path,
+    );
+    if (queued != null && mounted) {
+      setState(
+        () => _maintenanceItems = _maintenanceItems
+            .where((entry) => entry.scheduleId != item.scheduleId)
+            .toList(),
+      );
+      await widget.dependencies.sync.cacheDueMaintenance(
+        _maintenanceItems,
+        assignmentId: widget.assignment?.assignmentId,
+      );
+    }
+  }
+
   Future<void> _confirmTripComplete() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1297,13 +1408,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 icon: Icons.local_gas_station,
                 onPressed: canOperate ? _showDieselDialog : null,
               ),
-            const SizedBox(height: 12),
-            const _ActionButton(
-              label: 'MAINTENANCE',
-              subtitle: 'Coming later',
-              icon: Icons.build_outlined,
-              onPressed: null,
-            ),
             if (_message != null) ...[
               const SizedBox(height: 16),
               _DriverFeedbackCard(
@@ -1314,6 +1418,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 },
               ),
             ],
+            const SizedBox(height: 12),
+            if (assignment?.companyMaintenanceManaged == true)
+              _DriverMaintenancePanel(
+                items: _maintenanceItems,
+                loading: _maintenanceLoading,
+                busy: _busy,
+                onOpen: _showMaintenanceItem,
+              ),
             const SizedBox(height: 40),
             _ActionButton(
               label: 'END DUTY',
@@ -1337,6 +1449,65 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       ),
     );
   }
+}
+
+class _DriverMaintenancePanel extends StatelessWidget {
+  const _DriverMaintenancePanel({
+    required this.items,
+    required this.loading,
+    required this.busy,
+    required this.onOpen,
+  });
+
+  final List<DriverMaintenanceItem> items;
+  final bool loading;
+  final bool busy;
+  final ValueChanged<DriverMaintenanceItem> onOpen;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    key: const Key('driver-maintenance-panel'),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.build_outlined),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'MAINTENANCE',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            loading
+                ? 'Checking due work…'
+                : '${items.length} item${items.length == 1 ? '' : 's'} due',
+          ),
+          if (!loading && items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('Nothing requires Maintenance attention.'),
+            ),
+          for (final item in items)
+            ListTile(
+              key: Key('driver-maintenance-${item.scheduleId}'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(item.taskLabel.toUpperCase()),
+              subtitle: Text(item.status == 'OVERDUE' ? 'Overdue' : 'Due now'),
+              trailing: const Text('Upload proof'),
+              onTap: busy ? null : () => onOpen(item),
+            ),
+        ],
+      ),
+    ),
+  );
 }
 
 class DriverDiagnosticsScreen extends StatefulWidget {
@@ -1723,14 +1894,12 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.onPressed,
-    this.subtitle,
     this.danger = false,
     this.prominent = false,
     this.compact = false,
   });
 
   final String label;
-  final String? subtitle;
   final IconData icon;
   final VoidCallback? onPressed;
   final bool danger;
@@ -1785,21 +1954,10 @@ class _ActionButton extends StatelessWidget {
                   Icon(icon),
                   const SizedBox(width: 10),
                   Flexible(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          label,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        if (subtitle != null)
-                          Text(
-                            subtitle!,
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                      ],
+                    child: Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
                 ],

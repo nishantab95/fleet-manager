@@ -51,7 +51,7 @@ _CAPABILITIES = {
     ),
     FleetAssetType.EXCAVATOR: AssetCapabilities(False, False, False, True, True, True, True),
     FleetAssetType.BACKHOE_LOADER: AssetCapabilities(True, False, True, True, True, True, True),
-    FleetAssetType.ROLLER: AssetCapabilities(True, False, False, True, True, True, True),
+    FleetAssetType.ROLLER: AssetCapabilities(True, False, True, True, True, True, True),
     FleetAssetType.GRADER: AssetCapabilities(True, False, True, True, True, True, True),
 }
 

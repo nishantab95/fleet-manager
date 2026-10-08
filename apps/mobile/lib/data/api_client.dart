@@ -44,6 +44,10 @@ abstract class DriverRemoteApi {
   });
 }
 
+abstract class DriverMaintenanceRemote {
+  Future<void> submitMaintenanceProof({required PendingEvent event});
+}
+
 class DeviceRegistration {
   const DeviceRegistration({
     required this.deviceId,
@@ -177,6 +181,7 @@ class ApiException implements Exception {
 class ApiClient
     implements
         DriverRemoteApi,
+        DriverMaintenanceRemote,
         DriverStateLookup,
         OwnerAssetApi,
         OwnerPeopleSiteApi,
@@ -352,6 +357,15 @@ class ApiClient
     return DriverDutyState.fromJson(_json(response));
   }
 
+  Future<List<DriverMaintenanceItem>> driverDueMaintenance() async {
+    final response = await _request(
+      'GET',
+      '/api/v1/driver/maintenance/due',
+      authenticated: true,
+    );
+    return _jsonList(response).map(DriverMaintenanceItem.fromJson).toList();
+  }
+
   Future<List<SupervisorSite>> supervisorSites() async {
     final response = await _request(
       'GET',
@@ -380,6 +394,46 @@ class ApiClient
       authenticated: true,
     );
     return _jsonList(response).map(SupervisorEvent.fromJson).toList();
+  }
+
+  Future<List<MaintenanceProof>> supervisorMaintenanceProofs({
+    String? siteId,
+  }) async {
+    final suffix = siteId == null
+        ? ''
+        : '?site_id=${Uri.encodeQueryComponent(siteId)}';
+    final response = await _request(
+      'GET',
+      '/api/v1/supervisor/maintenance/proofs$suffix',
+      authenticated: true,
+    );
+    return _jsonList(response).map(MaintenanceProof.fromJson).toList();
+  }
+
+  Future<MaintenanceProof> reviewMaintenanceProof(
+    String submissionId, {
+    required String decision,
+    String? reason,
+  }) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/supervisor/maintenance/proofs/$submissionId/review',
+      authenticated: true,
+      body: {'decision': decision, if (reason != null) 'reason': reason},
+    );
+    return MaintenanceProof.fromJson(_json(response));
+  }
+
+  Future<Uint8List> maintenanceProofEvidenceBytes(
+    String submissionId,
+    String evidenceId,
+  ) async {
+    final response = await _request(
+      'GET',
+      '/api/v1/supervisor/maintenance/proofs/$submissionId/evidence/$evidenceId',
+      authenticated: true,
+    );
+    return response.bodyBytes;
   }
 
   Future<List<CompletenessItem>> supervisorCompleteness(
@@ -976,6 +1030,21 @@ class ApiClient
       meterCapture ? '/api/v1/driver/meter-captures' : '/api/v1/driver/events',
       authenticated: true,
       body: payload,
+    );
+  }
+
+  @override
+  Future<void> submitMaintenanceProof({required PendingEvent event}) async {
+    await _request(
+      'POST',
+      '/api/v1/driver/maintenance/proofs',
+      authenticated: true,
+      body: {
+        'client_submission_uuid': event.clientEventUuid,
+        'schedule_id': event.payload['schedule_id'],
+        'evidence_object_references': [event.payload['object_reference']],
+        if (event.payload['note'] != null) 'note': event.payload['note'],
+      },
     );
   }
 

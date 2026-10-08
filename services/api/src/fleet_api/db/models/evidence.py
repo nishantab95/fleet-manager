@@ -45,5 +45,6 @@ class EvidenceObject(UUIDTimestampModel):
             "client_event_uuid",
             name="uq_evidence_objects_driver_event",
         ),
+        UniqueConstraint("company_id", "id", name="uq_evidence_objects_company_id"),
         Index("ix_evidence_objects_company_event", "company_id", "client_event_uuid"),
     )

@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from fleet_api.core.config import Settings
+from fleet_api.main import create_app
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -40,3 +41,13 @@ def test_odometer_ceiling_rejects_non_finite_or_unstorable_values() -> None:
         _settings(max_odometer_km="Infinity")
     with pytest.raises(ValueError, match="max_odometer_km"):
         _settings(max_odometer_km="10000000000")
+
+
+def test_intercompany_rental_skeleton_is_disabled_and_not_routable() -> None:
+    settings = _settings()
+
+    assert settings.intercompany_rentals_enabled is False
+    assert all(
+        "intercompany" not in getattr(route, "path", "").casefold()
+        for route in create_app(settings).routes
+    )

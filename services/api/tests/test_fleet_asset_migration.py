@@ -53,7 +53,7 @@ def test_database_is_at_the_single_model_complete_head(postgres_engine: Engine) 
     script = ScriptDirectory.from_config(config)
     with postgres_engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
-    assert script.get_heads() == ["0020_maintenance_v2"]
+    assert script.get_heads() == ["0021_maintenance_responsibility"]
     assert current == script.get_current_head()
     command.check(config)
 
@@ -922,13 +922,14 @@ def test_0018_preserves_existing_rented_assets_with_nullable_new_fields(
             )
 
 
-def test_0019_safely_backfills_existing_asset_meter_and_wheel_capabilities(
+def test_0021_upgrades_legacy_wheeled_assets_to_dual_meter_capabilities(
     postgres_engine: Engine,
 ) -> None:
     config = _alembic_config(postgres_engine)
     company_id = UUID("90000000-0000-0000-0000-000000000001")
     tipper_id = UUID("90000000-0000-0000-0000-000000000002")
     excavator_id = UUID("90000000-0000-0000-0000-000000000003")
+    roller_id = UUID("90000000-0000-0000-0000-000000000004")
     command.downgrade(config, "0018_asset_contacts")
     try:
         with postgres_engine.begin() as connection:
@@ -948,11 +949,14 @@ def test_0019_safely_backfills_existing_asset_meter_and_wheel_capabilities(
                     "(:tipper, :company, 'TIPPER', 'OWNED', 'LEGACY-TIPPER', "
                     "'KA01MM0001', 'Legacy tipper', 'ACTIVE'), "
                     "(:excavator, :company, 'EXCAVATOR', 'OWNED', 'LEGACY-EXC', "
-                    "NULL, 'Legacy excavator', 'ACTIVE')"
+                    "NULL, 'Legacy excavator', 'ACTIVE'), "
+                    "(:roller, :company, 'ROLLER', 'RENTED', 'LEGACY-ROLLER', "
+                    "NULL, 'Legacy rented roller', 'ACTIVE')"
                 ),
                 {
                     "tipper": tipper_id,
                     "excavator": excavator_id,
+                    "roller": roller_id,
                     "company": company_id,
                 },
             )
@@ -975,13 +979,20 @@ def test_0019_safely_backfills_existing_asset_meter_and_wheel_capabilities(
                 "model_year": None,
                 "is_wheeled": True,
                 "supports_odometer_km": True,
-                "supports_hour_meter": False,
+                "supports_hour_meter": True,
             }
             assert dict(rows[excavator_id]) == {
                 "id": excavator_id,
                 "model_year": None,
                 "is_wheeled": False,
                 "supports_odometer_km": False,
+                "supports_hour_meter": True,
+            }
+            assert dict(rows[roller_id]) == {
+                "id": roller_id,
+                "model_year": None,
+                "is_wheeled": True,
+                "supports_odometer_km": True,
                 "supports_hour_meter": True,
             }
     finally:

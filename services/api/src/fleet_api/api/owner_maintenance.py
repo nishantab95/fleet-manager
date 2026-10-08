@@ -38,6 +38,7 @@ from fleet_api.domain.maintenance import (
     CriterionInput,
     MaintenanceService,
     ScheduleEvaluation,
+    company_manages_maintenance,
     task_label,
 )
 
@@ -175,7 +176,8 @@ def get_plan(
     service: MaintenanceService = Depends(get_maintenance_service),
 ) -> MaintenancePlanResponse:
     asset = service._asset(asset_id)
-    plan, schedules = service.list_plan(asset_id)
+    managed = company_manages_maintenance(asset)
+    plan, schedules = service.list_plan(asset_id) if managed else (None, [])
     evaluations = {item.schedule.id: item for item in service.evaluations(include_disabled=True)}
     items = [
         _schedule_response(service, evaluations[schedule.id])
@@ -193,6 +195,9 @@ def get_plan(
         is_wheeled=asset.is_wheeled,
         supports_odometer_km=asset.supports_odometer_km,
         supports_hour_meter=asset.supports_hour_meter,
+        maintenance_responsibility=asset.maintenance_responsibility,
+        managed_by_current_company=managed,
+        management_message=None if managed else "Managed by rental owner",
         source=plan.source if plan else None,
         source_template_id=plan.source_template_id if plan else None,
         source_template_version=plan.source_template_version if plan else None,
@@ -277,6 +282,8 @@ def task_catalog(
     asset_id: UUID,
     service: MaintenanceService = Depends(get_maintenance_service),
 ) -> list[MaintenanceTaskCatalogResponse]:
+    if not company_manages_maintenance(service._asset(asset_id)):
+        return []
     suggested = {item.code for item in service.generic_starter(asset_id)}
     return [
         MaintenanceTaskCatalogResponse(
@@ -469,6 +476,8 @@ def matching_templates(
     asset_id: UUID,
     service: MaintenanceService = Depends(get_maintenance_service),
 ) -> list[MaintenanceTemplateResponse]:
+    if not company_manages_maintenance(service._asset(asset_id)):
+        return []
     return [_template_response(item) for item in service.matching_templates(asset_id)]
 
 

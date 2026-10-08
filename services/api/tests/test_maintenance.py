@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from uuid import uuid4
@@ -14,23 +14,29 @@ from fleet_api.db.models import (
     AuthSession,
     Company,
     CompanyMembership,
+    EvidenceObject,
     FleetAsset,
     MaintenanceCriterion,
+    MaintenanceProofSubmission,
     MaintenanceRecord,
     MaintenanceTemplateCriterion,
+    Site,
     User,
 )
 from fleet_api.domain.assets import create_fleet_asset
+from fleet_api.domain.assignments import create_assignment, grant_supervisor_site_access
 from fleet_api.domain.enums import (
     AssetOwnershipType,
     FleetAssetType,
     MaintenanceActionType,
     MaintenanceCriterionBasis,
     MaintenanceDueState,
+    MaintenanceProofStatus,
     MaintenanceTaskCode,
     MaintenanceTemplateSourceType,
     MaintenanceTemplateVerificationStatus,
     MaintenanceWorkOrderStatus,
+    MembershipRole,
 )
 from fleet_api.domain.errors import DomainError, NotFoundError
 from fleet_api.domain.maintenance import (
@@ -39,6 +45,7 @@ from fleet_api.domain.maintenance import (
     evaluate_criterion,
     overall_due_state,
 )
+from fleet_api.domain.maintenance_proof import MaintenanceProofService
 from test_asset_site_deployments_api import client_for
 
 
@@ -257,6 +264,23 @@ def owner_context(records: dict[str, object]) -> AuthContext:
         user=value(records, "owner_a_user", User),
         membership=value(records, "owner_a_membership", CompanyMembership),
         company=value(records, "company_a", Company),
+    )
+
+
+def membership_context(
+    db_session: Session,
+    records: dict[str, object],
+    membership_key: str,
+) -> AuthContext:
+    membership = value(records, membership_key, CompanyMembership)
+    user = db_session.get(User, membership.user_id)
+    company = db_session.get(Company, membership.company_id)
+    assert user is not None and company is not None
+    return AuthContext(
+        auth_session=cast(AuthSession, object()),
+        user=user,
+        membership=membership,
+        company=company,
     )
 
 
@@ -533,3 +557,342 @@ def test_maintenance_routes_are_owner_only_and_history_has_no_mutation_route(
     finally:
         driver.close()
         owner.close()
+
+
+def test_rented_asset_keeps_history_but_is_excluded_from_company_maintenance(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    service = MaintenanceService(db_session, owner_context(tenant_records))
+    asset = create_fleet_asset(
+        db_session,
+        company_id=company.id,
+        asset_type=FleetAssetType.TIPPER,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="RENTAL-HISTORY",
+        registration_number="KA09RH0001",
+        short_name="Rental history",
+    )
+    schedule = service.save_schedule(
+        asset.id,
+        task_code=MaintenanceTaskCode.ENGINE_SERVICE,
+        custom_label=None,
+        action_type=MaintenanceActionType.SERVICE,
+        description=None,
+        enabled=True,
+        criteria=[
+            CriterionInput(
+                MaintenanceCriterionBasis.CALENDAR_DAYS,
+                Decimal("30"),
+                Decimal("5"),
+                baseline_date=date(2026, 1, 1),
+            )
+        ],
+    )
+    order = service.create_work_order(
+        asset.id,
+        schedule_id=schedule.id,
+        title="Historical service",
+        description=None,
+        scheduled_for=None,
+    )
+    _completed, record = service.complete_work_order(
+        order.id,
+        service_date=date(2026, 2, 1),
+        odometer_km=None,
+        hour_meter=None,
+        vendor=None,
+        parts_cost=Decimal("0"),
+        labor_cost=Decimal("0"),
+        other_cost=Decimal("0"),
+        notes=None,
+    )
+    asset.ownership_type = AssetOwnershipType.RENTED
+    db_session.flush()
+
+    assert service.evaluations() == []
+    assert service.alert_counts()[MaintenanceDueState.OVERDUE] == 0
+    assert service.list_history(asset.id) == [record]
+    with pytest.raises(DomainError, match="rental owner"):
+        service.ensure_plan(asset.id)
+    with pytest.raises(DomainError, match="rental owner"):
+        service.create_work_order(
+            asset.id,
+            schedule_id=None,
+            title="Not permitted",
+            description=None,
+            scheduled_for=None,
+        )
+
+
+def test_driver_proof_requires_supervisor_review_and_rejection_keeps_due(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    site = value(tenant_records, "site_a", Site)
+    asset = create_fleet_asset(
+        db_session,
+        company_id=company.id,
+        asset_type=FleetAssetType.TIPPER,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="PROOF-ASSET",
+        registration_number="KA09PF0001",
+        short_name="Proof asset",
+    )
+    owner_service = MaintenanceService(db_session, owner_context(tenant_records))
+    schedule = owner_service.save_schedule(
+        asset.id,
+        task_code=MaintenanceTaskCode.ENGINE_SERVICE,
+        custom_label=None,
+        action_type=MaintenanceActionType.SERVICE,
+        description=None,
+        enabled=True,
+        criteria=[
+            CriterionInput(
+                MaintenanceCriterionBasis.CALENDAR_DAYS,
+                Decimal("30"),
+                Decimal("5"),
+                baseline_date=date(2020, 1, 1),
+            )
+        ],
+    )
+    assignment = create_assignment(
+        db_session,
+        company_id=company.id,
+        driver_membership_id=value(tenant_records, "driver_a", CompanyMembership).id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
+        asset_id=asset.id,
+        site_id=site.id,
+        starts_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    grant_supervisor_site_access(
+        db_session,
+        company_id=company.id,
+        supervisor_membership_id=value(tenant_records, "supervisor_a", CompanyMembership).id,
+        site_id=site.id,
+    )
+    evidence_uuid = uuid4()
+    evidence = EvidenceObject(
+        company_id=company.id,
+        membership_id=assignment.driver_membership_id,
+        client_event_uuid=evidence_uuid,
+        object_key=f"private/{evidence_uuid}.jpg",
+        content_type="image/jpeg",
+        size_bytes=20,
+    )
+    db_session.add(evidence)
+    db_session.flush()
+
+    driver_service = MaintenanceProofService(
+        db_session,
+        membership_context(db_session, tenant_records, "driver_a"),
+    )
+    assert [item.schedule.id for item in driver_service.driver_due_items()] == [schedule.id]
+    submission_uuid = uuid4()
+    submitted = driver_service.submit(
+        client_submission_uuid=submission_uuid,
+        schedule_id=schedule.id,
+        evidence_object_references=[evidence.object_key],
+        note="Service appears complete",
+    )
+    assert submitted.view.submission.status == MaintenanceProofStatus.PROOF_SUBMITTED
+    assert driver_service.driver_due_items() == []
+    assert driver_service.submit(
+        client_submission_uuid=submission_uuid,
+        schedule_id=schedule.id,
+        evidence_object_references=[evidence.object_key],
+        note="Service appears complete",
+    ).duplicate
+    assert (
+        db_session.scalar(
+            select(MaintenanceRecord).where(MaintenanceRecord.schedule_id == schedule.id)
+        )
+        is None
+    )
+
+    foreign_supervisor = MaintenanceProofService(
+        db_session,
+        membership_context(db_session, tenant_records, "supervisor_b"),
+    )
+    assert foreign_supervisor.list_supervisor_submissions() == []
+
+    supervisor_service = MaintenanceProofService(
+        db_session,
+        membership_context(db_session, tenant_records, "supervisor_a"),
+    )
+    rejected = supervisor_service.reject(submitted.view.submission.id, reason="Wrong photo")
+    assert rejected.submission.status == MaintenanceProofStatus.REJECTED
+    assert [item.schedule.id for item in driver_service.driver_due_items()] == [schedule.id]
+    assert (
+        db_session.scalar(
+            select(MaintenanceRecord).where(MaintenanceRecord.schedule_id == schedule.id)
+        )
+        is None
+    )
+
+    evidence_uuid_2 = uuid4()
+    evidence_2 = EvidenceObject(
+        company_id=company.id,
+        membership_id=assignment.driver_membership_id,
+        client_event_uuid=evidence_uuid_2,
+        object_key=f"private/{evidence_uuid_2}.jpg",
+        content_type="image/jpeg",
+        size_bytes=22,
+    )
+    db_session.add(evidence_2)
+    db_session.flush()
+    resubmitted = driver_service.submit(
+        client_submission_uuid=uuid4(),
+        schedule_id=schedule.id,
+        evidence_object_references=[evidence_2.object_key],
+        note=None,
+    )
+    approved = supervisor_service.approve(resubmitted.view.submission.id)
+    assert approved.submission.status == MaintenanceProofStatus.COMPLETED
+    record = db_session.scalar(
+        select(MaintenanceRecord).where(MaintenanceRecord.schedule_id == schedule.id)
+    )
+    assert record is not None
+    assert record.actor_membership_id == value(tenant_records, "supervisor_a", CompanyMembership).id
+    reset = service_criterion = owner_service.criteria_for(schedule.id)[0]
+    assert reset.baseline_date == datetime.now(UTC).date()
+    assert service_criterion.baseline_value is None
+    assert (
+        db_session.scalar(
+            select(MaintenanceProofSubmission).where(
+                MaintenanceProofSubmission.id == submitted.view.submission.id
+            )
+        )
+        is not None
+    )
+
+
+def test_maintenance_proof_routes_enforce_role_site_and_idempotency(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    company = value(tenant_records, "company_a", Company)
+    site = value(tenant_records, "site_a", Site)
+    driver_membership = value(tenant_records, "driver_a", CompanyMembership)
+    supervisor_membership = value(tenant_records, "supervisor_a", CompanyMembership)
+    unauthorized_supervisor = value(tenant_records, "driver_a2", CompanyMembership)
+    unauthorized_supervisor.role = MembershipRole.SUPERVISOR
+    asset = create_fleet_asset(
+        db_session,
+        company_id=company.id,
+        asset_type=FleetAssetType.TIPPER,
+        ownership_type=AssetOwnershipType.OWNED,
+        asset_code="PROOF-API",
+        registration_number="KA09PA0001",
+        short_name="Proof API asset",
+    )
+    schedule = MaintenanceService(db_session, owner_context(tenant_records)).save_schedule(
+        asset.id,
+        task_code=MaintenanceTaskCode.ENGINE_OIL,
+        custom_label=None,
+        action_type=MaintenanceActionType.REPLACE,
+        description=None,
+        enabled=True,
+        criteria=[
+            CriterionInput(
+                MaintenanceCriterionBasis.CALENDAR_DAYS,
+                Decimal("30"),
+                Decimal("5"),
+                baseline_date=date(2020, 1, 1),
+            )
+        ],
+    )
+    create_assignment(
+        db_session,
+        company_id=company.id,
+        driver_membership_id=driver_membership.id,
+        supervisor_membership_id=supervisor_membership.id,
+        asset_id=asset.id,
+        site_id=site.id,
+        starts_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    grant_supervisor_site_access(
+        db_session,
+        company_id=company.id,
+        supervisor_membership_id=supervisor_membership.id,
+        site_id=site.id,
+    )
+    evidence_uuid = uuid4()
+    evidence = EvidenceObject(
+        company_id=company.id,
+        membership_id=driver_membership.id,
+        client_event_uuid=evidence_uuid,
+        object_key=f"private/{evidence_uuid}.jpg",
+        content_type="image/jpeg",
+        size_bytes=24,
+    )
+    db_session.add(evidence)
+    db_session.commit()
+
+    driver = client_for(db_session, driver_membership)
+    supervisor = client_for(db_session, supervisor_membership)
+    wrong_site_supervisor = client_for(db_session, unauthorized_supervisor)
+    try:
+        due = driver.get("/api/v1/driver/maintenance/due")
+        assert due.status_code == 200, due.text
+        assert due.json() == [
+            {
+                "schedule_id": str(schedule.id),
+                "asset_id": str(asset.id),
+                "task_label": "Engine Oil",
+                "status": "OVERDUE",
+            }
+        ]
+
+        submission_uuid = uuid4()
+        payload = {
+            "client_submission_uuid": str(submission_uuid),
+            "schedule_id": str(schedule.id),
+            "evidence_object_references": [evidence.object_key],
+            "note": "Service completed",
+        }
+        submitted = driver.post("/api/v1/driver/maintenance/proofs", json=payload)
+        assert submitted.status_code == 200, submitted.text
+        assert submitted.json()["duplicate"] is False
+        duplicate = driver.post("/api/v1/driver/maintenance/proofs", json=payload)
+        assert duplicate.status_code == 200, duplicate.text
+        assert duplicate.json()["id"] == submitted.json()["id"]
+        assert duplicate.json()["duplicate"] is True
+        conflicting_pending = driver.post(
+            "/api/v1/driver/maintenance/proofs",
+            json={**payload, "client_submission_uuid": str(uuid4())},
+        )
+        assert conflicting_pending.status_code == 409
+        assert driver.get("/api/v1/driver/maintenance/due").json() == []
+
+        forbidden_list = wrong_site_supervisor.get(
+            "/api/v1/supervisor/maintenance/proofs", params={"site_id": str(site.id)}
+        )
+        assert forbidden_list.status_code == 403
+        assert (
+            driver.post(
+                f"/api/v1/supervisor/maintenance/proofs/{submitted.json()['id']}/review",
+                json={"decision": "APPROVE"},
+            ).status_code
+            == 403
+        )
+
+        pending = supervisor.get(
+            "/api/v1/supervisor/maintenance/proofs", params={"site_id": str(site.id)}
+        )
+        assert pending.status_code == 200, pending.text
+        assert [item["id"] for item in pending.json()] == [submitted.json()["id"]]
+        approved = supervisor.post(
+            f"/api/v1/supervisor/maintenance/proofs/{submitted.json()['id']}/review",
+            json={"decision": "APPROVE"},
+        )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["status"] == "COMPLETED"
+        assert approved.json()["work_order_id"] is not None
+        assert driver.get("/api/v1/driver/maintenance/due").json() == []
+    finally:
+        driver.close()
+        supervisor.close()
+        wrong_site_supervisor.close()

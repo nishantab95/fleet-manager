@@ -103,6 +103,8 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .table-card > button.table-row { width: 100%; border-radius: 0; text-align: left; }
 .table-row span { color: #65747a; font-size: 0.9rem; }
 .table-row strong { overflow-wrap: anywhere; }
+.maintenance-plan-table { overflow-x: auto; }
+.maintenance-plan-table .table-row { min-width: 1240px; }
 .table-card textarea { width: 100%; min-height: 90px; padding: 9px 11px; border: 1px solid #ccd8d4; border-radius: 9px; resize: vertical; }
 .evidence-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: #17202ab8; }
 .evidence-modal { width: min(100%, 820px); max-height: 92vh; overflow: auto; padding: 24px; border: 1px solid #dce5e2; border-radius: 16px; background: #fff; box-shadow: 0 24px 80px #17202a55; }

@@ -16,6 +16,7 @@ const _tipper = DriverAssignment(
   tipperRegistrationNumber: 'KA01AB1234',
   tipperShortName: 'Alpha One',
   tipperAssetCode: 'TIPPER-01',
+  companyMaintenanceManaged: true,
   siteId: 'site',
   siteName: 'Alpha Site',
   supervisorName: 'Supervisor A',
@@ -28,6 +29,7 @@ const _machinery = DriverAssignment(
   tipperShortName: 'CAT 320',
   tipperAssetCode: 'EXC-01',
   assetType: 'EXCAVATOR',
+  companyMaintenanceManaged: true,
   siteId: 'site',
   siteName: 'Test Site B',
   supervisorName: 'Supervisor A',
@@ -80,7 +82,10 @@ void main() {
     expect(find.text('TRIP COMPLETE'), findsOneWidget);
     expect(find.text('DIESEL'), findsOneWidget);
     expect(find.text('MAINTENANCE'), findsOneWidget);
-    expect(find.text('Coming later'), findsOneWidget);
+    expect(
+      find.text('Nothing requires Maintenance attention.'),
+      findsOneWidget,
+    );
     expect(find.text('END DUTY'), findsOneWidget);
     expect(find.text('KM READING'), findsNothing);
     expect(find.text('HMR READING'), findsNothing);
@@ -92,14 +97,6 @@ void main() {
     final endDutyY = tester.getTopLeft(find.text('END DUTY')).dy;
     expect(emergencyY, lessThan(tripY));
     expect(endDutyY, greaterThan(maintenanceY));
-    expect(
-      tester
-          .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'MAINTENANCE'),
-          )
-          .onPressed,
-      isNull,
-    );
 
     await tester.tap(find.text('TRIP COMPLETE'));
     await tester.pumpAndSettle();
@@ -164,7 +161,10 @@ void main() {
     expect(find.text('EMERGENCY'), findsOneWidget);
     expect(find.text('DIESEL'), findsOneWidget);
     expect(find.text('MAINTENANCE'), findsOneWidget);
-    expect(find.text('Coming later'), findsOneWidget);
+    expect(
+      find.text('Nothing requires Maintenance attention.'),
+      findsOneWidget,
+    );
     expect(find.text('END DUTY'), findsOneWidget);
     expect(find.text('TRIP COMPLETE'), findsNothing);
     expect(find.text('HMR READING'), findsNothing);
@@ -207,6 +207,104 @@ void main() {
     expect(find.text('END READINGS'), findsOneWidget);
     expect(find.text('Odometer KM'), findsOneWidget);
     expect(find.text('Hour Meter / HMR'), findsOneWidget);
+  });
+
+  testWidgets(
+    'rented wheeled asset keeps KM and HMR but hides company maintenance',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final harness = _Harness();
+      addTearDown(harness.close);
+      const rented = DriverAssignment(
+        assignmentId: 'rented-assignment',
+        tipperId: 'rented-tipper',
+        tipperRegistrationNumber: 'TESTRENT03',
+        tipperShortName: 'Rented tipper 3',
+        tipperAssetCode: 'RENT-03',
+        supportsOdometerKm: true,
+        supportsHourMeter: true,
+        companyMaintenanceManaged: false,
+        siteId: 'site',
+        siteName: 'Test Site B',
+        supervisorName: 'Supervisor A',
+      );
+
+      await _pumpDriver(
+        tester,
+        harness.dependencies,
+        assignment: rented,
+        duty: const DriverDutyState.none(),
+      );
+      await tester.tap(find.text('START DUTY'));
+      await tester.pumpAndSettle();
+      expect(find.text('Odometer KM'), findsOneWidget);
+      expect(find.text('Hour Meter / HMR'), findsOneWidget);
+      await tester.tap(find.text('CANCEL'));
+      await tester.pumpAndSettle();
+
+      await _pumpDriver(
+        tester,
+        harness.dependencies,
+        assignment: rented,
+        duty: const DriverDutyState(status: DriverDutyStatus.active),
+      );
+      expect(find.text('MAINTENANCE'), findsNothing);
+      expect(find.text('TRIP COMPLETE'), findsOneWidget);
+      await tester.tap(find.text('END DUTY'));
+      await tester.pumpAndSettle();
+      expect(find.text('END READINGS'), findsOneWidget);
+      expect(find.text('Odometer KM'), findsOneWidget);
+      expect(find.text('Hour Meter / HMR'), findsOneWidget);
+    },
+  );
+
+  testWidgets('rented tracked asset requires HMR only for duty start and end', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final harness = _Harness();
+    addTearDown(harness.close);
+    const rentedTracked = DriverAssignment(
+      assignmentId: 'rented-tracked-assignment',
+      tipperId: 'rented-excavator',
+      tipperRegistrationNumber: null,
+      tipperShortName: 'Rented excavator',
+      tipperAssetCode: 'RENT-EXC-01',
+      assetType: 'EXCAVATOR',
+      supportsOdometerKm: false,
+      supportsHourMeter: true,
+      companyMaintenanceManaged: false,
+      siteId: 'site',
+      siteName: 'Test Site B',
+      supervisorName: 'Supervisor A',
+    );
+
+    await _pumpDriver(
+      tester,
+      harness.dependencies,
+      assignment: rentedTracked,
+      duty: const DriverDutyState.none(),
+    );
+    await tester.tap(find.text('START DUTY'));
+    await tester.pumpAndSettle();
+    expect(find.text('START HMR'), findsOneWidget);
+    expect(find.text('Odometer KM'), findsNothing);
+    await tester.tap(find.text('CANCEL'));
+    await tester.pumpAndSettle();
+
+    await _pumpDriver(
+      tester,
+      harness.dependencies,
+      assignment: rentedTracked,
+      duty: const DriverDutyState(status: DriverDutyStatus.active),
+    );
+    expect(find.text('MAINTENANCE'), findsNothing);
+    await tester.tap(find.text('END DUTY'));
+    await tester.pumpAndSettle();
+    expect(find.text('END HMR'), findsOneWidget);
+    expect(find.text('Odometer KM'), findsNothing);
   });
 
   testWidgets('machinery duty start and end require the matching HMR', (
@@ -327,6 +425,7 @@ void main() {
     expect(queued, hasLength(1));
     expect(queued.single.eventType, 'DIESEL');
     expect(queued.single.payloadJson, contains('"litres":"25.5"'));
+    await tester.pump();
     expect(find.text('Diesel recorded'), findsOneWidget);
   });
 
@@ -566,7 +665,7 @@ class _Harness {
   Future<void> close() => database.close();
 }
 
-class _FakeRemote implements DriverRemoteApi {
+class _FakeRemote implements DriverRemoteApi, DriverMaintenanceRemote {
   @override
   Future<DeviceRegistration> registerDevice({
     required String installationIdentifier,
@@ -589,4 +688,7 @@ class _FakeRemote implements DriverRemoteApi {
     required PendingEvent event,
     required String installationIdentifier,
   }) async {}
+
+  @override
+  Future<void> submitMaintenanceProof({required PendingEvent event}) async {}
 }

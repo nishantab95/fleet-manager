@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -12,6 +13,8 @@ from fleet_api.domain.enums import (
     MaintenanceCriterionBasis,
     MaintenanceDueState,
     MaintenancePlanSource,
+    MaintenanceProofStatus,
+    MaintenanceResponsibility,
     MaintenanceTaskCode,
     MaintenanceTemplateSourceType,
     MaintenanceTemplateVerificationStatus,
@@ -76,6 +79,9 @@ class MaintenancePlanResponse(BaseModel):
     is_wheeled: bool
     supports_odometer_km: bool
     supports_hour_meter: bool
+    maintenance_responsibility: MaintenanceResponsibility
+    managed_by_current_company: bool
+    management_message: str | None = None
     source: MaintenancePlanSource | None
     source_template_id: UUID | None
     source_template_version: str | None
@@ -240,3 +246,51 @@ class MaintenanceTemplateApplyRequest(BaseModel):
 
 class MaintenancePlanCopyRequest(BaseModel):
     source_asset_id: UUID
+
+
+class DriverMaintenanceDueItemResponse(BaseModel):
+    schedule_id: UUID
+    asset_id: UUID
+    task_label: str
+    status: MaintenanceDueState
+
+
+class DriverMaintenanceProofRequest(BaseModel):
+    client_submission_uuid: UUID
+    schedule_id: UUID
+    evidence_object_references: list[str] = Field(min_length=1, max_length=5)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class MaintenanceProofEvidenceResponse(BaseModel):
+    evidence_id: UUID
+    content_type: str
+    size_bytes: int
+
+
+class MaintenanceProofResponse(BaseModel):
+    id: UUID
+    client_submission_uuid: UUID
+    asset_id: UUID
+    asset_code: str
+    schedule_id: UUID
+    task_label: str
+    status: MaintenanceProofStatus
+    driver_name: str
+    site_id: UUID
+    site_name: str
+    assignment_id: UUID
+    duty_session_id: UUID | None
+    submitted_at: datetime
+    note: str | None
+    evidence: list[MaintenanceProofEvidenceResponse]
+    reviewed_by_membership_id: UUID | None
+    reviewed_at: datetime | None
+    review_reason: str | None
+    work_order_id: UUID | None
+    duplicate: bool = False
+
+
+class MaintenanceProofReviewRequest(BaseModel):
+    decision: Literal["APPROVE", "REJECT"]
+    reason: str | None = Field(default=None, max_length=500)

@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     pre_session_ttl_seconds: int = 300
     refresh_token_ttl_seconds: int = 2_592_000
     pilot_driver_phone: str | None = Field(default=None, repr=False)
+    intercompany_rentals_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":
