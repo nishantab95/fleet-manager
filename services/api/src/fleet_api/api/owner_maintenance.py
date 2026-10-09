@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from typing import NoReturn
+from typing import Annotated, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from fleet_api.api.dependencies import get_maintenance_service
+from fleet_api.api.dependencies import get_maintenance_service, get_object_storage
 from fleet_api.api.maintenance_schemas import (
     MaintenanceCriterionRequest,
     MaintenanceCriterionResponse,
     MaintenanceDueItemResponse,
+    MaintenanceHistoryEvidenceResponse,
     MaintenanceHistoryResponse,
     MaintenanceOverviewResponse,
     MaintenancePlanCopyRequest,
@@ -32,7 +33,12 @@ from fleet_api.api.maintenance_schemas import (
 from fleet_api.db.models import MaintenanceWorkOrder
 from fleet_api.db.session import get_db
 from fleet_api.domain.enums import MaintenanceDueState, MaintenanceWorkOrderStatus
-from fleet_api.domain.errors import ConflictError, DomainError, NotFoundError
+from fleet_api.domain.errors import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    ObjectStorageUnavailableError,
+)
 from fleet_api.domain.maintenance import (
     TASK_CATALOG,
     CriterionInput,
@@ -41,13 +47,16 @@ from fleet_api.domain.maintenance import (
     company_manages_maintenance,
     task_label,
 )
+from fleet_api.storage.objects import ObjectStorage
 
 router = APIRouter(prefix="/api/v1/owner/maintenance", tags=["owner-maintenance"])
 
 
 def _fail(db: Session, exc: DomainError) -> NoReturn:
     db.rollback()
-    if isinstance(exc, NotFoundError):
+    if isinstance(exc, ObjectStorageUnavailableError):
+        code, http_status = "OBJECT_STORAGE_UNAVAILABLE", status.HTTP_503_SERVICE_UNAVAILABLE
+    elif isinstance(exc, NotFoundError):
         code, http_status = "NOT_FOUND", status.HTTP_404_NOT_FOUND
     elif isinstance(exc, ConflictError):
         code, http_status = "CONFLICT", status.HTTP_409_CONFLICT
@@ -394,9 +403,60 @@ def history(
     service: MaintenanceService = Depends(get_maintenance_service),
 ) -> list[MaintenanceHistoryResponse]:
     return [
-        MaintenanceHistoryResponse.model_validate(item, from_attributes=True)
-        for item in service.list_history(asset_id)
+        MaintenanceHistoryResponse(
+            id=view.record.id,
+            work_order_id=view.record.work_order_id,
+            asset_id=view.record.asset_id,
+            schedule_id=view.record.schedule_id,
+            task_code=view.record.task_code,
+            task_label=view.record.task_label,
+            service_date=view.record.service_date,
+            odometer_km=view.record.odometer_km,
+            hour_meter=view.record.hour_meter,
+            vendor=view.record.vendor,
+            parts_cost=view.record.parts_cost,
+            labor_cost=view.record.labor_cost,
+            other_cost=view.record.other_cost,
+            total_cost=view.record.total_cost,
+            notes=view.record.notes,
+            actor_membership_id=view.record.actor_membership_id,
+            created_at=view.record.created_at,
+            asset_code=view.asset_code,
+            site_name=view.site_name,
+            submitted_by=view.submitted_by,
+            approved_by=view.approved_by,
+            status=view.status,
+            proof_submission_id=view.proof_submission_id,
+            evidence=[
+                MaintenanceHistoryEvidenceResponse(
+                    evidence_id=item.id,
+                    content_type=item.content_type,
+                    size_bytes=item.size_bytes,
+                )
+                for item in view.evidence
+            ],
+        )
+        for view in service.history_views(asset_id)
     ]
+
+
+@router.get("/history/{record_id}/evidence/{evidence_id}")
+def read_history_evidence(
+    record_id: UUID,
+    evidence_id: UUID,
+    storage: Annotated[ObjectStorage, Depends(get_object_storage)],
+    service: Annotated[MaintenanceService, Depends(get_maintenance_service)],
+) -> Response:
+    try:
+        evidence = service.history_evidence(record_id, evidence_id)
+        content, content_type = storage.read_private(object_key=evidence.object_key)
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    except DomainError as exc:
+        _fail(service.session, exc)
 
 
 @router.get("/templates", response_model=list[MaintenanceTemplateResponse])

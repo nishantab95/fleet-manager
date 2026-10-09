@@ -157,6 +157,12 @@ class MaintenanceWorkOrderResponse(BaseModel):
     notes: str | None
 
 
+class MaintenanceHistoryEvidenceResponse(BaseModel):
+    evidence_id: UUID
+    content_type: str
+    size_bytes: int
+
+
 class MaintenanceHistoryResponse(BaseModel):
     id: UUID
     work_order_id: UUID
@@ -175,6 +181,13 @@ class MaintenanceHistoryResponse(BaseModel):
     notes: str | None
     actor_membership_id: UUID
     created_at: datetime
+    asset_code: str
+    site_name: str | None
+    submitted_by: str
+    approved_by: str
+    status: str
+    proof_submission_id: UUID | None
+    evidence: list[MaintenanceHistoryEvidenceResponse]
 
 
 class MaintenanceTemplateCreateRequest(BaseModel):

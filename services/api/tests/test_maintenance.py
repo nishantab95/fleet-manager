@@ -977,6 +977,7 @@ def test_maintenance_proof_routes_enforce_role_site_and_idempotency(
     driver = client_for(db_session, driver_membership)
     supervisor = client_for(db_session, supervisor_membership)
     wrong_site_supervisor = client_for(db_session, unauthorized_supervisor)
+    owner = client_for(db_session, value(tenant_records, "owner_a_membership", CompanyMembership))
     try:
         due = driver.get("/api/v1/driver/maintenance/due")
         assert due.status_code == 200, due.text
@@ -1035,7 +1036,24 @@ def test_maintenance_proof_routes_enforce_role_site_and_idempotency(
         assert approved.json()["status"] == "COMPLETED"
         assert approved.json()["work_order_id"] is not None
         assert driver.get("/api/v1/driver/maintenance/due").json() == []
+        history = owner.get("/api/v1/owner/maintenance/history")
+        assert history.status_code == 200, history.text
+        history_item = history.json()[0]
+        assert history_item["asset_code"] == asset.asset_code
+        assert history_item["site_name"] == site.short_name
+        assert history_item["submitted_by"]
+        assert history_item["approved_by"]
+        assert history_item["status"] == "COMPLETED"
+        assert history_item["proof_submission_id"] == submitted.json()["id"]
+        assert history_item["evidence"] == [
+            {
+                "evidence_id": str(evidence.id),
+                "content_type": "image/jpeg",
+                "size_bytes": 24,
+            }
+        ]
     finally:
         driver.close()
         supervisor.close()
         wrong_site_supervisor.close()
+        owner.close()

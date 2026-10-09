@@ -1053,21 +1053,38 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .maintenance-section { display: grid; gap: var(--owner-space-compact); min-width: 0; }
 .maintenance-section-copy > :where(h3, p) { margin: 0; }
 .maintenance-section-copy p { margin-top: var(--owner-space-micro); }
-.maintenance-kpis { grid-template-columns: repeat(4, minmax(112px, 1fr)); }
-.maintenance-kpis > div { min-height: 68px; padding: 10px 13px; }
+.maintenance-counters { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.maintenance-counter { display: inline-flex; align-items: baseline; gap: 5px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--owner-border); border-radius: 999px; background: #fff; color: var(--owner-muted); font-size: 0.72rem; font-weight: 750; }
+.maintenance-counter strong { color: var(--owner-ink); font-size: 0.96rem; }
+.maintenance-counter--overdue { border-color: #efb0a7; background: #fff5f3; }
+.maintenance-counter--due { border-color: #ecc998; background: #fff9ed; }
+.maintenance-counter--soon { border-color: #d7d5aa; background: #fffdf1; }
 .maintenance-asset-picker { grid-template-columns: auto minmax(180px, 320px); align-items: center; width: max-content; max-width: 100%; }
 .maintenance-asset-picker select { min-height: 36px; }
 .maintenance-external { width: min(100%, 560px); padding: 12px 14px; border: 1px solid var(--owner-border); border-radius: 10px; background: var(--owner-surface-muted); }
 
-.maintenance-plan-header { display: grid; grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1.4fr) minmax(180px, 1fr); align-items: center; gap: var(--owner-space-small) var(--owner-space-standard); padding: 11px 13px; border: 1px solid var(--owner-border); border-radius: 10px; background: var(--owner-surface-raised); }
+.maintenance-plan-header { display: grid; grid-template-columns: minmax(130px, 0.7fr) minmax(190px, 1.3fr) minmax(90px, 0.6fr) auto; align-items: center; gap: var(--owner-space-small) var(--owner-space-standard); padding: 9px 12px; border: 1px solid var(--owner-border); border-radius: 10px; background: var(--owner-surface-raised); }
 .maintenance-plan-header > div { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
 .maintenance-plan-header > div:first-child { display: grid; gap: 2px; }
 .maintenance-plan-header .owner-section-eyebrow { margin: 0; }
-.maintenance-plan-header > div:last-child { justify-content: flex-end; color: var(--owner-muted); font-size: 0.76rem; }
+.maintenance-plan-header > span:nth-child(2),
+.maintenance-plan-header > span:nth-child(3) { color: var(--owner-muted); font-size: 0.76rem; }
+.maintenance-plan-header > span:last-child { justify-self: end; }
 .maintenance-plan-actions { display: flex; align-items: end; flex-wrap: wrap; gap: var(--owner-space-small); }
 .maintenance-plan-actions label { display: flex; align-items: center; gap: 6px; font-size: 0.74rem; }
 .maintenance-plan-actions select { width: min(360px, 52vw); min-height: 34px; padding-block: 5px; }
 .maintenance-plan-actions button { min-height: 34px; padding: 6px 10px; font-size: 0.76rem; }
+
+.maintenance-recommendation { display: flex; align-items: center; justify-content: space-between; gap: var(--owner-space-standard); padding: 11px 13px; border: 1px solid #b9ddcb; border-radius: 10px; background: var(--owner-success-soft); }
+.maintenance-recommendation :where(h3, p) { margin: 0; }
+.maintenance-recommendation h3 { margin-top: 2px; font-size: 0.92rem; }
+.maintenance-recommendation > div:first-child > p:last-child { margin-top: 3px; color: var(--owner-muted); font-size: 0.74rem; }
+.maintenance-copy-panel { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--owner-border); border-radius: 10px; background: #fff; }
+.maintenance-copy-controls { display: flex; align-items: end; gap: 8px; }
+.maintenance-copy-controls label { width: min(360px, 100%); }
+.maintenance-copy-preview { display: grid; grid-template-columns: minmax(160px, auto) minmax(200px, 1fr) auto; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid var(--owner-border); font-size: 0.74rem; }
+.maintenance-copy-preview span { color: var(--owner-muted); overflow-wrap: anywhere; }
+.maintenance-inline-error { margin: 0; color: var(--owner-danger); font-size: 0.74rem; font-weight: 750; }
 
 .maintenance-plan-table { min-width: 0; overflow: hidden; border: 1px solid var(--owner-border); border-radius: 10px; background: #fff; }
 .maintenance-plan-row { display: grid; grid-template-columns: 40px minmax(150px, 1.45fr) minmax(86px, 0.85fr) minmax(72px, 0.7fr) minmax(94px, 0.85fr) minmax(94px, 0.85fr) minmax(96px, 0.8fr) 68px; align-items: center; gap: var(--owner-space-small); min-width: 0; padding: 9px 11px; border-bottom: 1px solid #e7ece8; font-size: 0.76rem; }
@@ -1087,6 +1104,7 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .maintenance-checkbox { display: flex; align-items: center; min-height: 34px; }
 .maintenance-checkbox input { width: auto; min-height: auto; }
 .maintenance-item-editor { display: grid; gap: var(--owner-space-compact); }
+.maintenance-field-help { margin: 0; font-size: 0.7rem; }
 
 .maintenance-template-preview,
 .maintenance-template-editor { display: grid; gap: var(--owner-space-compact); padding: 14px; border: 1px solid #b9ddcb; border-radius: 11px; background: var(--owner-success-soft); }
@@ -1109,6 +1127,29 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
 .maintenance-due-table { width: 100%; table-layout: fixed; }
 .maintenance-history-table :where(th, td),
 .maintenance-due-table :where(th, td) { overflow-wrap: anywhere; }
+.maintenance-due-details summary { cursor: pointer; font-weight: 800; }
+.maintenance-due-details > div { display: grid; gap: 2px; margin-top: 5px; color: var(--owner-muted); font-size: 0.66rem; }
+.maintenance-status--overdue { background: #fee9e5; color: #a13c31; }
+.maintenance-status--due { background: #fff0d9; color: #90570d; }
+.maintenance-status--due_soon { background: #f6f3d5; color: #6f6512; }
+.maintenance-history-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+.maintenance-history-filters label { min-width: 150px; }
+.maintenance-history-row { cursor: pointer; }
+.maintenance-history-row:hover { background: var(--owner-surface-muted); }
+.maintenance-history-row button { padding: 0; text-align: left; }
+.maintenance-history-detail > td { padding: 0 !important; background: #f7f9f7; }
+.maintenance-history-detail > td > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; padding: 12px; }
+.maintenance-history-detail dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.maintenance-history-detail dl > div { min-width: 0; }
+.maintenance-history-detail :where(dt, dd) { margin: 0; overflow-wrap: anywhere; }
+.maintenance-history-detail dt { color: var(--owner-muted); font-size: 0.64rem; font-weight: 800; text-transform: uppercase; }
+.maintenance-history-detail dd { margin-top: 3px; font-size: 0.74rem; }
+.maintenance-proof-list { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 140px; font-size: 0.72rem; }
+.maintenance-proof-list strong { width: 100%; }
+.maintenance-proof-list button { min-height: 29px; padding: 4px 8px; font-size: 0.68rem; }
+.maintenance-evidence-modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: #102019b8; }
+.maintenance-evidence-modal > div { display: grid; justify-items: end; gap: 8px; width: min(900px, 100%); max-height: 92vh; }
+.maintenance-evidence-modal img { max-width: 100%; max-height: calc(92vh - 44px); border-radius: 10px; object-fit: contain; box-shadow: 0 20px 50px #0007; }
 
 .maintenance-template-create { border: 1px solid var(--owner-border); border-radius: 10px; background: #fff; }
 .maintenance-template-create > summary { padding: 10px 12px; cursor: pointer; font-weight: 800; }
@@ -1164,7 +1205,6 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
   .owner-content.content { padding: 22px; }
   .owner-shell .fleet-metrics { grid-template-columns: repeat(3, minmax(112px, 1fr)); }
   .owner-kpi-grid { grid-template-columns: repeat(3, minmax(112px, 1fr)); }
-  .maintenance-kpis { grid-template-columns: repeat(4, minmax(100px, 1fr)); }
   .maintenance-editor-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .owner-operation-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .owner-operation-strip > div:first-child { grid-column: 1 / -1; }
@@ -1212,9 +1252,8 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
   .owner-shell .fleet-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .owner-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .owner-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .maintenance-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .maintenance-plan-header { grid-template-columns: 1fr; }
-  .maintenance-plan-header > div:last-child { justify-content: flex-start; }
+  .maintenance-plan-header > span:last-child { justify-self: start; }
   .maintenance-plan-row--header { display: none; }
   .maintenance-plan-row { grid-template-columns: 36px minmax(0, 1fr); gap: 7px 10px; padding: 12px; }
   .maintenance-plan-row > :nth-child(n + 3) { grid-column: 2; }
@@ -1222,13 +1261,16 @@ button.secondary { border: 1px solid #ccd8d4; background: #fff; color: #35504a; 
   .maintenance-plan-row > :nth-child(4)::before,
   .maintenance-plan-row > :nth-child(5)::before,
   .maintenance-plan-row > :nth-child(6)::before { display: block; color: var(--owner-muted); font-size: 0.62rem; font-weight: 800; text-transform: uppercase; }
-  .maintenance-plan-row > :nth-child(3)::before { content: "Triggers"; }
+  .maintenance-plan-row > :nth-child(3)::before { content: "Interval"; }
   .maintenance-plan-row > :nth-child(4)::before { content: "Warning"; }
   .maintenance-plan-row > :nth-child(5)::before { content: "Last service"; }
   .maintenance-plan-row > :nth-child(6)::before { content: "Next due"; }
   .maintenance-list-card,
   .maintenance-template-item { grid-template-columns: 1fr; align-items: start; }
   .maintenance-preview-list { grid-template-columns: 1fr; }
+  .maintenance-copy-preview,
+  .maintenance-history-detail > td > div,
+  .maintenance-history-detail dl { grid-template-columns: 1fr; }
   .owner-operation-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .owner-operation-strip > div:first-child { grid-column: 1 / -1; }
   .owner-lifecycle-guide { grid-template-columns: 1fr; }

@@ -81,6 +81,39 @@ const planItem = {
   ],
 };
 
+const dueItem = {
+  ...planItem,
+  asset_code: ownedTipper.asset_code,
+  site_name: "Quarry A",
+};
+
+const historyItem = {
+  id: "record-1",
+  work_order_id: "internal-order-1",
+  asset_id: ownedTipper.id,
+  asset_code: ownedTipper.asset_code,
+  schedule_id: planItem.id,
+  task_code: planItem.task_code,
+  task_label: planItem.task_label,
+  service_date: "2026-09-20",
+  odometer_km: "24500",
+  hour_meter: "1000",
+  vendor: "Fleet workshop",
+  parts_cost: "1000.00",
+  labor_cost: "500.00",
+  other_cost: "0.00",
+  total_cost: "1500.00",
+  notes: "Oil and filter changed",
+  actor_membership_id: "owner-1",
+  created_at: "2026-09-20T11:00:00Z",
+  site_name: "Quarry A",
+  submitted_by: "Driver Dev",
+  approved_by: "Supervisor Sam",
+  status: "COMPLETED",
+  proof_submission_id: "proof-1",
+  evidence: [],
+};
+
 function planFor(assetId: string) {
   const rented = assetId === rentedExcavator.id;
   const asset = rented ? rentedExcavator : ownedTipper;
@@ -116,7 +149,9 @@ async function mockOwnerApi(page: Page) {
     } else if (path.endsWith("/owner/assets")) {
       body = [ownedTipper, rentedExcavator];
     } else if (path.endsWith("/owner/maintenance/overview")) {
-      body = { overdue: 0, due: 0, due_soon: 1, unknown: 0, open_work_orders: 0, items: [] };
+      body = { overdue: 0, due: 0, due_soon: 1, unknown: 0, open_work_orders: 0, items: [dueItem] };
+    } else if (path.endsWith("/owner/maintenance/history")) {
+      body = [historyItem];
     } else if (path.endsWith("/reports/dashboard")) {
       body = {
         operational_date: "2026-10-09",
@@ -156,6 +191,7 @@ async function openMaintenance(page: Page) {
   await page.goto("/owner");
   await expect(page.getByRole("heading", { name: "Fleet command centre" })).toBeVisible();
   await page.getByRole("button", { name: "Maintenance", exact: true }).click();
+  await page.mouse.move(900, 500);
   await page.getByRole("tab", { name: "Asset Plans" }).click();
   await expect(page.getByRole("table", { name: "Maintenance plan items" })).toBeVisible();
 }
@@ -167,10 +203,15 @@ test.describe("Owner maintenance desktop workflow", () => {
 
     const table = page.getByRole("table", { name: "Maintenance plan items" });
     await expect(table.getByRole("columnheader")).toHaveCount(8);
-    await expect(table.getByRole("columnheader", { name: "Triggers" })).toBeVisible();
+    await expect(table.getByRole("columnheader", { name: "Interval" })).toBeVisible();
     await expect(table).toContainText("180 days");
     await expect(table).toContainText("500 h");
     await expect(page.getByLabel("Maintenance Asset").locator("option")).toHaveCount(1);
+
+    await expect(page.getByRole("tab")).toHaveCount(3);
+    await expect(page.getByRole("tab", { name: "Due" })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Work Orders" })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Templates" })).toHaveCount(0);
 
     for (const width of [1280, 1366, 1440, 1920]) {
       await page.setViewportSize({ width, height: 900 });
@@ -183,6 +224,22 @@ test.describe("Owner maintenance desktop workflow", () => {
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
       expect(pageOverflow).toBeLessThanOrEqual(1);
+
+      await page.getByRole("tab", { name: "Overview" }).click();
+      await expect(page.getByRole("columnheader", { name: "Triggered By" })).toBeVisible();
+      await expect(page.getByText("Quarry A")).toBeVisible();
+      await expect.poll(() => page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      )).toBeLessThanOrEqual(1);
+
+      await page.getByRole("tab", { name: "History" }).click();
+      await expect(page.getByText("Driver Dev")).toBeVisible();
+      await expect(page.getByText("Supervisor Sam")).toBeVisible();
+      await expect.poll(() => page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      )).toBeLessThanOrEqual(1);
+
+      await page.getByRole("tab", { name: "Asset Plans" }).click();
     }
 
     const sectionGap = await page.locator(".maintenance-section").evaluate(

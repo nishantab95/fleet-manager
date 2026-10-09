@@ -12,11 +12,15 @@ from fleet_api.auth.service import AuthContext
 from fleet_api.db.models import (
     AssetSiteDeployment,
     Assignment,
+    CompanyMembership,
+    EvidenceObject,
     FleetAsset,
     HourMeterReading,
     KmReading,
     MaintenanceCriterion,
     MaintenancePlan,
+    MaintenanceProofEvidence,
+    MaintenanceProofSubmission,
     MaintenanceRecord,
     MaintenanceSchedule,
     MaintenanceTemplate,
@@ -25,6 +29,7 @@ from fleet_api.db.models import (
     MaintenanceWorkOrder,
     OperationalEvent,
     Site,
+    User,
 )
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
@@ -264,6 +269,20 @@ class ScheduleEvaluation:
     state: MaintenanceDueState
     triggered_by: tuple[MaintenanceCriterionBasis, ...]
     criteria: tuple[CriterionEvaluation, ...]
+
+
+@dataclass(frozen=True)
+class MaintenanceHistoryView:
+    """Owner-facing service history assembled from existing maintenance records."""
+
+    record: MaintenanceRecord
+    asset_code: str
+    site_name: str | None
+    submitted_by: str
+    approved_by: str
+    status: str
+    proof_submission_id: UUID | None
+    evidence: tuple[EvidenceObject, ...]
 
 
 _STATE_RANK = {
@@ -956,6 +975,149 @@ class MaintenanceService:
                 query.order_by(MaintenanceRecord.service_date.desc(), MaintenanceRecord.id)
             ).all()
         )
+
+    def _membership_name(self, membership_id: UUID | None) -> str:
+        if membership_id is None:
+            return "—"
+        row = self.session.execute(
+            select(CompanyMembership, User)
+            .join(User, User.id == CompanyMembership.user_id)
+            .where(
+                CompanyMembership.company_id == self.company_id,
+                CompanyMembership.id == membership_id,
+            )
+        ).one_or_none()
+        if row is None:
+            return "—"
+        membership, user = row._tuple()
+        return membership.display_name or user.display_name
+
+    def history_views(self, asset_id: UUID | None = None) -> list[MaintenanceHistoryView]:
+        views: list[MaintenanceHistoryView] = []
+        for record in self.list_history(asset_id):
+            asset = self._asset(record.asset_id)
+            order = self.session.scalar(
+                select(MaintenanceWorkOrder).where(
+                    MaintenanceWorkOrder.company_id == self.company_id,
+                    MaintenanceWorkOrder.id == record.work_order_id,
+                )
+            )
+            proof = self.session.scalar(
+                select(MaintenanceProofSubmission).where(
+                    MaintenanceProofSubmission.company_id == self.company_id,
+                    MaintenanceProofSubmission.work_order_id == record.work_order_id,
+                )
+            )
+            site = (
+                self.session.scalar(
+                    select(Site).where(
+                        Site.company_id == self.company_id,
+                        Site.id == proof.site_id,
+                    )
+                )
+                if proof is not None
+                else None
+            )
+            evidence = (
+                tuple(
+                    self.session.scalars(
+                        select(EvidenceObject)
+                        .join(
+                            MaintenanceProofEvidence,
+                            and_(
+                                MaintenanceProofEvidence.company_id == EvidenceObject.company_id,
+                                MaintenanceProofEvidence.evidence_id == EvidenceObject.id,
+                            ),
+                        )
+                        .where(
+                            MaintenanceProofEvidence.company_id == self.company_id,
+                            MaintenanceProofEvidence.submission_id == proof.id,
+                        )
+                        .order_by(MaintenanceProofEvidence.display_order)
+                    ).all()
+                )
+                if proof is not None
+                else ()
+            )
+            submitted_by_id = (
+                proof.driver_membership_id
+                if proof is not None
+                else (
+                    order.created_by_membership_id
+                    if order is not None
+                    else record.actor_membership_id
+                )
+            )
+            approved_by_id = (
+                proof.reviewed_by_membership_id
+                if proof is not None
+                else (
+                    order.completed_by_membership_id
+                    if order is not None
+                    else record.actor_membership_id
+                )
+            )
+            views.append(
+                MaintenanceHistoryView(
+                    record=record,
+                    asset_code=asset.asset_code,
+                    site_name=site.short_name if site is not None else None,
+                    submitted_by=self._membership_name(submitted_by_id),
+                    approved_by=self._membership_name(approved_by_id),
+                    status=proof.status.value if proof is not None else "COMPLETED",
+                    proof_submission_id=proof.id if proof is not None else None,
+                    evidence=evidence,
+                )
+            )
+        return views
+
+    def history_evidence(self, record_id: UUID, evidence_id: UUID) -> EvidenceObject:
+        evidence = self.session.scalar(
+            select(EvidenceObject)
+            .join(
+                MaintenanceProofEvidence,
+                and_(
+                    MaintenanceProofEvidence.company_id == EvidenceObject.company_id,
+                    MaintenanceProofEvidence.evidence_id == EvidenceObject.id,
+                ),
+            )
+            .join(
+                MaintenanceProofSubmission,
+                and_(
+                    MaintenanceProofSubmission.company_id == MaintenanceProofEvidence.company_id,
+                    MaintenanceProofSubmission.id == MaintenanceProofEvidence.submission_id,
+                ),
+            )
+            .join(
+                MaintenanceRecord,
+                and_(
+                    MaintenanceRecord.company_id == MaintenanceProofSubmission.company_id,
+                    MaintenanceRecord.work_order_id == MaintenanceProofSubmission.work_order_id,
+                ),
+            )
+            .join(
+                FleetAsset,
+                and_(
+                    FleetAsset.company_id == MaintenanceRecord.company_id,
+                    FleetAsset.id == MaintenanceRecord.asset_id,
+                ),
+            )
+            .where(
+                MaintenanceRecord.company_id == self.company_id,
+                MaintenanceRecord.id == record_id,
+                EvidenceObject.id == evidence_id,
+                FleetAsset.ownership_type == AssetOwnershipType.OWNED,
+                FleetAsset.maintenance_responsibility.in_(
+                    [
+                        MaintenanceResponsibility.OWNER_COMPANY,
+                        MaintenanceResponsibility.SHARED,
+                    ]
+                ),
+            )
+        )
+        if evidence is None:
+            raise NotFoundError("maintenance history evidence was not found")
+        return evidence
 
     def create_template(
         self,

@@ -225,6 +225,17 @@ copies maintenance history. Work-order completion records decimal costs,
 optional notes and references, supplied meter baselines, and the calendar
 completion date in an immutable history row.
 
+The current Owner UI intentionally exposes only `Overview`, `Asset Plans`, and
+`History`. Due-state details are part of Overview; templates are presented only
+as an automatically selected recommended plan; work orders remain an internal
+lifecycle detail. A later, broader **Asset Care** area may rename Asset Plans to
+Service Plans and add Insurance, Road Tax, Permit, and Service Booking. Those
+future modules and tabs are not implemented, and no empty placeholders are
+rendered. The existing due-item read model already provides the asset, task,
+urgency, trigger basis, and current/due values that a future Book Service flow
+could accept as a candidate; there is no dealer connector, booking API, or
+booking UI in the current Pilot.
+
 Migrations `0019_asset_meters`, `0020_maintenance_v2`,
 `0021_maintenance_responsibility`, and `0022_maintenance_starter_catalog` add independent asset capabilities, grouped
 meter captures, templates, plans, criteria, work orders, history, proof review,
