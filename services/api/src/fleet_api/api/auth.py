@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import get_auth_service, get_current_session
 from fleet_api.api.schemas import (
+    FirebaseTokenRequest,
     MembershipOption,
     MembershipOptionsRequest,
     MembershipOptionsResponse,
@@ -21,8 +22,13 @@ from fleet_api.api.schemas import (
 from fleet_api.auth.service import AuthContext, AuthService, SessionTokens
 from fleet_api.db.session import get_db
 from fleet_api.domain.errors import (
+    AmbiguousPhoneIdentityError,
     AuthConfigurationError,
     AuthenticationError,
+    FirebaseProviderUnavailableError,
+    FirebaseTokenError,
+    FleetIdentityAccessDeniedError,
+    IdentityLinkConflictError,
     InvalidOtpError,
     InvalidTokenError,
     MembershipSelectionError,
@@ -33,6 +39,11 @@ from fleet_api.domain.errors import (
 )
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+UNREGISTERED_PHONE_MESSAGE = (
+    "This mobile number is not registered with your company. "
+    "Contact your Fleet Manager administrator."
+)
 
 
 def _error(code: str, message: str, http_status: int) -> HTTPException:
@@ -152,6 +163,61 @@ def verify_otp(
         raise _error(
             "AUTH_NOT_CONFIGURED",
             "authentication is temporarily unavailable",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
+@router.post("/firebase/verify", response_model=OtpVerifyResponse)
+def verify_firebase_token(
+    payload: FirebaseTokenRequest,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> OtpVerifyResponse:
+    try:
+        pre_session_token, expires_in = service.verify_firebase_identity(id_token=payload.id_token)
+        db.commit()
+        return OtpVerifyResponse(
+            pre_session_token=pre_session_token,
+            expires_in=expires_in,
+        )
+    except FirebaseTokenError as exc:
+        db.rollback()
+        raise _error(
+            "UNAUTHENTICATED",
+            "Phone verification is invalid or expired. Please try again.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except FirebaseProviderUnavailableError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_PROVIDER_UNAVAILABLE",
+            "Phone authentication is temporarily unavailable.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    except AmbiguousPhoneIdentityError as exc:
+        db.commit()
+        raise _error(
+            "ACCOUNT_CONFIGURATION_ERROR",
+            str(exc),
+            status.HTTP_403_FORBIDDEN,
+        ) from exc
+    except IdentityLinkConflictError as exc:
+        db.commit()
+        raise _error(
+            "ACCOUNT_LINK_CONFLICT",
+            "This phone identity cannot be linked automatically. "
+            "Contact your Fleet Manager administrator.",
+            status.HTTP_403_FORBIDDEN,
+        ) from exc
+    except FleetIdentityAccessDeniedError as exc:
+        db.commit()
+        message = str(exc) or UNREGISTERED_PHONE_MESSAGE
+        raise _error("ACCESS_DENIED", message, status.HTTP_403_FORBIDDEN) from exc
+    except AuthConfigurationError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_NOT_CONFIGURED",
+            "Phone authentication is temporarily unavailable.",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
 

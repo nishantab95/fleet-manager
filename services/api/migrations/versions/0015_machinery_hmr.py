@@ -15,10 +15,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TYPE operational_event_type_enum "
-        "ADD VALUE IF NOT EXISTS 'HMR_READING'"
-    )
+    op.execute("ALTER TYPE operational_event_type_enum ADD VALUE IF NOT EXISTS 'HMR_READING'")
     hour_meter_type = postgresql.ENUM(
         "START_READING",
         "END_READING",
@@ -54,12 +51,8 @@ def upgrade() -> None:
         existing_type=sa.Numeric(12, 2),
         nullable=True,
     )
-    op.add_column(
-        "duty_sessions", sa.Column("start_hmr", sa.Numeric(12, 2), nullable=True)
-    )
-    op.add_column(
-        "duty_sessions", sa.Column("end_hmr", sa.Numeric(12, 2), nullable=True)
-    )
+    op.add_column("duty_sessions", sa.Column("start_hmr", sa.Numeric(12, 2), nullable=True))
+    op.add_column("duty_sessions", sa.Column("end_hmr", sa.Numeric(12, 2), nullable=True))
     op.drop_constraint(
         "ck_duty_sessions_start_km_non_negative",
         "duty_sessions",
@@ -94,35 +87,24 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_duty_sessions_meter_type_consistent",
         "duty_sessions",
-        "(start_km IS NULL OR end_hmr IS NULL) AND "
-        "(start_hmr IS NULL OR end_km IS NULL)",
+        "(start_km IS NULL OR end_hmr IS NULL) AND (start_hmr IS NULL OR end_km IS NULL)",
     )
 
 
 def downgrade() -> None:
-    machinery_sessions = op.get_bind().execute(
-        sa.text("SELECT count(*) FROM duty_sessions WHERE start_hmr IS NOT NULL")
-    ).scalar_one()
+    machinery_sessions = (
+        op.get_bind()
+        .execute(sa.text("SELECT count(*) FROM duty_sessions WHERE start_hmr IS NOT NULL"))
+        .scalar_one()
+    )
     if machinery_sessions:
         raise RuntimeError("cannot downgrade while machinery duty sessions exist")
-    op.drop_constraint(
-        "ck_duty_sessions_meter_type_consistent", "duty_sessions", type_="check"
-    )
-    op.drop_constraint(
-        "ck_duty_sessions_one_end_meter", "duty_sessions", type_="check"
-    )
-    op.drop_constraint(
-        "ck_duty_sessions_one_start_meter", "duty_sessions", type_="check"
-    )
-    op.drop_constraint(
-        "ck_duty_sessions_end_hmr_non_negative", "duty_sessions", type_="check"
-    )
-    op.drop_constraint(
-        "ck_duty_sessions_start_hmr_non_negative", "duty_sessions", type_="check"
-    )
-    op.drop_constraint(
-        "ck_duty_sessions_start_km_non_negative", "duty_sessions", type_="check"
-    )
+    op.drop_constraint("ck_duty_sessions_meter_type_consistent", "duty_sessions", type_="check")
+    op.drop_constraint("ck_duty_sessions_one_end_meter", "duty_sessions", type_="check")
+    op.drop_constraint("ck_duty_sessions_one_start_meter", "duty_sessions", type_="check")
+    op.drop_constraint("ck_duty_sessions_end_hmr_non_negative", "duty_sessions", type_="check")
+    op.drop_constraint("ck_duty_sessions_start_hmr_non_negative", "duty_sessions", type_="check")
+    op.drop_constraint("ck_duty_sessions_start_km_non_negative", "duty_sessions", type_="check")
     op.drop_column("duty_sessions", "end_hmr")
     op.drop_column("duty_sessions", "start_hmr")
     op.alter_column(

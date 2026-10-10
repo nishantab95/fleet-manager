@@ -260,6 +260,13 @@ class ApiClient
     return body['pre_session_token'] as String;
   }
 
+  Future<String> verifyFirebaseToken(String idToken) async {
+    final body = await _post('/api/v1/auth/firebase/verify', {
+      'id_token': idToken,
+    });
+    return body['pre_session_token'] as String;
+  }
+
   Future<List<MembershipOption>> memberships(String preSessionToken) async {
     final body = await _post('/api/v1/auth/memberships', {
       'pre_session_token': preSessionToken,
@@ -740,7 +747,7 @@ class ApiClient
       'PATCH',
       '/api/v1/owner/people/$membershipId',
       authenticated: true,
-      body: input.toJson(),
+      body: input.toJson(includePhone: true),
     );
     return OwnerPerson.fromJson(_json(response));
   }

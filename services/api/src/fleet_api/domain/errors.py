@@ -84,6 +84,26 @@ class OtpRateLimitError(AuthenticationError):
     pass
 
 
+class FirebaseTokenError(AuthenticationError):
+    pass
+
+
+class FirebaseProviderUnavailableError(AuthenticationError):
+    pass
+
+
+class FleetIdentityAccessDeniedError(AuthenticationError):
+    pass
+
+
+class AmbiguousPhoneIdentityError(FleetIdentityAccessDeniedError):
+    pass
+
+
+class IdentityLinkConflictError(FleetIdentityAccessDeniedError):
+    pass
+
+
 class EvidenceValidationError(DomainError):
     pass
 

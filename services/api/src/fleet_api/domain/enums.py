@@ -31,6 +31,10 @@ class OtpChallengeStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class AuthIdentityProvider(StrEnum):
+    FIREBASE_PHONE = "FIREBASE_PHONE"
+
+
 class SiteStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"

@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from fleet_api.auth.firebase import PhoneIdentityAuthProvider, build_phone_identity_provider
 from fleet_api.auth.providers import OtpProvider, build_otp_provider
 from fleet_api.auth.service import (
     AuthContext,
@@ -51,14 +52,29 @@ def get_object_storage(settings: Annotated[Settings, Depends(get_app_settings)])
     return build_object_storage(settings)
 
 
+def get_phone_identity_provider(
+    settings: Annotated[Settings, Depends(get_app_settings)],
+) -> PhoneIdentityAuthProvider:
+    return build_phone_identity_provider(settings)
+
+
 def get_auth_service(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_app_settings)],
     otp_provider: Annotated[OtpProvider, Depends(get_otp_provider)],
+    phone_identity_provider: Annotated[
+        PhoneIdentityAuthProvider, Depends(get_phone_identity_provider)
+    ],
 ) -> AuthService:
     request_id = request.headers.get("x-request-id")
-    return AuthService(db, settings, otp_provider, request_id=request_id)
+    return AuthService(
+        db,
+        settings,
+        otp_provider,
+        phone_identity_provider=phone_identity_provider,
+        request_id=request_id,
+    )
 
 
 def _unauthenticated(detail: str = "authentication required") -> HTTPException:
@@ -187,6 +203,7 @@ def get_owner_people_site_service(
         context,
         request_id=request.headers.get("x-request-id"),
         phone_default_region=settings.phone_default_region,
+        auth_mode=settings.auth_mode,
     )
 
 

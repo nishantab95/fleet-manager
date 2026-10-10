@@ -17,7 +17,7 @@ def test_cors_origins_are_parsed_from_environment_style_string() -> None:
 
 
 def test_production_configuration_fails_closed_for_local_defaults() -> None:
-    with pytest.raises(ValueError, match="configured OTP provider"):
+    with pytest.raises(ValueError, match="Firebase authentication mode"):
         _settings(
             environment="production",
             jwt_signing_key="production-signing-key-that-is-longer-than-32-characters",

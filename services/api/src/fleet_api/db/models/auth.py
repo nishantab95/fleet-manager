@@ -3,12 +3,53 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Index, String
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from fleet_api.db.models.common import UpdatedTimestampModel
-from fleet_api.domain.enums import MembershipRole, OtpChallengeStatus
+from fleet_api.domain.enums import AuthIdentityProvider, MembershipRole, OtpChallengeStatus
+
+
+class UserAuthIdentity(UpdatedTimestampModel):
+    """Durable external identity linkage; Fleet User remains the business identity."""
+
+    __tablename__ = "user_auth_identities"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    provider: Mapped[AuthIdentityProvider] = mapped_column(
+        SAEnum(AuthIdentityProvider, name="auth_identity_provider_enum"), nullable=False
+    )
+    provider_subject: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_phone: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_subject",
+            name="uq_user_auth_identities_provider_subject",
+        ),
+        Index(
+            "uq_user_auth_identities_active_provider_user",
+            "provider",
+            "user_id",
+            unique=True,
+            postgresql_where=text("disabled_at IS NULL"),
+        ),
+    )
 
 
 class OtpChallenge(UpdatedTimestampModel):

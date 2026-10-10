@@ -39,9 +39,7 @@ def upgrade() -> None:
             "ends_at IS NULL OR ends_at > starts_at",
             name="ck_asset_site_deployments_end_after_start",
         ),
-        sa.ForeignKeyConstraint(
-            ["company_id"], ["companies.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["company_id"], ["companies.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["company_id", "asset_id"],
             ["fleet_assets.company_id", "fleet_assets.id"],
@@ -55,9 +53,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "company_id", "id", name="uq_asset_site_deployments_company_id"
-        ),
+        sa.UniqueConstraint("company_id", "id", name="uq_asset_site_deployments_company_id"),
     )
     op.create_index(
         "ix_asset_site_deployments_company_id",
@@ -125,7 +121,5 @@ def downgrade() -> None:
     )
     op.drop_index("ix_asset_site_deployments_site_id", table_name="asset_site_deployments")
     op.drop_index("ix_asset_site_deployments_asset_id", table_name="asset_site_deployments")
-    op.drop_index(
-        "ix_asset_site_deployments_company_id", table_name="asset_site_deployments"
-    )
+    op.drop_index("ix_asset_site_deployments_company_id", table_name="asset_site_deployments")
     op.drop_table("asset_site_deployments")

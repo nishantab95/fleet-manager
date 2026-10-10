@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'auth/login_auth_provider.dart';
 import 'data/api_client.dart';
 import 'data/secure_session_store.dart';
 import 'data/sync_engine.dart';
@@ -37,6 +38,7 @@ class DriverAppDependencies {
     required this.sessionStore,
     required this.sync,
     required this.installationIdentifier,
+    this.loginAuthProvider,
     this.pilotUpdater,
   });
 
@@ -44,7 +46,11 @@ class DriverAppDependencies {
   final SecureSessionStore sessionStore;
   final SyncEngine sync;
   final String installationIdentifier;
+  final FleetLoginAuthProvider? loginAuthProvider;
   final PilotUpdateController? pilotUpdater;
+
+  FleetLoginAuthProvider get authentication =>
+      loginAuthProvider ?? PilotOtpAuthProvider(api);
 
   Future<void> registerDriverAccount(
     SessionTokens tokens, {
@@ -162,6 +168,11 @@ class _DriverSessionScreenState extends State<DriverSessionScreen>
 
   Future<void> _sessionExpired() async {
     try {
+      await widget.dependencies.authentication.signOut();
+    } on Object {
+      // The Fleet session still fails closed if Firebase is unavailable.
+    }
+    try {
       await widget.dependencies.sessionStore.clear();
     } on Object {
       // Continue to a safe signed-out UI even if secure-storage cleanup fails.
@@ -278,6 +289,11 @@ class _DriverSessionScreenState extends State<DriverSessionScreen>
       // Local credentials are cleared even when the device is offline.
       widget.dependencies.api.clearSession();
     }
+    try {
+      await widget.dependencies.authentication.signOut();
+    } on Object {
+      // Continue clearing Fleet credentials even if Firebase is unavailable.
+    }
     await widget.dependencies.sessionStore.clear();
     widget.dependencies.api.clearSession();
     widget.dependencies.sync.deactivateAccount();
@@ -341,12 +357,15 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _phoneController = TextEditingController();
   final _otpController = TextEditingController();
-  String? _challengeId;
+  LoginChallenge? _challenge;
   String? _preSessionToken;
   List<MembershipOption> _memberships = const [];
   String _selectedRole = 'DRIVER';
   String? _error;
   bool _busy = false;
+
+  bool get _isFirebase =>
+      widget.dependencies.authentication.mode == FleetAuthMode.firebase;
 
   @override
   void initState() {
@@ -363,32 +382,85 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _requestOtp() async {
     await _run(() async {
-      _challengeId = await widget.dependencies.api.requestOtp(
-        _phoneController.text.trim(),
-        requestedRole: _selectedRole,
+      if (_isFirebase &&
+          !RegExp(r'^\d{10}$').hasMatch(_phoneController.text.trim())) {
+        throw const LoginAuthException(
+          'Enter a valid 10-digit mobile number.',
+          code: 'INVALID_PHONE',
+        );
+      }
+      _challenge = await widget.dependencies.authentication.sendOtp(
+        _loginPhone,
+        requestedRole: _isFirebase ? null : _selectedRole,
+      );
+      if (_challenge!.automaticallyVerified) {
+        await _verifyChallenge(otp: '');
+      }
+    });
+  }
+
+  String get _loginPhone {
+    final entered = _phoneController.text.trim();
+    if (!_isFirebase || entered.startsWith('+')) return entered;
+    return '+91$entered';
+  }
+
+  Future<void> _resendOtp() async {
+    await _run(() async {
+      if (_isFirebase &&
+          !RegExp(r'^\d{10}$').hasMatch(_phoneController.text.trim())) {
+        throw const LoginAuthException(
+          'Enter a valid 10-digit mobile number.',
+          code: 'INVALID_PHONE',
+        );
+      }
+      _challenge = await widget.dependencies.authentication.sendOtp(
+        _loginPhone,
+        requestedRole: _isFirebase ? null : _selectedRole,
+        forceResend: true,
       );
     });
   }
 
   Future<void> _verifyOtp() async {
-    final challengeId = _challengeId;
-    if (challengeId == null) return;
+    final challenge = _challenge;
+    if (challenge == null) return;
     await _run(() async {
-      _preSessionToken = await widget.dependencies.api.verifyOtp(
-        challengeId: challengeId,
-        otp: _otpController.text.trim(),
-      );
-      final memberships = await widget.dependencies.api.memberships(
-        _preSessionToken!,
-      );
-      _memberships = memberships
-          .where((item) => item.role == _selectedRole)
-          .toList();
-      if (_memberships.length == 1) {
-        await _selectMembership(_memberships.single);
+      final otp = _otpController.text.trim();
+      if (_isFirebase && !RegExp(r'^\d{6}$').hasMatch(otp)) {
+        throw const LoginAuthException(
+          'Enter the 6-digit verification code.',
+          code: 'INVALID_OTP',
+        );
       }
-      if (mounted) setState(() {});
+      await _verifyChallenge(otp: otp);
     });
+  }
+
+  Future<void> _verifyChallenge({required String otp}) async {
+    final challenge = _challenge;
+    if (challenge == null) return;
+    _preSessionToken = await widget.dependencies.authentication.verifyOtp(
+      challenge,
+      otp,
+    );
+    final memberships = await widget.dependencies.api.memberships(
+      _preSessionToken!,
+    );
+    _memberships = _isFirebase
+        ? memberships
+        : memberships.where((item) => item.role == _selectedRole).toList();
+    if (_memberships.isEmpty) {
+      throw const LoginAuthException(
+        'This mobile number is not registered with your company. '
+        'Contact your Fleet Manager administrator.',
+        code: 'ACCESS_DENIED',
+      );
+    }
+    if (_memberships.length == 1) {
+      await _selectMembership(_memberships.single);
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _selectMembership(MembershipOption membership) async {
@@ -419,6 +491,8 @@ class _LoginScreenState extends State<LoginScreen> {
       await action();
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
+    } on LoginAuthException catch (error) {
+      if (mounted) setState(() => _error = error.message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -426,7 +500,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hasChallenge = _challengeId != null;
+    final hasChallenge = _challenge != null;
     final hasMembershipChoice = _memberships.isNotEmpty;
     return Scaffold(
       appBar: AppBar(
@@ -465,43 +539,62 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(height: 18),
           Text('Sign in', style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 6),
-          const Text(
-            'Choose your role, then use your registered phone number.',
+          Text(
+            _isFirebase
+                ? 'Use the mobile number registered by your Fleet Manager.'
+                : 'Choose your role, then use your registered phone number.',
           ),
           const SizedBox(height: 20),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(
-                value: 'DRIVER',
-                label: Text('DRIVER'),
-                icon: Icon(Icons.drive_eta),
-              ),
-              ButtonSegment(
-                value: 'SUPERVISOR',
-                label: Text('SUPERVISOR'),
-                icon: Icon(Icons.fact_check_outlined),
-              ),
-              ButtonSegment(
-                value: 'OWNER_ADMIN',
-                label: Text('OWNER'),
-                icon: Icon(Icons.dashboard_outlined),
-              ),
-            ],
-            selected: {_selectedRole},
-            onSelectionChanged: _busy
-                ? null
-                : (value) => setState(() {
-                    _selectedRole = value.first;
-                    _challengeId = null;
-                    _memberships = const [];
-                  }),
-          ),
+          if (!_isFirebase)
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                  value: 'DRIVER',
+                  label: Text('DRIVER'),
+                  icon: Icon(Icons.drive_eta),
+                ),
+                ButtonSegment(
+                  value: 'SUPERVISOR',
+                  label: Text('SUPERVISOR'),
+                  icon: Icon(Icons.fact_check_outlined),
+                ),
+                ButtonSegment(
+                  value: 'OWNER_ADMIN',
+                  label: Text('OWNER'),
+                  icon: Icon(Icons.dashboard_outlined),
+                ),
+              ],
+              selected: {_selectedRole},
+              onSelectionChanged: _busy
+                  ? null
+                  : (value) => setState(() {
+                      _selectedRole = value.first;
+                      _challenge = null;
+                      _memberships = const [];
+                    }),
+            ),
           const SizedBox(height: 18),
-          TextField(
-            controller: _phoneController,
-            keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(labelText: 'Phone number'),
-          ),
+          if (_isFirebase)
+            TextField(
+              key: const Key('firebase-phone'),
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(10),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'Mobile Number',
+                prefixText: '+91 ',
+                hintText: '9876543210',
+              ),
+            )
+          else
+            TextField(
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Phone number'),
+            ),
           const SizedBox(height: 12),
           FilledButton(
             onPressed: _busy ? null : _requestOtp,
@@ -510,19 +603,36 @@ class _LoginScreenState extends State<LoginScreen> {
           if (hasChallenge) ...[
             const SizedBox(height: 20),
             TextField(
+              key: const Key('otp-code'),
               controller: _otpController,
               keyboardType: TextInputType.number,
+              inputFormatters: _isFirebase
+                  ? [FilteringTextInputFormatter.digitsOnly]
+                  : null,
               maxLength: 6,
-              decoration: const InputDecoration(labelText: 'One-time password'),
+              decoration: InputDecoration(
+                labelText: _isFirebase
+                    ? 'Enter verification code'
+                    : 'One-time password',
+              ),
             ),
             FilledButton(
               onPressed: _busy ? null : _verifyOtp,
-              child: const Text('CONTINUE'),
+              child: Text(_isFirebase ? 'VERIFY' : 'CONTINUE'),
             ),
+            if (_isFirebase)
+              TextButton(
+                onPressed: _busy ? null : _resendOtp,
+                child: const Text('Resend OTP'),
+              ),
           ],
           if (hasMembershipChoice) ...[
             const SizedBox(height: 20),
-            const Text('Choose your company'),
+            Text(
+              _isFirebase
+                  ? 'Choose an authorized workspace'
+                  : 'Choose your company',
+            ),
             for (final membership in _memberships)
               ListTile(
                 title: Text(membership.companyName),

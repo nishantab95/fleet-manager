@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from hashlib import pbkdf2_hmac, sha256
@@ -8,8 +9,10 @@ from secrets import token_bytes
 from uuid import UUID
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from fleet_api.auth.firebase import PhoneIdentityAuthProvider
 from fleet_api.auth.phone import normalize_phone
 from fleet_api.auth.providers import OtpProvider
 from fleet_api.auth.tokens import (
@@ -27,10 +30,12 @@ from fleet_api.db.models import (
     CompanyMembership,
     OtpChallenge,
     User,
+    UserAuthIdentity,
 )
 from fleet_api.db.models.common import utc_now
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
+    AuthIdentityProvider,
     CompanyStatus,
     MembershipRole,
     MembershipStatus,
@@ -38,16 +43,24 @@ from fleet_api.domain.enums import (
     UserStatus,
 )
 from fleet_api.domain.errors import (
+    AmbiguousPhoneIdentityError,
     AuthConfigurationError,
     AuthenticationError,
+    FirebaseProviderUnavailableError,
+    FirebaseTokenError,
+    FleetIdentityAccessDeniedError,
+    IdentityLinkConflictError,
     InvalidOtpError,
     InvalidTokenError,
     MembershipSelectionError,
     OtpRateLimitError,
+    PhoneNormalizationError,
     RefreshTokenReuseError,
     RoleViolationError,
     TenantConsistencyError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -112,11 +125,13 @@ class AuthService:
         settings: Settings,
         otp_provider: OtpProvider,
         *,
+        phone_identity_provider: PhoneIdentityAuthProvider | None = None,
         request_id: str | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.otp_provider = otp_provider
+        self.phone_identity_provider = phone_identity_provider
         self.request_id = request_id
 
     def request_otp(
@@ -127,6 +142,8 @@ class AuthService:
         request_ip: str | None = None,
         user_agent: str | None = None,
     ) -> UUID:
+        if self.settings.auth_mode.lower() != "pilot":
+            raise AuthConfigurationError("Pilot OTP is disabled in Firebase auth mode")
         if requested_role is not None and self.settings.otp_provider.lower() != "pilot":
             raise AuthConfigurationError("role-aware pilot OTP is not enabled")
         normalized_phone = normalize_phone(
@@ -201,6 +218,8 @@ class AuthService:
         return challenge.id
 
     def verify_otp(self, *, challenge_id: UUID, otp: str) -> tuple[str, int]:
+        if self.settings.auth_mode.lower() != "pilot":
+            raise AuthConfigurationError("Pilot OTP is disabled in Firebase auth mode")
         challenge = self.session.scalar(
             select(OtpChallenge).where(OtpChallenge.id == challenge_id).with_for_update()
         )
@@ -239,20 +258,216 @@ class AuthService:
         )
         return pre_session, self.settings.pre_session_ttl_seconds
 
+    def _memberships_for_audit(self, user_id: UUID) -> list[CompanyMembership]:
+        return list(
+            self.session.scalars(
+                select(CompanyMembership).where(CompanyMembership.user_id == user_id)
+            ).all()
+        )
+
+    def _audit_identity_action(
+        self,
+        *,
+        user: User,
+        action: str,
+        entity_type: str,
+        entity_id: UUID,
+        reason: str | None = None,
+        new_values: dict[str, object] | None = None,
+    ) -> None:
+        seen_companies: set[UUID] = set()
+        for membership in self._memberships_for_audit(user.id):
+            if membership.company_id in seen_companies:
+                continue
+            seen_companies.add(membership.company_id)
+            write_audit_log(
+                self.session,
+                company_id=membership.company_id,
+                actor_membership_id=None,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                reason=reason,
+                new_values=new_values,
+                request_id=self.request_id,
+            )
+
+    def _matching_users_for_phone(self, normalized_phone: str) -> list[User]:
+        matches: list[User] = []
+        for user in self.session.scalars(select(User)).all():
+            try:
+                stored_phone = normalize_phone(
+                    user.phone_number,
+                    default_region=self.settings.phone_default_region,
+                )
+            except PhoneNormalizationError:
+                continue
+            if stored_phone == normalized_phone:
+                matches.append(user)
+        return matches
+
+    def _active_memberships(self, user_id: UUID) -> list[CompanyMembership]:
+        return list(
+            self.session.scalars(
+                select(CompanyMembership)
+                .join(Company, Company.id == CompanyMembership.company_id)
+                .where(
+                    CompanyMembership.user_id == user_id,
+                    CompanyMembership.status == MembershipStatus.ACTIVE,
+                    Company.status == CompanyStatus.ACTIVE,
+                )
+            ).all()
+        )
+
+    def _deny_known_user(self, user: User, reason: str) -> None:
+        self._audit_identity_action(
+            user=user,
+            action="LOGIN_DENIED",
+            entity_type="USER",
+            entity_id=user.id,
+            reason=reason,
+        )
+        self._audit_identity_action(
+            user=user,
+            action="MEMBERSHIP_ACCESS_DENIED",
+            entity_type="USER",
+            entity_id=user.id,
+            reason=reason,
+        )
+
+    def verify_firebase_identity(self, *, id_token: str) -> tuple[str, int]:
+        if self.settings.auth_mode.lower() != "firebase":
+            raise AuthConfigurationError("Firebase authentication is not enabled")
+        if self.phone_identity_provider is None:
+            raise AuthConfigurationError("Firebase authentication provider is unavailable")
+        try:
+            verified = self.phone_identity_provider.verify(id_token)
+        except (FirebaseTokenError, FirebaseProviderUnavailableError):
+            logger.warning(
+                "LOGIN_DENIED",
+                extra={"reason": "FIREBASE_TOKEN_REJECTED", "request_id": self.request_id},
+            )
+            raise
+        if verified.provider != AuthIdentityProvider.FIREBASE_PHONE:
+            raise FirebaseTokenError("unsupported Firebase identity provider")
+
+        linked = self.session.scalar(
+            select(UserAuthIdentity)
+            .where(
+                UserAuthIdentity.provider == verified.provider,
+                UserAuthIdentity.provider_subject == verified.subject,
+            )
+            .with_for_update()
+        )
+        if linked is not None:
+            user = self.session.get(User, linked.user_id)
+            if (
+                user is None
+                or linked.disabled_at is not None
+                or linked.normalized_phone != verified.normalized_phone
+            ):
+                if user is not None:
+                    self._deny_known_user(user, "IDENTITY_LINK_DISABLED_OR_CHANGED")
+                raise IdentityLinkConflictError("Firebase identity linkage is not active")
+            try:
+                current_phone = normalize_phone(
+                    user.phone_number,
+                    default_region=self.settings.phone_default_region,
+                )
+            except PhoneNormalizationError as exc:
+                self._deny_known_user(user, "FLEET_PHONE_INVALID")
+                raise IdentityLinkConflictError("Fleet phone configuration is invalid") from exc
+            if current_phone != verified.normalized_phone:
+                self._deny_known_user(user, "FLEET_PHONE_CHANGED")
+                raise IdentityLinkConflictError("Fleet phone no longer matches identity")
+        else:
+            matched_users = self._matching_users_for_phone(verified.normalized_phone)
+            if len(matched_users) > 1:
+                for matched_user in matched_users:
+                    self._deny_known_user(matched_user, "AMBIGUOUS_NORMALIZED_PHONE")
+                raise AmbiguousPhoneIdentityError(
+                    "This mobile number is linked to multiple Fleet accounts. "
+                    "Contact your Fleet Manager administrator."
+                )
+            if not matched_users:
+                logger.warning(
+                    "LOGIN_DENIED",
+                    extra={"reason": "PHONE_NOT_ELIGIBLE", "request_id": self.request_id},
+                )
+                raise FleetIdentityAccessDeniedError(
+                    "This mobile number is not registered with your company. "
+                    "Contact your Fleet Manager administrator."
+                )
+            user = matched_users[0]
+            if user.status != UserStatus.ACTIVE or not self._active_memberships(user.id):
+                self._deny_known_user(user, "USER_OR_MEMBERSHIP_INACTIVE")
+                raise FleetIdentityAccessDeniedError(
+                    "This account is disabled. Contact your Fleet Manager administrator."
+                )
+            existing_user_link = self.session.scalar(
+                select(UserAuthIdentity).where(
+                    UserAuthIdentity.provider == verified.provider,
+                    UserAuthIdentity.user_id == user.id,
+                    UserAuthIdentity.disabled_at.is_(None),
+                )
+            )
+            if existing_user_link is not None:
+                self._deny_known_user(user, "DIFFERENT_PROVIDER_SUBJECT_ALREADY_LINKED")
+                raise IdentityLinkConflictError(
+                    "This Fleet account is already linked to another Firebase identity."
+                )
+            linked = UserAuthIdentity(
+                user_id=user.id,
+                provider=verified.provider,
+                provider_subject=verified.subject,
+                normalized_phone=verified.normalized_phone,
+                verified_at=verified.verified_at,
+            )
+            try:
+                with self.session.begin_nested():
+                    self.session.add(linked)
+                    self.session.flush()
+            except IntegrityError as exc:
+                self._deny_known_user(user, "IDENTITY_LINK_CONFLICT")
+                raise IdentityLinkConflictError(
+                    "Firebase identity could not be linked safely."
+                ) from exc
+            self._audit_identity_action(
+                user=user,
+                action="AUTH_IDENTITY_LINKED",
+                entity_type="USER_AUTH_IDENTITY",
+                entity_id=linked.id,
+                new_values={"provider": verified.provider.value, "user_id": str(user.id)},
+            )
+
+        if user.status != UserStatus.ACTIVE or not self._active_memberships(user.id):
+            self._deny_known_user(user, "USER_OR_MEMBERSHIP_INACTIVE")
+            raise FleetIdentityAccessDeniedError(
+                "This account is disabled. Contact your Fleet Manager administrator."
+            )
+        pre_session = issue_pre_session(
+            self.settings,
+            user_id=user.id,
+            requested_role=None,
+            now=utc_now(),
+        )
+        return pre_session, self.settings.pre_session_ttl_seconds
+
     def list_memberships(
         self, *, pre_session_token: str
     ) -> list[tuple[UUID, UUID, str, MembershipRole]]:
         claims = decode_pre_session(pre_session_token, self.settings)
         if claims.user_id is None:
             return []
+        allowed_statuses: tuple[MembershipStatus, ...] = (MembershipStatus.ACTIVE,)
+        if self.settings.auth_mode.lower() == "pilot":
+            allowed_statuses = (MembershipStatus.ACTIVE, MembershipStatus.INVITED)
         statement = (
             select(CompanyMembership.id, Company.id, Company.name, CompanyMembership.role)
             .join(Company, Company.id == CompanyMembership.company_id)
             .where(
                 CompanyMembership.user_id == claims.user_id,
-                CompanyMembership.status.in_(
-                    (MembershipStatus.ACTIVE, MembershipStatus.INVITED)
-                ),
+                CompanyMembership.status.in_(allowed_statuses),
                 Company.status == CompanyStatus.ACTIVE,
             )
         )
@@ -275,6 +490,11 @@ class AuthService:
         if (
             membership_row.user_id != claims.user_id
             or membership_row.status == MembershipStatus.INACTIVE
+        ):
+            raise MembershipSelectionError("membership selection is invalid")
+        if (
+            membership_row.status == MembershipStatus.INVITED
+            and self.settings.auth_mode.lower() != "pilot"
         ):
             raise MembershipSelectionError("membership selection is invalid")
         if membership_row.status == MembershipStatus.INVITED:
@@ -329,6 +549,16 @@ class AuthService:
             entity_type="AUTH_SESSION",
             entity_id=auth_session.id,
             new_values={"membership_id": str(membership.id), "role": membership.role.value},
+            request_id=self.request_id,
+        )
+        write_audit_log(
+            self.session,
+            company_id=company.id,
+            actor_membership_id=membership.id,
+            action="LOGIN_SUCCESS",
+            entity_type="AUTH_SESSION",
+            entity_id=auth_session.id,
+            new_values={"provider_mode": self.settings.auth_mode.lower()},
             request_id=self.request_id,
         )
         access_token = issue_access_token(
@@ -452,7 +682,7 @@ class AuthService:
                 self.session,
                 company_id=context.company.id,
                 actor_membership_id=context.membership.id,
-                action="AUTH_SESSION_LOGOUT",
+                action="LOGOUT",
                 entity_type="AUTH_SESSION",
                 entity_id=context.auth_session.id,
                 request_id=self.request_id,

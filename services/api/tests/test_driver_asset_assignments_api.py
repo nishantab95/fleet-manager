@@ -52,9 +52,7 @@ def test_owner_assignment_lifecycle_updates_people_driver_and_audit(
     owner_client = client_for(db_session, owner)
     try:
         deployment = deploy(owner_client, asset, site)
-        eligible = owner_client.get(
-            f"/api/v1/owner/assets/{asset.id}/eligible-drivers"
-        )
+        eligible = owner_client.get(f"/api/v1/owner/assets/{asset.id}/eligible-drivers")
         assert eligible.status_code == 200
         assert {row["membership_id"] for row in eligible.json()} >= {
             str(driver_a.id),
@@ -68,16 +66,17 @@ def test_owner_assignment_lifecycle_updates_people_driver_and_audit(
         assert assigned.status_code == 201, assigned.text
         assert assigned.json()["asset_site_deployment_id"] == deployment["id"]
         assert assigned.json()["site_id"] == str(site.id)
-        assert db_session.scalar(
-            select(Assignment.supervisor_membership_id).where(
-                Assignment.id == assigned.json()["assignment_id"]
+        assert (
+            db_session.scalar(
+                select(Assignment.supervisor_membership_id).where(
+                    Assignment.id == assigned.json()["assignment_id"]
+                )
             )
-        ) is None
+            is None
+        )
 
         people = owner_client.get("/api/v1/owner/people").json()
-        driver_person = next(
-            row for row in people if row["membership_id"] == str(driver_a.id)
-        )
+        driver_person = next(row for row in people if row["membership_id"] == str(driver_a.id))
         assert driver_person["current_asset_code"] == asset.asset_code
         assert driver_person["current_site_name"] == site.name
 
@@ -102,21 +101,15 @@ def test_owner_assignment_lifecycle_updates_people_driver_and_audit(
         )
         assert reassigned.status_code == 200, reassigned.text
         assert reassigned.json()["driver_membership_id"] == str(driver_a2.id)
-        history = owner_client.get(
-            f"/api/v1/owner/assets/{asset.id}/assignments"
-        )
+        history = owner_client.get(f"/api/v1/owner/assets/{asset.id}/assignments")
         assert history.status_code == 200
         assert len(history.json()) == 2
         assert sum(row["ends_at"] is None for row in history.json()) == 1
 
-        unassigned = owner_client.delete(
-            f"/api/v1/owner/assets/{asset.id}/assignment"
-        )
+        unassigned = owner_client.delete(f"/api/v1/owner/assets/{asset.id}/assignment")
         assert unassigned.status_code == 200
         assert unassigned.json()["ends_at"] is not None
-        assert owner_client.get(
-            f"/api/v1/owner/assets/{asset.id}/assignment"
-        ).status_code == 204
+        assert owner_client.get(f"/api/v1/owner/assets/{asset.id}/assignment").status_code == 204
 
         actions = set(
             db_session.scalars(
@@ -160,13 +153,9 @@ def test_invited_driver_is_eligible_and_assignable_before_first_login(
     owner_client = client_for(db_session, owner)
     try:
         deploy(owner_client, asset, site)
-        eligible = owner_client.get(
-            f"/api/v1/owner/assets/{asset.id}/eligible-drivers"
-        )
+        eligible = owner_client.get(f"/api/v1/owner/assets/{asset.id}/eligible-drivers")
         assert eligible.status_code == 200
-        candidate = next(
-            row for row in eligible.json() if row["membership_id"] == str(invited.id)
-        )
+        candidate = next(row for row in eligible.json() if row["membership_id"] == str(invited.id))
         assert candidate == {
             "membership_id": str(invited.id),
             "display_name": "Invited Operator",
@@ -243,17 +232,17 @@ def test_supervisor_authorization_multi_supervisor_and_eligibility_guards(
         )
         assert assigned.status_code == 201, assigned.text
         eligible = supervisor_client.get(
-            f"/api/v1/supervisor/sites/{site.id}/assets/"
-            f"{second_asset.id}/eligible-drivers"
+            f"/api/v1/supervisor/sites/{site.id}/assets/{second_asset.id}/eligible-drivers"
         )
         assert eligible.status_code == 200
-        assert str(driver.id) not in {
-            row["membership_id"] for row in eligible.json()
-        }
-        assert supervisor_client.get(
-            f"/api/v1/supervisor/sites/{unauthorized_site.id}/assets/"
-            f"{asset.id}/eligible-drivers"
-        ).status_code == 403
+        assert str(driver.id) not in {row["membership_id"] for row in eligible.json()}
+        assert (
+            supervisor_client.get(
+                f"/api/v1/supervisor/sites/{unauthorized_site.id}/assets/"
+                f"{asset.id}/eligible-drivers"
+            ).status_code
+            == 403
+        )
     finally:
         supervisor_client.close()
 
@@ -272,10 +261,13 @@ def test_supervisor_authorization_multi_supervisor_and_eligibility_guards(
             "Second Site Supervisor",
             "Supervisor A",
         ]
-        assert driver_client.post(
-            f"/api/v1/owner/assets/{second_asset.id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 403
+        assert (
+            driver_client.post(
+                f"/api/v1/owner/assets/{second_asset.id}/assignment",
+                json={"driver_membership_id": str(driver.id)},
+            ).status_code
+            == 403
+        )
     finally:
         driver_client.close()
 
@@ -329,18 +321,24 @@ def test_assignment_rejects_ineligible_cross_company_and_conflicting_records(
     db_session.commit()
     client = client_for(db_session, owner)
     try:
-        assert client.post(
-            f"/api/v1/owner/assets/{undeployed.id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{undeployed.id}/assignment",
+                json={"driver_membership_id": str(driver.id)},
+            ).status_code
+            == 409
+        )
 
         deploy(client, inactive_asset, site)
         inactive_asset.status = FleetAssetStatus.INACTIVE
         db_session.commit()
-        assert client.post(
-            f"/api/v1/owner/assets/{inactive_asset.id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{inactive_asset.id}/assignment",
+                json={"driver_membership_id": str(driver.id)},
+            ).status_code
+            == 409
+        )
 
         deploy(client, machinery, site)
         machinery_assignment = client.post(
@@ -353,45 +351,64 @@ def test_assignment_rejects_ineligible_cross_company_and_conflicting_records(
         deploy(client, inactive_site_asset, inactive_site)
         inactive_site.status = SiteStatus.INACTIVE
         db_session.commit()
-        assert client.post(
-            f"/api/v1/owner/assets/{inactive_site_asset.id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{inactive_site_asset.id}/assignment",
+                json={"driver_membership_id": str(driver.id)},
+            ).status_code
+            == 409
+        )
 
         deploy(client, assigned_asset, site)
         driver.status = MembershipStatus.INACTIVE
         db_session.commit()
-        assert client.post(
-            f"/api/v1/owner/assets/{assigned_asset.id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{assigned_asset.id}/assignment",
+                json={"driver_membership_id": str(driver.id)},
+            ).status_code
+            == 409
+        )
         driver.status = MembershipStatus.ACTIVE
         db_session.commit()
+        foreign_asset = value(tenant_records, "tipper_b", FleetAsset)
 
-        assert client.post(
-            f"/api/v1/owner/assets/{assigned_asset.id}/assignment",
-            json={"driver_membership_id": str(foreign_driver.id)},
-        ).status_code == 403
-        assert client.post(
-            f"/api/v1/owner/assets/{value(tenant_records, 'tipper_b', FleetAsset).id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 404
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{assigned_asset.id}/assignment",
+                json={"driver_membership_id": str(foreign_driver.id)},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{foreign_asset.id}/assignment",
+                json={"driver_membership_id": str(driver.id)},
+            ).status_code
+            == 404
+        )
 
         assigned = client.post(
             f"/api/v1/owner/assets/{assigned_asset.id}/assignment",
             json={"driver_membership_id": str(driver.id)},
         )
         assert assigned.status_code == 201, assigned.text
-        assert client.post(
-            f"/api/v1/owner/assets/{assigned_asset.id}/assignment",
-            json={"driver_membership_id": str(other_driver.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{assigned_asset.id}/assignment",
+                json={"driver_membership_id": str(other_driver.id)},
+            ).status_code
+            == 409
+        )
 
         deploy(client, second_asset, site)
-        assert client.post(
-            f"/api/v1/owner/assets/{second_asset.id}/assignment",
-            json={"driver_membership_id": str(driver.id)},
-        ).status_code == 409
+        assert (
+            client.post(
+                f"/api/v1/owner/assets/{second_asset.id}/assignment",
+                json={"driver_membership_id": str(driver.id)},
+            ).status_code
+            == 409
+        )
     finally:
         client.close()
 
@@ -422,9 +439,7 @@ def test_active_duty_blocks_change_and_closed_assignment_keeps_event_boundary(
         )
         assert blocked.status_code == 409
         assert "end the active duty" in blocked.json()["detail"]["message"]
-        blocked_unassign = client.delete(
-            f"/api/v1/owner/assets/{asset.id}/assignment"
-        )
+        blocked_unassign = client.delete(f"/api/v1/owner/assets/{asset.id}/assignment")
         assert blocked_unassign.status_code == 409
         assert "end the active duty" in blocked_unassign.json()["detail"]["message"]
         duty.status = DutySessionStatus.CLOSED
