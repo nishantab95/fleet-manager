@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$ToolingOnly
+    [switch]$ToolingOnly,
+    [switch]$Company
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,7 @@ $gradleHome = Join-Path $env:USERPROFILE ".gradle"
 $signingConfig = Join-Path $gradleHome "gradle.properties"
 $keystore = Join-Path $env:USERPROFILE ".fleet-manager\signing\fleet-pilot-release.jks"
 $expectedPackage = "com.fleetmanager.fleet_manager_mobile.pilot"
+$buildProfile = if ($Company) { "firebase-company" } else { "firebase-staging" }
 
 function Get-RequiredProcessValue {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -85,7 +87,7 @@ if (-not $python) {
 }
 
 if ($ToolingOnly) {
-    Write-Output "STAGING_APK_TOOLING=READY"
+    Write-Output "FIREBASE_APK_TOOLING=READY"
     Write-Output "EXPECTED_PACKAGE=$expectedPackage"
     Write-Output "VERSION=$versionName-pilot"
     Write-Output "VERSION_CODE=$versionCode"
@@ -98,16 +100,16 @@ if ($ToolingOnly) {
 }
 
 if ($signingBlockers.Count -gt 0) {
-    throw "Staging signing is not ready: $($signingBlockers -join '; ')"
+    throw "Firebase $buildProfile signing is not ready: $($signingBlockers -join '; ')"
 }
 
 $branch = (& git -C $repoRoot branch --show-current).Trim()
 if ($LASTEXITCODE -ne 0 -or $branch -ne "main") {
-    throw "Firebase staging APKs must be built from main."
+    throw "Firebase APKs must be built from main."
 }
 $status = @(& git -C $repoRoot status --porcelain --untracked-files=normal)
 if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace(($status -join "`n"))) {
-    throw "Firebase staging APKs require a clean source tree."
+    throw "Firebase APKs require a clean source tree."
 }
 $commit = (& git -C $repoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $commit -notmatch "^[0-9a-f]{40}$") {
@@ -123,18 +125,13 @@ $firebaseApiKey = Get-RequiredProcessValue "FIREBASE_ANDROID_API_KEY"
 $firebaseAppId = Get-RequiredProcessValue "FIREBASE_ANDROID_APP_ID"
 $firebaseSenderId = Get-RequiredProcessValue "FIREBASE_MESSAGING_SENDER_ID"
 $firebaseProjectId = Get-RequiredProcessValue "FIREBASE_PROJECT_ID"
-$backendProjectId = Get-RequiredProcessValue "FLEET_FIREBASE_PROJECT_ID"
-
-if ($firebaseProjectId -ne $backendProjectId) {
-    throw "FIREBASE_PROJECT_ID and FLEET_FIREBASE_PROJECT_ID must identify the same staging project."
-}
 $parsedApiUrl = $null
 if (-not [Uri]::TryCreate($apiBaseUrl, [UriKind]::Absolute, [ref]$parsedApiUrl) -or
     $parsedApiUrl.Scheme -ne "https" -or
     [string]::IsNullOrWhiteSpace($parsedApiUrl.Host) -or
     -not [string]::IsNullOrWhiteSpace($parsedApiUrl.Query) -or
     -not [string]::IsNullOrWhiteSpace($parsedApiUrl.Fragment)) {
-    throw "FLEET_API_BASE_URL must be an absolute staging HTTPS URL without query or fragment."
+    throw "FLEET_API_BASE_URL must be an absolute HTTPS URL without query or fragment."
 }
 if ($firebaseSenderId -notmatch "^[0-9]+$") {
     throw "FIREBASE_MESSAGING_SENDER_ID must contain digits only."
@@ -169,7 +166,7 @@ $buildArguments = @(
     "--build-number=$versionCode",
     "--dart-define=FLEET_PILOT=true",
     "--dart-define=FLEET_AUTH_MODE=firebase",
-    "--dart-define=FLEET_BUILD_PROFILE=firebase-staging",
+    "--dart-define=FLEET_BUILD_PROFILE=$buildProfile",
     "--dart-define=FLEET_API_BASE_URL=$apiBaseUrl",
     "--dart-define=FIREBASE_ANDROID_API_KEY=$firebaseApiKey",
     "--dart-define=FIREBASE_ANDROID_APP_ID=$firebaseAppId",
@@ -178,6 +175,16 @@ $buildArguments = @(
 )
 
 $previousPreference = $ErrorActionPreference
+$previousCompanyBuild = [Environment]::GetEnvironmentVariable(
+    "FLEET_MOBILE_COMPANY_BUILD",
+    "Process"
+)
+if ($Company) {
+    $env:FLEET_MOBILE_COMPANY_BUILD = "1"
+}
+else {
+    [Environment]::SetEnvironmentVariable("FLEET_MOBILE_COMPANY_BUILD", $null, "Process")
+}
 $ErrorActionPreference = "Continue"
 Push-Location $mobileRoot
 try {
@@ -187,17 +194,22 @@ try {
     }
     & $flutter @buildArguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Flutter Firebase staging APK build failed with exit code $LASTEXITCODE."
+        throw "Flutter Firebase APK build failed with exit code $LASTEXITCODE."
     }
 }
 finally {
     Pop-Location
+    [Environment]::SetEnvironmentVariable(
+        "FLEET_MOBILE_COMPANY_BUILD",
+        $previousCompanyBuild,
+        "Process"
+    )
     $ErrorActionPreference = $previousPreference
 }
 
 $builtApk = Join-Path $mobileRoot "build\app\outputs\flutter-apk\app-pilot-release.apk"
 if (-not (Test-Path -LiteralPath $builtApk -PathType Leaf)) {
-    throw "Flutter completed without producing the expected staging APK."
+    throw "Flutter completed without producing the expected Firebase APK."
 }
 
 $verificationScript = Join-Path $PSScriptRoot "firebase_staging_apk.py"
@@ -209,18 +221,20 @@ $verificationOutput = @(
         --api-key $firebaseApiKey `
         --app-id $firebaseAppId `
         --sender-id $firebaseSenderId `
-        --project-id $firebaseProjectId 2>&1
+        --project-id $firebaseProjectId `
+        --build-profile $buildProfile 2>&1
 )
 if ($LASTEXITCODE -ne 0) {
-    throw "APK staging verification failed: $($verificationOutput -join ' ')"
+    throw "APK Firebase verification failed: $($verificationOutput -join ' ')"
 }
 $identity = ($verificationOutput -join "`n") | ConvertFrom-Json
 
 $releaseDirectory = Join-Path $mobileRoot "build\release"
 New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
-$namedApk = Join-Path $releaseDirectory "FleetAI-Systems-Firebase-Staging-$versionName-pilot-$versionCode.apk"
+$artifactProfile = if ($Company) { "Company" } else { "Firebase-Staging" }
+$namedApk = Join-Path $releaseDirectory "FleetAI-Systems-$artifactProfile-$versionName-pilot-$versionCode.apk"
 if (Test-Path -LiteralPath $namedApk) {
-    throw "Refusing to overwrite an existing versioned staging APK."
+    throw "Refusing to overwrite an existing versioned Firebase APK."
 }
 Copy-Item -LiteralPath $builtApk -Destination $namedApk
 

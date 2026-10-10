@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.pilot_release_common import EXPECTED_SIGNER_SHA256
 import server_manager
 
 
@@ -446,9 +447,7 @@ def test_publish_pilot_apk_uses_verified_atomic_destination(
         package="com.fleetmanager.fleet_manager_mobile.pilot",
         version_name="1.2.3-pilot",
         version_code=45,
-        signer_sha256=(
-            "9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520"
-        ),
+        signer_sha256=EXPECTED_SIGNER_SHA256,
         apk_sha256=server_manager.sha256(source),
     )
     monkeypatch.setattr(server_manager, "inspect_apk", lambda _: identity)
@@ -532,9 +531,7 @@ def test_publish_rolls_back_every_active_file_on_atomic_failure(
         package="com.fleetmanager.fleet_manager_mobile.pilot",
         version_name="2.0.0-pilot",
         version_code=50,
-        signer_sha256=(
-            "9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520"
-        ),
+        signer_sha256=EXPECTED_SIGNER_SHA256,
         apk_sha256=server_manager.sha256(source),
     )
     monkeypatch.setattr(server_manager, "inspect_apk", lambda _: identity)
@@ -764,6 +761,101 @@ def test_server_environment_removes_test_database_override(
 
     assert environment["FLEET_DATABASE_URL"].endswith("server.invalid/fleet")
     assert "FLEET_TEST_DATABASE_URL" not in environment
+
+
+def test_external_firebase_environment_overrides_auth_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    credential = tmp_path / "private" / "firebase-admin.json"
+    credential.parent.mkdir()
+    credential.write_text("{}", encoding="utf-8")
+    env_file = root / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "FLEET_ENVIRONMENT=pilot",
+                "FLEET_AUTH_MODE=pilot",
+                "FLEET_DATABASE_URL=postgresql+psycopg://server.invalid/fleet",
+                "FLEET_JWT_SIGNING_KEY=old-key",
+                "FLEET_OBJECT_STORAGE_PROVIDER=filesystem",
+                f"FLEET_FILESYSTEM_STORAGE_ROOT={tmp_path / 'evidence'}",
+                "POSTGRES_DB=fleet",
+                "POSTGRES_USER=fleet",
+                "POSTGRES_PASSWORD=test-password",
+            )
+        ),
+        encoding="utf-8",
+    )
+    external = tmp_path / "firebase-server.env"
+    external.write_text(
+        "\n".join(
+            (
+                "FLEET_AUTH_MODE=firebase",
+                "FLEET_FIREBASE_PROJECT_ID=fleet-company",
+                f"GOOGLE_APPLICATION_CREDENTIALS={credential}",
+                "FLEET_JWT_SIGNING_KEY=new-key",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_manager, "ROOT", root)
+    monkeypatch.setattr(server_manager, "ENV_FILE", env_file)
+    monkeypatch.setattr(server_manager, "SERVER_AUTH_ENV_FILE", external)
+    for name in server_manager.SERVER_AUTH_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+
+    environment = server_manager.load_server_environment()
+
+    assert environment["FLEET_AUTH_MODE"] == "firebase"
+    assert environment["FLEET_FIREBASE_PROJECT_ID"] == "fleet-company"
+    assert environment["FLEET_JWT_SIGNING_KEY"] == "new-key"
+    assert environment["FLEET_DATABASE_URL"].endswith("server.invalid/fleet")
+
+
+def test_external_firebase_environment_rejects_repo_credential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    credential = root / "firebase-admin.json"
+    credential.write_text("{}", encoding="utf-8")
+    env_file = root / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "FLEET_ENVIRONMENT=pilot",
+                "FLEET_DATABASE_URL=postgresql+psycopg://server.invalid/fleet",
+                "FLEET_OBJECT_STORAGE_PROVIDER=filesystem",
+                f"FLEET_FILESYSTEM_STORAGE_ROOT={tmp_path / 'evidence'}",
+                "POSTGRES_DB=fleet",
+                "POSTGRES_USER=fleet",
+                "POSTGRES_PASSWORD=test-password",
+            )
+        ),
+        encoding="utf-8",
+    )
+    external = tmp_path / "firebase-server.env"
+    external.write_text(
+        "\n".join(
+            (
+                "FLEET_AUTH_MODE=firebase",
+                "FLEET_FIREBASE_PROJECT_ID=fleet-company",
+                f"GOOGLE_APPLICATION_CREDENTIALS={credential}",
+                "FLEET_JWT_SIGNING_KEY=new-key",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_manager, "ROOT", root)
+    monkeypatch.setattr(server_manager, "ENV_FILE", env_file)
+    monkeypatch.setattr(server_manager, "SERVER_AUTH_ENV_FILE", external)
+    for name in server_manager.SERVER_AUTH_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(server_manager.ServerError, match="outside the repository"):
+        server_manager.load_server_environment()
 
 
 def mock_current_git(monkeypatch: pytest.MonkeyPatch, current: str) -> None:
@@ -1216,6 +1308,43 @@ def test_parser_accepts_update_command() -> None:
     assert server_manager.build_parser().parse_args(["update"]).command == "update"
 
 
+def test_operator_check_reports_concise_state(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(server_manager, "_operator_git_status", lambda: "OK")
+    monkeypatch.setattr(
+        server_manager,
+        "load_server_environment",
+        lambda: {"FLEET_AUTH_MODE": "firebase"},
+    )
+    monkeypatch.setattr(server_manager.shutil, "which", lambda _: "docker")
+    monkeypatch.setattr(server_manager, "docker_ready", lambda _: True)
+    monkeypatch.setattr(
+        server_manager, "compose_health", lambda *_: {"postgres": "healthy"}
+    )
+    monkeypatch.setattr(server_manager, "_repository_alembic_heads", lambda: ("head",))
+    monkeypatch.setattr(
+        server_manager, "_database_alembic_revisions", lambda _: ("head",)
+    )
+    monkeypatch.setattr(server_manager, "api_health_ok", lambda: True)
+    monkeypatch.setattr(server_manager, "api_ready_ok", lambda: True)
+    monkeypatch.setattr(
+        server_manager,
+        "default_http_probe",
+        lambda *_: SimpleNamespace(status=200),
+    )
+    monkeypatch.setattr(server_manager, "_operator_apk_status", lambda: "1.2.3 (24)")
+
+    assert server_manager.operator_check() == 0
+    output = capsys.readouterr().out
+    assert "Git:      OK" in output
+    assert "Database: OK" in output
+    assert "API:      RUNNING" in output
+    assert "Owner:    RUNNING" in output
+    assert "Firebase: FIREBASE" in output
+    assert "APK:      1.2.3 (24)" in output
+
+
 def test_parser_accepts_pilot_publish_source() -> None:
     args = server_manager.build_parser().parse_args(["publish-apk", "built.apk"])
 
@@ -1240,6 +1369,18 @@ def test_update_batch_wrapper_uses_repository_relative_paths() -> None:
     assert '"%PYTHON_EXE%" "%REPO_ROOT%\\scripts\\server_manager.py" update' in wrapper
     assert "git reset" not in wrapper.lower()
     assert "git clean" not in wrapper.lower()
+
+
+def test_new_operator_buttons_delegate_to_safe_workflows() -> None:
+    update = (server_manager.ROOT / "Update Fleet AI Systems Server.bat").read_text(
+        encoding="utf-8"
+    )
+    check = (server_manager.ROOT / "Check Fleet AI Systems Server.bat").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Update Fleet Manager Server.bat" in update
+    assert 'server_manager.py" operator-check' in check
 
 
 def test_publish_batch_wrapper_only_delegates_verified_apk_publish() -> None:

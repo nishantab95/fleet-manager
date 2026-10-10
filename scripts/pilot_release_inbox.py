@@ -19,6 +19,7 @@ from uuid import uuid4
 
 import pilot_release_common as common
 import server_manager
+from firebase_staging_apk import scan_apk_strings
 
 try:
     import msvcrt
@@ -111,7 +112,7 @@ def _stable(path: Path, delay: float = 1.0) -> bool:
 
 def _atomic_copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.parent / f".{destination.name}.{uuid4().hex}.partial"
+    temporary = destination.parent / f".partial-{uuid4().hex}"
     try:
         shutil.copy2(source, temporary)
         if source.stat().st_size != temporary.stat().st_size:
@@ -219,6 +220,27 @@ def _validate_manifest(
         raise InboxError("Manifest sourceGitCommit must be a full Git commit SHA.")
     common.validate_expected_identity(identity)
     return release_id
+
+
+def _validate_optional_company_profile(
+    manifest: Mapping[str, object], apk_path: Path
+) -> None:
+    auth_mode = manifest.get("authMode")
+    build_profile = manifest.get("buildProfile")
+    if auth_mode is None and build_profile is None:
+        return
+    if auth_mode != "firebase" or build_profile != "firebase-company":
+        raise InboxError("Manifest Firebase company profile is invalid.")
+    found, forbidden = scan_apk_strings(
+        apk_path,
+        required={"Firebase company build profile": b"firebase-company"},
+    )
+    if "Firebase company build profile" not in found:
+        raise InboxError("APK is missing its Firebase company build marker.")
+    if forbidden:
+        raise InboxError(
+            "APK contains forbidden credential markers: " + ", ".join(sorted(forbidden))
+        )
 
 
 def _remote_sha256(url: str) -> str:
@@ -378,6 +400,7 @@ def process_manifest(manifest_path: Path, *, stability_delay: float = 1.0) -> st
         _atomic_copy(apk_path, staged_apk)
         identity = common.inspect_apk(staged_apk)
         release_id = _validate_manifest(manifest, identity, apk_path.name)
+        _validate_optional_company_profile(manifest, staged_apk)
         outcome = _publish_transaction(identity, staged_apk)
         _archive_success(manifest_path, apk_path, manifest, outcome)
         write_status(

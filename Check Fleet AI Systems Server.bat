@@ -9,7 +9,7 @@ pushd "%REPO_ROOT%" >nul 2>&1
 if errorlevel 1 goto :missing
 if not exist "%PYTHON_EXE%" goto :missing_python
 
-"%PYTHON_EXE%" "%REPO_ROOT%\scripts\server_manager.py" update
+"%PYTHON_EXE%" "%REPO_ROOT%\scripts\server_manager.py" operator-check
 set "FLEET_EXIT_CODE=%ERRORLEVEL%"
 popd
 goto :done
@@ -25,5 +25,5 @@ popd
 set "FLEET_EXIT_CODE=1"
 
 :done
-if not defined FLEET_SERVER_NO_PAUSE pause
+pause
 endlocal & exit /b %FLEET_EXIT_CODE%

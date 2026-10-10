@@ -109,12 +109,47 @@ def test_manifest_identity_mismatch_is_rejected(
         inbox._validate_manifest(value, item, apk.name)
 
 
+def test_company_manifest_requires_company_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    apk = tmp_path / "candidate.apk"
+    apk.write_bytes(b"candidate")
+    manifest = {"authMode": "firebase", "buildProfile": "firebase-company"}
+    monkeypatch.setattr(
+        inbox, "scan_apk_strings", lambda *_args, **_kwargs: (set(), set())
+    )
+
+    with pytest.raises(inbox.InboxError, match="company build marker"):
+        inbox._validate_optional_company_profile(manifest, apk)
+
+
+def test_company_manifest_rejects_service_account_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    apk = tmp_path / "candidate.apk"
+    apk.write_bytes(b"candidate")
+    manifest = {"authMode": "firebase", "buildProfile": "firebase-company"}
+    monkeypatch.setattr(
+        inbox,
+        "scan_apk_strings",
+        lambda *_args, **_kwargs: (
+            {"Firebase company build profile"},
+            {"service-account private key"},
+        ),
+    )
+
+    with pytest.raises(inbox.InboxError, match="forbidden credential"):
+        inbox._validate_optional_company_profile(manifest, apk)
+
+
 def test_signed_identity_rejects_wrong_package_and_signer(tmp_path: Path) -> None:
     apk = tmp_path / "candidate.apk"
     apk.write_bytes(b"candidate")
     with pytest.raises(common.ReleaseValidationError, match="Wrong package"):
         common.validate_expected_identity(identity(apk, package="wrong.package"))
-    with pytest.raises(common.ReleaseValidationError, match="SIGNING_IDENTITY_MISMATCH=YES"):
+    with pytest.raises(
+        common.ReleaseValidationError, match="SIGNING_IDENTITY_MISMATCH=YES"
+    ):
         common.validate_expected_identity(identity(apk, signer="0" * 64))
 
 

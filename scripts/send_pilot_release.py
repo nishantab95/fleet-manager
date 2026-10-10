@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import pilot_release_common as common
 
@@ -107,24 +107,41 @@ def _published_version_code(dns_name: str) -> int:
     url = f"https://{dns_name}/pilot/release.json"
     try:
         value = json.loads(_fetch_text(url))
-    except (OSError, urllib.error.URLError, UnicodeError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        urllib.error.URLError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as error:
         raise SendError(
             "Published Pilot release manifest could not be verified; refusing transfer."
         ) from error
     version_code = value.get("version_code") if isinstance(value, dict) else None
-    if isinstance(version_code, bool) or not isinstance(version_code, int) or version_code < 1:
-        raise SendError("Published Pilot versionCode is missing or invalid; refusing transfer.")
+    if (
+        isinstance(version_code, bool)
+        or not isinstance(version_code, int)
+        or version_code < 1
+    ):
+        raise SendError(
+            "Published Pilot versionCode is missing or invalid; refusing transfer."
+        )
     return version_code
 
 
 def _validate_build_provenance(
-    apk: Path, identity: common.ApkIdentity, commit: str
-) -> None:
+    apk: Path,
+    identity: common.ApkIdentity,
+    commit: str,
+    *,
+    require_firebase_company: bool = False,
+) -> dict[str, Any]:
     sidecar = Path(f"{apk}.build.json")
     try:
         record = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise SendError("Successful build provenance is missing or invalid; refusing transfer.") from error
+        raise SendError(
+            "Successful build provenance is missing or invalid; refusing transfer."
+        ) from error
     expected = {
         "package": identity.package,
         "versionName": identity.version_name,
@@ -134,10 +151,20 @@ def _validate_build_provenance(
         "sourceGitCommit": commit,
     }
     if not isinstance(record, dict) or record.get("sourceTreeClean") is not True:
-        raise SendError("Build provenance does not prove a clean source tree; refusing transfer.")
+        raise SendError(
+            "Build provenance does not prove a clean source tree; refusing transfer."
+        )
     for key, actual in expected.items():
         if record.get(key) != actual:
             raise SendError(f"Build provenance mismatch for {key}; refusing transfer.")
+    if require_firebase_company and (
+        record.get("authMode") != "firebase"
+        or record.get("buildProfile") != "firebase-company"
+    ):
+        raise SendError(
+            "Build provenance does not identify a Firebase company APK; refusing transfer."
+        )
+    return record
 
 
 def _remote_file_hash(url: str) -> str:
@@ -178,11 +205,48 @@ def _wait_for_publication(
     raise SendError(f"Timed out waiting for private publication: {last_detail}")
 
 
-def send(apk: Path, target: str, timeout: int) -> int:
+def _release_manifest(
+    identity: common.ApkIdentity,
+    *,
+    apk_file: str,
+    release_id: str,
+    commit: str,
+    provenance: dict[str, Any],
+    require_firebase_company: bool,
+) -> dict[str, object]:
+    manifest: dict[str, object] = {
+        "schemaVersion": 1,
+        "releaseId": release_id,
+        "apkFile": apk_file,
+        "package": identity.package,
+        "versionName": identity.version_name,
+        "versionCode": identity.version_code,
+        "apkSha256": identity.apk_sha256,
+        "expectedSignerSha256": common.EXPECTED_SIGNER_SHA256,
+        "sourceGitCommit": commit,
+    }
+    if require_firebase_company:
+        manifest["authMode"] = provenance["authMode"]
+        manifest["buildProfile"] = provenance["buildProfile"]
+    return manifest
+
+
+def send(
+    apk: Path,
+    target: str,
+    timeout: int,
+    *,
+    require_firebase_company: bool = False,
+) -> int:
     commit = _git_provenance()
     identity = common.inspect_apk(apk)
     common.validate_expected_identity(identity)
-    _validate_build_provenance(apk, identity, commit)
+    provenance = _validate_build_provenance(
+        apk,
+        identity,
+        commit,
+        require_firebase_company=require_firebase_company,
+    )
     tailscale = _tailscale()
     dns_name = _server_dns_name(tailscale, target)
     _run(
@@ -206,17 +270,14 @@ def send(apk: Path, target: str, timeout: int) -> int:
         shutil.copy2(apk, transfer_apk)
         if common.sha256_file(transfer_apk) != identity.apk_sha256:
             raise SendError("Temporary transfer APK hash verification failed.")
-        manifest = {
-            "schemaVersion": 1,
-            "releaseId": release_id,
-            "apkFile": transfer_apk.name,
-            "package": identity.package,
-            "versionName": identity.version_name,
-            "versionCode": identity.version_code,
-            "apkSha256": identity.apk_sha256,
-            "expectedSignerSha256": common.EXPECTED_SIGNER_SHA256,
-            "sourceGitCommit": commit,
-        }
+        manifest = _release_manifest(
+            identity,
+            apk_file=transfer_apk.name,
+            release_id=release_id,
+            commit=commit,
+            provenance=provenance,
+            require_firebase_company=require_firebase_company,
+        )
         manifest_path.write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
@@ -255,13 +316,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("apk", nargs="?", type=Path, default=DEFAULT_APK)
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--timeout", type=int, default=360)
+    parser.add_argument("--require-firebase-company", action="store_true")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return send(args.apk.resolve(), args.target, args.timeout)
+        return send(
+            args.apk.resolve(),
+            args.target,
+            args.timeout,
+            require_firebase_company=args.require_firebase_company,
+        )
     except (
         SendError,
         common.ReleaseValidationError,

@@ -9,6 +9,7 @@ val pilotSigningStoreFile = providers.gradleProperty("fleetPilotStoreFile").orNu
 val pilotSigningStorePassword = providers.gradleProperty("fleetPilotStorePassword").orNull
 val pilotSigningKeyAlias = providers.gradleProperty("fleetPilotKeyAlias").orNull
 val pilotSigningKeyPassword = providers.gradleProperty("fleetPilotKeyPassword").orNull
+val companyMobileBuild = System.getenv("FLEET_MOBILE_COMPANY_BUILD") == "1"
 
 android {
     namespace = "com.fleetmanager.fleet_manager_mobile"
@@ -54,7 +55,11 @@ android {
             dimension = "environment"
             applicationIdSuffix = ".pilot"
             versionNameSuffix = "-pilot"
-            manifestPlaceholders["appLabel"] = "Fleet AI Systems Pilot"
+            manifestPlaceholders["appLabel"] = if (companyMobileBuild) {
+                "Fleet AI Systems"
+            } else {
+                "Fleet AI Systems Pilot"
+            }
             manifestPlaceholders["usesCleartextTraffic"] = "true"
         }
         create("production") {

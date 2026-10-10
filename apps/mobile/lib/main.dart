@@ -16,6 +16,7 @@ Future<void> main() async {
   final sessionStore = SecureSessionStore();
   final api = ApiClient(persistSession: sessionStore.save);
   final authMode = fleetAuthMode;
+  final firebaseCompanyBuild = isFirebaseCompanyBuild;
   final pilotRuntimeEnabled = pilotRuntimeFeaturesEnabled(
     pilotBuild: isPilotBuild,
     authMode: authMode,
@@ -50,7 +51,12 @@ Future<void> main() async {
     remote: api,
     installationIdentifier: installationIdentifier,
   );
-  final pilotUpdater = pilotRuntimeEnabled
+  final pilotUpdater =
+      privateApkUpdatesEnabled(
+        pilotBuild: isPilotBuild,
+        authMode: authMode,
+        firebaseCompanyBuild: firebaseCompanyBuild,
+      )
       ? PilotUpdateController(
           service: PilotUpdateService(
             baseUrl: () => api.baseUrl,

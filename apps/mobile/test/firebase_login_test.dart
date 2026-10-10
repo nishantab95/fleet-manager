@@ -80,6 +80,46 @@ void main() {
     },
   );
 
+  test('Firebase company profile preserves only private APK updates', () {
+    final mode = resolveFleetAuthMode(
+      configured: 'firebase',
+      pilotBuild: true,
+      productionBuild: false,
+    );
+
+    expect(
+      resolveFirebaseCompanyProfile(
+        configured: 'firebase-company',
+        pilotBuild: true,
+        authMode: mode,
+      ),
+      isTrue,
+    );
+    expect(
+      privateApkUpdatesEnabled(
+        pilotBuild: true,
+        authMode: mode,
+        firebaseCompanyBuild: true,
+      ),
+      isTrue,
+    );
+    expect(
+      pilotRuntimeFeaturesEnabled(pilotBuild: true, authMode: mode),
+      isFalse,
+    );
+  });
+
+  test('Firebase staging does not enable the company update boundary', () {
+    expect(
+      privateApkUpdatesEnabled(
+        pilotBuild: true,
+        authMode: FleetAuthMode.firebase,
+        firebaseCompanyBuild: false,
+      ),
+      isFalse,
+    );
+  });
+
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
   for (final role in const ['DRIVER', 'SUPERVISOR', 'OWNER_ADMIN']) {

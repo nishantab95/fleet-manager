@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'auth/login_auth_provider.dart';
 import 'data/api_client.dart';
 import 'domain/role_models.dart';
 import 'fleet_theme.dart';
@@ -2248,7 +2249,7 @@ class _RoleScaffold extends StatelessWidget {
         ],
       ),
       actions: [
-        if (isPilotBuild)
+        if (isPilotBuild && !isFirebaseCompanyBuild)
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 4),
             child: Center(child: Text('PILOT')),

@@ -71,6 +71,20 @@ API_PROJECT = ROOT / "services" / "api"
 PROJECT_PYTHON = API_PROJECT / ".venv" / "Scripts" / "python.exe"
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 ENV_FILE = ROOT / ".env"
+SERVER_AUTH_ENV_FILE = (
+    Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+    / "FleetAISystems"
+    / "firebase-server.env"
+)
+SERVER_AUTH_ENV_KEYS = frozenset(
+    {
+        "FLEET_AUTH_MODE",
+        "FLEET_FIREBASE_PROJECT_ID",
+        "FLEET_FIREBASE_CHECK_REVOKED_TOKENS",
+        "FLEET_JWT_SIGNING_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    }
+)
 BACKUP_ROOT = Path(r"F:\FleetManagerBackups")
 EVIDENCE_BACKUP_ROOT = Path(r"C:\FleetManagerEvidenceBackup")
 EVIDENCE_MANIFEST_NAME = "evidence-backup-manifest.json"
@@ -205,9 +219,6 @@ def load_server_environment() -> dict[str, str]:
         "POSTGRES_USER",
         "POSTGRES_PASSWORD",
     )
-    missing = [name for name in required if not values.get(name, "").strip()]
-    if missing:
-        raise ServerError("Server configuration is incomplete: " + ", ".join(missing))
     if values.get("FLEET_ENVIRONMENT", "").lower() in {"production", "prod"}:
         raise ServerError(
             "This local server controller refuses production configuration."
@@ -216,9 +227,67 @@ def load_server_environment() -> dict[str, str]:
         raise ServerError(
             "Evidence storage must be configured as filesystem for this server."
         )
+    external: dict[str, str] = {}
+    if SERVER_AUTH_ENV_FILE.is_file():
+        external = parse_dotenv(SERVER_AUTH_ENV_FILE.read_text(encoding="utf-8"))
+        unsupported = sorted(set(external) - SERVER_AUTH_ENV_KEYS)
+        if unsupported:
+            raise ServerError(
+                "External Firebase configuration contains unsupported values: "
+                + ", ".join(unsupported)
+            )
+
     effective = dict(os.environ)
     for key, value in values.items():
         effective.setdefault(key, value)
+    effective.update(external)
+    missing = [name for name in required if not effective.get(name, "").strip()]
+    if missing:
+        raise ServerError("Server configuration is incomplete: " + ", ".join(missing))
+    auth_mode = effective.get("FLEET_AUTH_MODE", "pilot").strip().casefold()
+    if auth_mode not in {"pilot", "firebase"}:
+        raise ServerError("FLEET_AUTH_MODE must be pilot or firebase.")
+    if auth_mode == "firebase":
+        firebase_required = (
+            "FLEET_FIREBASE_PROJECT_ID",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "FLEET_JWT_SIGNING_KEY",
+        )
+        firebase_missing = [
+            name for name in firebase_required if not effective.get(name, "").strip()
+        ]
+        if firebase_missing:
+            raise ServerError(
+                "Firebase server configuration is incomplete: "
+                + ", ".join(firebase_missing)
+            )
+        credential = Path(effective["GOOGLE_APPLICATION_CREDENTIALS"])
+        if not credential.is_absolute() or not credential.is_file():
+            raise ServerError(
+                "GOOGLE_APPLICATION_CREDENTIALS must be an existing absolute file."
+            )
+        try:
+            credential.resolve(strict=True).relative_to(ROOT.resolve(strict=True))
+        except ValueError:
+            pass
+        else:
+            raise ServerError(
+                "GOOGLE_APPLICATION_CREDENTIALS must remain outside the repository."
+            )
+        pilot_secrets = (
+            "FLEET_PILOT_OTP",
+            "FLEET_PILOT_DRIVER_OTP",
+            "FLEET_PILOT_SUPERVISOR_OTP",
+            "FLEET_PILOT_OWNER_OTP",
+        )
+        enabled_pilot_secrets = [
+            name for name in pilot_secrets if effective.get(name, "").strip()
+        ]
+        if enabled_pilot_secrets:
+            raise ServerError(
+                "Firebase mode refuses Pilot OTP values: "
+                + ", ".join(enabled_pilot_secrets)
+            )
     # Alembic intentionally honors FLEET_TEST_DATABASE_URL for the test suite.
     # The server controller must always target the same FLEET_DATABASE_URL as FastAPI.
     effective.pop("FLEET_TEST_DATABASE_URL", None)
@@ -856,6 +925,85 @@ def check_server() -> int:
     status = component_status(docker, env)
     print_check_status(status)
     return 0 if all(status.get(key) == "OK" for key in LOCAL_STATUS_KEYS) else 1
+
+
+def _operator_git_status() -> str:
+    try:
+        if git_output("status", "--porcelain", "--untracked-files=normal"):
+            return "CHECK FAILED"
+        if git_output("branch", "--show-current") != "main":
+            return "CHECK FAILED"
+        git_output("fetch", "origin", timeout=300)
+        local = git_output("rev-parse", "HEAD")
+        remote = git_output("rev-parse", "origin/main")
+        return "OK" if local == remote else "UPDATE AVAILABLE"
+    except ServerError:
+        return "CHECK FAILED"
+
+
+def _operator_apk_status() -> str:
+    manifest = PILOT_RELEASE_DIR / PILOT_RELEASE_MANIFEST_NAME
+    try:
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        version_name = value.get("version_name")
+        version_code = value.get("version_code")
+        if (
+            not isinstance(version_name, str)
+            or not version_name.strip()
+            or isinstance(version_code, bool)
+            or not isinstance(version_code, int)
+        ):
+            raise ValueError("invalid release identity")
+        return f"{version_name} ({version_code})"
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return "NOT PUBLISHED"
+
+
+def operator_check() -> int:
+    git_status = _operator_git_status()
+    firebase_status = "MISCONFIGURED"
+    database_status = "NOT READY"
+    try:
+        env = load_server_environment()
+        firebase_status = (
+            "FIREBASE"
+            if env.get("FLEET_AUTH_MODE", "pilot").strip().casefold() == "firebase"
+            else "PILOT"
+        )
+        docker = shutil.which("docker")
+        if docker and docker_ready(docker):
+            health = compose_health(docker, env)
+            heads = _repository_alembic_heads()
+            revisions = _database_alembic_revisions(env)
+            if health.get("postgres") == "healthy" and revisions == heads:
+                database_status = "OK"
+    except Exception:
+        pass
+
+    api_status = "RUNNING" if api_health_ok() and api_ready_ok() else "STOPPED"
+    owner_probe = default_http_probe("http://127.0.0.1:3000/login", 3.0)
+    owner_status = (
+        "RUNNING"
+        if owner_probe is not None and 200 <= owner_probe.status < 400
+        else "STOPPED"
+    )
+    apk_status = _operator_apk_status()
+
+    print("\nFleet AI Systems\n")
+    print(f"Git:      {git_status}")
+    print(f"Database: {database_status}")
+    print(f"API:      {api_status}")
+    print(f"Owner:    {owner_status}")
+    print(f"Firebase: {firebase_status}")
+    print(f"APK:      {apk_status}")
+    healthy = (
+        git_status != "CHECK FAILED"
+        and database_status == "OK"
+        and api_status == "RUNNING"
+        and owner_status == "RUNNING"
+        and firebase_status != "MISCONFIGURED"
+    )
+    return 0 if healthy else 1
 
 
 def stop_api() -> int:
@@ -1878,7 +2026,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("start", "check", "stop", "backup", "update", "publish-apk"),
+        choices=(
+            "start",
+            "check",
+            "operator-check",
+            "stop",
+            "backup",
+            "update",
+            "publish-apk",
+        ),
     )
     parser.add_argument("apk", nargs="?", type=Path)
     parser.add_argument("--version-file", type=Path)
@@ -1894,6 +2050,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return start_server()
         if command == "check":
             return check_server()
+        if command == "operator-check":
+            return operator_check()
         if command == "stop":
             return stop_server()
         if command == "backup":

@@ -1,4 +1,4 @@
-"""Verify a Firebase staging APK without printing configured client values."""
+"""Verify a Firebase client APK without printing configured client values."""
 
 from __future__ import annotations
 
@@ -58,7 +58,10 @@ def verify_staging_apk(
     app_id: str,
     sender_id: str,
     project_id: str,
+    build_profile: str = "firebase-staging",
 ) -> dict[str, object]:
+    if build_profile not in {"firebase-staging", "firebase-company"}:
+        raise RuntimeError("Unsupported Firebase build profile")
     identity = inspect_apk(path)
     validate_expected_identity(identity)
     if (
@@ -68,8 +71,8 @@ def verify_staging_apk(
         raise RuntimeError("APK version does not match pubspec.yaml")
 
     required = {
-        "Firebase staging build profile": b"firebase-staging",
-        "staging API base URL": api_base_url.encode("utf-8"),
+        "Firebase build profile": build_profile.encode("utf-8"),
+        "API base URL": api_base_url.encode("utf-8"),
         "Firebase Android API key": api_key.encode("utf-8"),
         "Firebase Android app ID": app_id.encode("utf-8"),
         "Firebase messaging sender ID": sender_id.encode("utf-8"),
@@ -79,7 +82,7 @@ def verify_staging_apk(
     missing = sorted(set(required) - found)
     if missing:
         raise RuntimeError(
-            "APK is missing expected staging markers: " + ", ".join(missing)
+            "APK is missing expected Firebase markers: " + ", ".join(missing)
         )
     if forbidden:
         raise RuntimeError(
@@ -93,7 +96,7 @@ def verify_staging_apk(
         "signerSha256": identity.signer_sha256,
         "apkSha256": identity.apk_sha256,
         "authMode": "firebase",
-        "buildProfile": "firebase-staging",
+        "buildProfile": build_profile,
         "requiredMarkersVerified": sorted(found),
         "forbiddenCredentialMarkers": [],
     }
@@ -109,6 +112,11 @@ def main() -> None:
     parser.add_argument("--app-id", required=True)
     parser.add_argument("--sender-id", required=True)
     parser.add_argument("--project-id", required=True)
+    parser.add_argument(
+        "--build-profile",
+        choices=("firebase-staging", "firebase-company"),
+        default="firebase-staging",
+    )
     args = parser.parse_args()
     result = verify_staging_apk(
         args.apk,
@@ -119,6 +127,7 @@ def main() -> None:
         app_id=args.app_id,
         sender_id=args.sender_id,
         project_id=args.project_id,
+        build_profile=args.build_profile,
     )
     print(json.dumps(result))
 

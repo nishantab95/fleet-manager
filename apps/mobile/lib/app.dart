@@ -114,8 +114,13 @@ class FleetManagerApp extends StatelessWidget {
     final firebaseStaging =
         isFirebaseStagingBuild &&
         dependencies?.authentication.mode == FleetAuthMode.firebase;
+    final firebaseCompany =
+        isFirebaseCompanyBuild &&
+        dependencies?.authentication.mode == FleetAuthMode.firebase;
     return MaterialApp(
-      title: firebaseStaging
+      title: firebaseCompany
+          ? 'Fleet AI Systems'
+          : firebaseStaging
           ? 'Fleet AI Systems Staging'
           : isPilotBuild
           ? 'Fleet AI Systems Pilot'
@@ -525,29 +530,31 @@ class _LoginScreenState extends State<LoginScreen> {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          Row(
-            children: [
-              if (isPilotBuild)
-                Text(
-                  isFirebaseStagingBuild
-                      ? 'FIREBASE STAGING'
-                      : _isFirebase
-                      ? 'FIREBASE TEST'
-                      : 'PILOT / TEST',
-                  style: Theme.of(context).textTheme.labelLarge,
+          if (!isFirebaseCompanyBuild) ...[
+            Row(
+              children: [
+                if (isPilotBuild)
+                  Text(
+                    isFirebaseStagingBuild
+                        ? 'FIREBASE STAGING'
+                        : _isFirebase
+                        ? 'FIREBASE TEST'
+                        : 'PILOT / TEST',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                const Spacer(),
+                Flexible(
+                  child: Text(
+                    widget.dependencies.api.baseUrl,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
-              const Spacer(),
-              Flexible(
-                child: Text(
-                  widget.dependencies.api.baseUrl,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.end,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
+              ],
+            ),
+            const SizedBox(height: 18),
+          ],
           Text('Sign in', style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 6),
           Text(
@@ -1670,10 +1677,10 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
     final lastSyncHttpStatus = await sync.lastSyncHttpStatus();
     final lastSyncErrorCode = await sync.lastSyncErrorCode();
     final lastSyncFailureStage = await sync.lastSyncFailureStage();
-    final eventRows = isPilotBuild
+    final eventRows = isPilotBuild && !isFirebaseCompanyBuild
         ? await sync.diagnosticEventRows()
         : const <Map<String, String>>[];
-    final dutyRows = isPilotBuild
+    final dutyRows = isPilotBuild && !isFirebaseCompanyBuild
         ? await sync.diagnosticDutyRows()
         : const <Map<String, String>>[];
     if (!mounted) return;
@@ -1747,7 +1754,11 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
             ),
           if (isPilotBuild) ...[
             ListTile(
-              title: const Text('Fleet AI Systems Pilot'),
+              title: Text(
+                isFirebaseCompanyBuild
+                    ? 'Fleet AI Systems'
+                    : 'Fleet AI Systems Pilot',
+              ),
               subtitle: const Text('Version $appVersion · Build $appBuild'),
               trailing: widget.dependencies.pilotUpdater == null
                   ? null
@@ -1757,18 +1768,20 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
                       child: const Text('CHECK FOR UPDATES'),
                     ),
             ),
-            const Divider(height: 32),
-            _DiagnosticRows(
-              title: 'Local event queue (safe)',
-              emptyText: 'No local event rows.',
-              rows: _eventRows,
-            ),
-            const SizedBox(height: 12),
-            _DiagnosticRows(
-              title: 'Local duty sessions (safe)',
-              emptyText: 'No local duty snapshots.',
-              rows: _dutyRows,
-            ),
+            if (!isFirebaseCompanyBuild) ...[
+              const Divider(height: 32),
+              _DiagnosticRows(
+                title: 'Local event queue (safe)',
+                emptyText: 'No local event rows.',
+                rows: _eventRows,
+              ),
+              const SizedBox(height: 12),
+              _DiagnosticRows(
+                title: 'Local duty sessions (safe)',
+                emptyText: 'No local duty snapshots.',
+                rows: _dutyRows,
+              ),
+            ],
           ],
           const SizedBox(height: 12),
           const Text(

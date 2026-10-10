@@ -39,29 +39,68 @@ bool pilotRuntimeFeaturesEnabled({
   required FleetAuthMode authMode,
 }) => pilotBuild && authMode == FleetAuthMode.pilot;
 
-bool resolveFirebaseStagingProfile({
+String resolveFirebaseBuildProfile({
   required String configured,
   required bool pilotBuild,
   required FleetAuthMode authMode,
 }) {
   final normalized = configured.trim().toLowerCase();
-  if (normalized.isEmpty) return false;
-  if (normalized != 'firebase-staging') {
+  if (normalized.isEmpty) return '';
+  if (normalized != 'firebase-staging' && normalized != 'firebase-company') {
     throw StateError('FLEET_BUILD_PROFILE is not supported.');
   }
   if (!pilotBuild || authMode != FleetAuthMode.firebase) {
     throw StateError(
-      'The Firebase staging profile requires the Pilot package and Firebase authentication.',
+      'Firebase profiles require the update-compatible Pilot package and Firebase authentication.',
     );
   }
-  return true;
+  return normalized;
 }
+
+bool resolveFirebaseStagingProfile({
+  required String configured,
+  required bool pilotBuild,
+  required FleetAuthMode authMode,
+}) =>
+    resolveFirebaseBuildProfile(
+      configured: configured,
+      pilotBuild: pilotBuild,
+      authMode: authMode,
+    ) ==
+    'firebase-staging';
+
+bool resolveFirebaseCompanyProfile({
+  required String configured,
+  required bool pilotBuild,
+  required FleetAuthMode authMode,
+}) =>
+    resolveFirebaseBuildProfile(
+      configured: configured,
+      pilotBuild: pilotBuild,
+      authMode: authMode,
+    ) ==
+    'firebase-company';
 
 bool get isFirebaseStagingBuild => resolveFirebaseStagingProfile(
   configured: _configuredBuildProfile,
   pilotBuild: isPilotBuild,
   authMode: fleetAuthMode,
 );
+
+bool get isFirebaseCompanyBuild => resolveFirebaseCompanyProfile(
+  configured: _configuredBuildProfile,
+  pilotBuild: isPilotBuild,
+  authMode: fleetAuthMode,
+);
+
+bool privateApkUpdatesEnabled({
+  required bool pilotBuild,
+  required FleetAuthMode authMode,
+  required bool firebaseCompanyBuild,
+}) =>
+    pilotBuild &&
+    (authMode == FleetAuthMode.pilot ||
+        (authMode == FleetAuthMode.firebase && firebaseCompanyBuild));
 
 class LoginChallenge {
   const LoginChallenge({
