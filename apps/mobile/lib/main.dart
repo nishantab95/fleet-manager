@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import 'app.dart';
+import 'auth/firebase_options.dart';
+import 'auth/login_auth_provider.dart';
 import 'data/api_client.dart';
 import 'data/local_database.dart';
 import 'data/secure_session_store.dart';
@@ -12,6 +15,17 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final sessionStore = SecureSessionStore();
   final api = ApiClient(persistSession: sessionStore.save);
+  FleetLoginAuthProvider loginAuthProvider;
+  if (fleetAuthMode == FleetAuthMode.firebase) {
+    try {
+      await Firebase.initializeApp(options: FleetFirebaseOptions.android);
+      loginAuthProvider = FirebasePhoneAuthProvider(api);
+    } on Object {
+      loginAuthProvider = const UnavailableFirebaseAuthProvider();
+    }
+  } else {
+    loginAuthProvider = PilotOtpAuthProvider(api);
+  }
   if (isPilotBuild) {
     final pilotBaseUrl = await sessionStore.readPilotBaseUrl();
     if (pilotBaseUrl != null && pilotBaseUrl.isNotEmpty) {
@@ -46,6 +60,7 @@ Future<void> main() async {
         sessionStore: sessionStore,
         sync: sync,
         installationIdentifier: installationIdentifier,
+        loginAuthProvider: loginAuthProvider,
         pilotUpdater: pilotUpdater,
       ),
     ),

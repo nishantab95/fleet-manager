@@ -178,15 +178,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    incompatible = op.get_bind().execute(
-        sa.text(
-            "SELECT count(*) FROM fleet_assets "
-            "WHERE asset_type <> 'TIPPER' OR ownership_type <> 'OWNED' "
-            "OR registration_number IS NULL OR manufacturer IS NOT NULL OR model IS NOT NULL "
-            "OR rental_party_name IS NOT NULL OR rental_start_date IS NOT NULL "
-            "OR rental_end_date IS NOT NULL"
+    incompatible = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT count(*) FROM fleet_assets "
+                "WHERE asset_type <> 'TIPPER' OR ownership_type <> 'OWNED' "
+                "OR registration_number IS NULL OR manufacturer IS NOT NULL OR model IS NOT NULL "
+                "OR rental_party_name IS NOT NULL OR rental_start_date IS NOT NULL "
+                "OR rental_end_date IS NOT NULL"
+            )
         )
-    ).scalar_one()
+        .scalar_one()
+    )
     if incompatible:
         raise RuntimeError(
             "cannot downgrade fleet assets while generic or rental-only asset data exists"

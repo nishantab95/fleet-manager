@@ -41,6 +41,10 @@ build/
 **/*.p12
 **/key.properties
 /apps/mobile/android/local.properties
+**/google-services.json
+**/GoogleService-Info.plist
+**/*service-account*.json
+**/*firebase-adminsdk*.json
 
 # IDE / OS
 .idea/

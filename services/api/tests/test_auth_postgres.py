@@ -393,9 +393,7 @@ def test_logout_revokes_access_and_audits_without_tokens(
     with pytest.raises(InvalidTokenError):
         service.authenticate_access_token(access_token=tokens.access_token)
     audit = db_session.scalar(
-        select(AuditLog)
-        .where(AuditLog.action == "AUTH_SESSION_LOGOUT")
-        .order_by(AuditLog.created_at.desc())
+        select(AuditLog).where(AuditLog.action == "LOGOUT").order_by(AuditLog.created_at.desc())
     )
     assert audit is not None
     assert tokens.access_token not in str(audit.new_values)

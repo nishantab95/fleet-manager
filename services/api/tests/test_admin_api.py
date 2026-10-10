@@ -108,14 +108,20 @@ def test_owner_admin_management_is_tenant_scoped_and_uses_domain_rules(
         assert generated_site.status_code == 201, generated_site.text
         generated_code = generated_site.json()["code"]
         assert generated_code.startswith("SITE-")
-        assert client.patch(
-            f"/api/v1/admin/sites/{generated_site.json()['id']}",
-            json={"code": generated_code.lower()},
-        ).status_code == 200
-        assert client.patch(
-            f"/api/v1/admin/sites/{generated_site.json()['id']}",
-            json={"code": "CHANGED"},
-        ).status_code == 422
+        assert (
+            client.patch(
+                f"/api/v1/admin/sites/{generated_site.json()['id']}",
+                json={"code": generated_code.lower()},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch(
+                f"/api/v1/admin/sites/{generated_site.json()['id']}",
+                json={"code": "CHANGED"},
+            ).status_code
+            == 422
+        )
         site_a.code = "legacy-Mixed"
         db_session.flush()
         unchanged_legacy_code = client.patch(

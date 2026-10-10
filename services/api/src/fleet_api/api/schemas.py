@@ -46,6 +46,10 @@ class OtpVerifyResponse(BaseModel):
     expires_in: int
 
 
+class FirebaseTokenRequest(BaseModel):
+    id_token: str = Field(min_length=1, max_length=16_384)
+
+
 class MembershipOption(BaseModel):
     membership_id: UUID
     company_id: UUID
@@ -386,6 +390,7 @@ class OwnerPersonInviteRequest(BaseModel):
 
 class OwnerPersonUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    phone: str | None = Field(default=None, min_length=3, max_length=64)
     role: Literal[MembershipRole.DRIVER, MembershipRole.SUPERVISOR] | None = None
 
 
@@ -401,6 +406,7 @@ class OwnerPersonResponse(BaseModel):
     display_name: str
     role: MembershipRole
     status: MembershipStatus
+    auth_state: Literal["READY", "PHONE_MISSING", "DUPLICATE_PHONE", "DISABLED"]
     sites: list[OwnerPersonSiteResponse]
     has_active_assignment: bool
     has_active_duty: bool

@@ -68,9 +68,7 @@ def assignment_response(view: DriverAssetAssignmentView) -> DriverAssetAssignmen
 )
 def current_assignment(
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_owner_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_owner_driver_assignment_service),
 ) -> DriverAssetAssignmentResponse | Response:
     try:
         view = service.current(asset_id)
@@ -87,9 +85,7 @@ def current_assignment(
 )
 def assignment_history(
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_owner_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_owner_driver_assignment_service),
 ) -> list[DriverAssetAssignmentResponse]:
     try:
         return [assignment_response(view) for view in service.history(asset_id)]
@@ -103,9 +99,7 @@ def assignment_history(
 )
 def eligible_drivers(
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_owner_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_owner_driver_assignment_service),
 ) -> list[DriverCandidateResponse]:
     try:
         return [
@@ -129,9 +123,7 @@ def eligible_drivers(
 def assign_driver(
     asset_id: UUID,
     payload: DriverAssetAssignmentRequest,
-    service: DriverAssetAssignmentService = Depends(
-        get_owner_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_owner_driver_assignment_service),
     db: Session = Depends(get_db),
 ) -> DriverAssetAssignmentResponse:
     try:
@@ -152,9 +144,7 @@ def assign_driver(
 )
 def unassign_driver(
     asset_id: UUID,
-    service: DriverAssetAssignmentService = Depends(
-        get_owner_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_owner_driver_assignment_service),
     db: Session = Depends(get_db),
 ) -> DriverAssetAssignmentResponse:
     try:
@@ -172,9 +162,7 @@ def unassign_driver(
 def reassign_driver(
     asset_id: UUID,
     payload: DriverAssetAssignmentRequest,
-    service: DriverAssetAssignmentService = Depends(
-        get_owner_driver_assignment_service
-    ),
+    service: DriverAssetAssignmentService = Depends(get_owner_driver_assignment_service),
     db: Session = Depends(get_db),
 ) -> DriverAssetAssignmentResponse:
     try:

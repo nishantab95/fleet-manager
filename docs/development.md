@@ -98,9 +98,12 @@ Authentication settings use the `FLEET_` prefix. The important Phase 2
 settings are:
 
 ```text
+FLEET_AUTH_MODE=pilot               # pilot or firebase; production requires firebase
 FLEET_PHONE_DEFAULT_REGION=IN       # optional; only for non-E.164 input
 FLEET_OTP_PROVIDER=unavailable      # production must use a real provider
 FLEET_ENABLE_DEVELOPMENT_OTP=false
+FLEET_FIREBASE_PROJECT_ID=          # required when auth mode is firebase
+FLEET_FIREBASE_CHECK_REVOKED_TOKENS=true
 FLEET_OTP_TTL_SECONDS=300
 FLEET_OTP_MAX_ATTEMPTS=5
 FLEET_OTP_RESEND_COOLDOWN_SECONDS=60
@@ -116,6 +119,15 @@ provider requires both `FLEET_ENVIRONMENT=development`,
 `FLEET_ENABLE_DEVELOPMENT_OTP=true`; it must never be enabled in production.
 The default unavailable provider intentionally returns a service-unavailable
 response instead of pretending to deliver an OTP.
+
+Firebase mode uses Firebase only to verify control of a phone number. The API
+then resolves the existing PostgreSQL User and memberships and issues Fleet
+session tokens. Configure Application Default Credentials (or a secret-mounted
+service-account file outside the repository) for the API, and pass mobile
+Firebase identifiers as build-time Dart defines. Detailed console, Android
+fingerprint, migration, and test-number steps are in
+[Firebase phone authentication setup](firebase-auth-setup.md). Automated tests
+inject provider adapters and do not send SMS.
 
 The web shell uses `NEXT_PUBLIC_API_BASE_URL` when set and otherwise calls
 `http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3

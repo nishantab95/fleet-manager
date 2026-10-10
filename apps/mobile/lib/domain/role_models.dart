@@ -818,6 +818,7 @@ class OwnerPerson {
     required this.displayName,
     required this.role,
     required this.status,
+    this.authState = 'READY',
     required this.sites,
     required this.hasActiveAssignment,
     required this.hasActiveDuty,
@@ -833,6 +834,7 @@ class OwnerPerson {
   final String displayName;
   final String role;
   final String status;
+  final String authState;
   final List<OwnerPersonSite> sites;
   final bool hasActiveAssignment;
   final bool hasActiveDuty;
@@ -852,6 +854,7 @@ class OwnerPerson {
     displayName: '${json['display_name']}',
     role: '${json['role']}',
     status: '${json['status']}',
+    authState: '${json['auth_state'] ?? 'READY'}',
     sites: (json['sites'] as List<dynamic>? ?? const [])
         .whereType<Map<String, dynamic>>()
         .map(OwnerPersonSite.fromJson)

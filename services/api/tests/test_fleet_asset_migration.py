@@ -53,7 +53,7 @@ def test_database_is_at_the_single_model_complete_head(postgres_engine: Engine) 
     script = ScriptDirectory.from_config(config)
     with postgres_engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
-    assert script.get_heads() == ["0022_maintenance_starter_catalog"]
+    assert script.get_heads() == ["0023_user_auth_identity"]
     assert current == script.get_current_head()
     command.check(config)
 
@@ -1103,4 +1103,77 @@ def test_0022_backfills_existing_template_catalog_metadata(postgres_engine: Engi
             connection.execute(
                 text("DELETE FROM companies WHERE id = :company"),
                 {"company": company_id},
+            )
+
+
+def test_0023_adds_auth_identity_links_without_changing_existing_people(
+    postgres_engine: Engine,
+) -> None:
+    config = _alembic_config(postgres_engine)
+    company_id = UUID("b0000000-0000-0000-0000-000000000001")
+    user_id = UUID("b0000000-0000-0000-0000-000000000002")
+    membership_id = UUID("b0000000-0000-0000-0000-000000000003")
+    command.downgrade(config, "0022_maintenance_starter_catalog")
+    try:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO companies (id, name, status, reporting_timezone, "
+                    "operational_day_start_minutes) VALUES "
+                    "(:id, 'Firebase Migration', 'ACTIVE', 'Asia/Kolkata', 0)"
+                ),
+                {"id": company_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, phone_number, display_name, status) VALUES "
+                    "(:id, '+919100000223', 'Preserved Firebase User', 'ACTIVE')"
+                ),
+                {"id": user_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO company_memberships "
+                    "(id, company_id, user_id, role, status, display_name) VALUES "
+                    "(:id, :company, :user, 'DRIVER', 'ACTIVE', "
+                    "'Preserved Firebase User')"
+                ),
+                {"id": membership_id, "company": company_id, "user": user_id},
+            )
+
+        command.upgrade(config, "head")
+
+        with postgres_engine.connect() as connection:
+            assert (
+                connection.scalar(
+                    text("SELECT phone_number FROM users WHERE id = :id"),
+                    {"id": user_id},
+                )
+                == "+919100000223"
+            )
+            assert (
+                connection.scalar(
+                    text("SELECT user_id FROM company_memberships WHERE id = :id"),
+                    {"id": membership_id},
+                )
+                == user_id
+            )
+            assert (
+                connection.scalar(
+                    text("SELECT count(*) FROM user_auth_identities WHERE user_id = :id"),
+                    {"id": user_id},
+                )
+                == 0
+            )
+    finally:
+        command.upgrade(config, "head")
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM company_memberships WHERE id = :id"),
+                {"id": membership_id},
+            )
+            connection.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+            connection.execute(
+                text("DELETE FROM companies WHERE id = :id"),
+                {"id": company_id},
             )

@@ -23,9 +23,7 @@ def test_filesystem_storage_round_trip_nested_key_and_delete(tmp_path: Path) -> 
     key = "companies/company-id/memberships/member-id/events/event-id/photo.jpg"
     content = b"\xff\xd8\xffprivate-evidence"
 
-    assert storage.put_private(
-        object_key=key, content=content, content_type="image/jpeg"
-    ) == key
+    assert storage.put_private(object_key=key, content=content, content_type="image/jpeg") == key
     assert storage.read_private(object_key=key) == (content, "image/jpeg")
 
     object_path = storage.objects_root.joinpath(*key.split("/"))

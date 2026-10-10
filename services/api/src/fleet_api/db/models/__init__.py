@@ -2,7 +2,7 @@
 
 from fleet_api.db.models.assignment import Assignment
 from fleet_api.db.models.audit import AuditLog
-from fleet_api.db.models.auth import AuthSession, OtpChallenge
+from fleet_api.db.models.auth import AuthSession, OtpChallenge, UserAuthIdentity
 from fleet_api.db.models.closure import SiteDailyClosure, SiteDailyClosureHistory
 from fleet_api.db.models.company import Company, Site, User
 from fleet_api.db.models.deployment import AssetSiteDeployment
@@ -73,4 +73,5 @@ __all__ = [
     "SupervisorSiteAccess",
     "TripEvent",
     "User",
+    "UserAuthIdentity",
 ]

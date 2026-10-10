@@ -43,9 +43,7 @@ class AssetSiteDeployment(UpdatedTimestampModel):
             name="fk_asset_site_deployments_company_site",
             ondelete="RESTRICT",
         ),
-        UniqueConstraint(
-            "company_id", "id", name="uq_asset_site_deployments_company_id"
-        ),
+        UniqueConstraint("company_id", "id", name="uq_asset_site_deployments_company_id"),
         UniqueConstraint(
             "company_id",
             "id",

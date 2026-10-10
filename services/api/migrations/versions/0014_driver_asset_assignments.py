@@ -39,16 +39,13 @@ def upgrade() -> None:
         "ORDER BY (d.starts_at = a.starts_at) DESC, d.starts_at DESC, d.id "
         "LIMIT 1)"
     )
-    missing = op.get_bind().execute(
-        sa.text(
-            "SELECT count(*) FROM assignments "
-            "WHERE asset_site_deployment_id IS NULL"
-        )
-    ).scalar_one()
+    missing = (
+        op.get_bind()
+        .execute(sa.text("SELECT count(*) FROM assignments WHERE asset_site_deployment_id IS NULL"))
+        .scalar_one()
+    )
     if missing:
-        raise RuntimeError(
-            "cannot link every historical assignment to an asset deployment"
-        )
+        raise RuntimeError("cannot link every historical assignment to an asset deployment")
     op.alter_column(
         "assignments", "asset_site_deployment_id", existing_type=postgresql.UUID(), nullable=False
     )
@@ -74,12 +71,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    legacy_nulls = op.get_bind().execute(
-        sa.text(
-            "SELECT count(*) FROM assignments "
-            "WHERE supervisor_membership_id IS NULL"
-        )
-    ).scalar_one()
+    legacy_nulls = (
+        op.get_bind()
+        .execute(sa.text("SELECT count(*) FROM assignments WHERE supervisor_membership_id IS NULL"))
+        .scalar_one()
+    )
     if legacy_nulls:
         raise RuntimeError(
             "cannot downgrade while deployment-backed assignments lack a legacy supervisor"
@@ -90,9 +86,7 @@ def downgrade() -> None:
         existing_type=postgresql.UUID(),
         nullable=False,
     )
-    op.drop_constraint(
-        "fk_assignments_deployment_asset_site", "assignments", type_="foreignkey"
-    )
+    op.drop_constraint("fk_assignments_deployment_asset_site", "assignments", type_="foreignkey")
     op.drop_index("ix_assignments_asset_site_deployment_id", table_name="assignments")
     op.drop_column("assignments", "asset_site_deployment_id")
     op.drop_constraint(

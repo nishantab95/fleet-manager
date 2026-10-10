@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
@@ -21,6 +22,7 @@ from fleet_api.db.models import (
     Site,
     SupervisorSiteAccess,
     User,
+    UserAuthIdentity,
 )
 from fleet_api.domain.assets import generated_site_code, normalize_site_code
 from fleet_api.domain.audit import write_audit_log
@@ -51,6 +53,7 @@ class PersonView:
     current_asset_code: str | None
     current_site_id: UUID | None
     current_site_name: str | None
+    auth_state: Literal["READY", "PHONE_MISSING", "DUPLICATE_PHONE", "DISABLED"]
 
 
 @dataclass(frozen=True)
@@ -88,12 +91,14 @@ class OwnerPeopleSiteService:
         *,
         request_id: str | None = None,
         phone_default_region: str | None = None,
+        auth_mode: str = "pilot",
     ) -> None:
         self.session = session
         self.company_id = context.company.id
         self.actor_membership_id = context.membership.id
         self.request_id = request_id
         self.phone_default_region = phone_default_region
+        self.auth_mode = auth_mode.lower()
 
     def _audit(
         self,
@@ -206,7 +211,40 @@ class OwnerPeopleSiteService:
             current_asset_code,
             current_site_id,
             current_site_name,
+            self._auth_state(membership, user),
         )
+
+    def _normalized_phone_matches(self, normalized_phone: str) -> list[User]:
+        matches: list[User] = []
+        for candidate in self.session.scalars(select(User)).all():
+            try:
+                candidate_phone = normalize_phone(
+                    candidate.phone_number,
+                    default_region=self.phone_default_region,
+                )
+            except DomainError:
+                continue
+            if candidate_phone == normalized_phone:
+                matches.append(candidate)
+        return matches
+
+    def _auth_state(
+        self, membership: CompanyMembership, user: User
+    ) -> Literal["READY", "PHONE_MISSING", "DUPLICATE_PHONE", "DISABLED"]:
+        if membership.status != MembershipStatus.ACTIVE or user.status != UserStatus.ACTIVE:
+            return "DISABLED"
+        if not user.phone_number.strip():
+            return "PHONE_MISSING"
+        try:
+            normalized = normalize_phone(
+                user.phone_number,
+                default_region=self.phone_default_region,
+            )
+        except DomainError:
+            return "PHONE_MISSING"
+        if len(self._normalized_phone_matches(normalized)) > 1:
+            return "DUPLICATE_PHONE"
+        return "READY"
 
     def list_people(self) -> list[PersonView]:
         rows = self.session.execute(
@@ -230,9 +268,7 @@ class OwnerPeopleSiteService:
             raise NotFoundError("person identity was not found")
         return self._person_view(membership, user)
 
-    def invite_person(
-        self, *, phone: str, display_name: str, role: MembershipRole
-    ) -> PersonView:
+    def invite_person(self, *, phone: str, display_name: str, role: MembershipRole) -> PersonView:
         if role not in (MembershipRole.DRIVER, MembershipRole.SUPERVISOR):
             raise DomainError("role must be DRIVER or SUPERVISOR")
         normalized_phone = normalize_phone(phone, default_region=self.phone_default_region)
@@ -279,7 +315,7 @@ class OwnerPeopleSiteService:
         )
         membership_status = (
             MembershipStatus.ACTIVE
-            if existing_company_membership is not None
+            if self.auth_mode == "firebase" or existing_company_membership is not None
             else MembershipStatus.INVITED
         )
         membership = CompanyMembership(
@@ -316,9 +352,10 @@ class OwnerPeopleSiteService:
         self,
         membership_id: UUID,
         *,
-        display_name: str | None,
-        role: MembershipRole | None,
         fields_set: set[str],
+        display_name: str | None = None,
+        phone: str | None = None,
+        role: MembershipRole | None = None,
     ) -> PersonView:
         view = self.get_person(membership_id)
         membership = view.membership
@@ -330,6 +367,57 @@ class OwnerPeopleSiteService:
             if display_name is None:
                 raise DomainError("display_name is required")
             membership.display_name = _clean_required(display_name, "display_name")
+        if "phone" in fields_set:
+            if phone is None:
+                raise DomainError("phone is required")
+            normalized_phone = normalize_phone(phone, default_region=self.phone_default_region)
+            current_phone = normalize_phone(
+                view.user.phone_number,
+                default_region=self.phone_default_region,
+            )
+            if normalized_phone != current_phone:
+                collisions = [
+                    user
+                    for user in self._normalized_phone_matches(normalized_phone)
+                    if user.id != view.user.id
+                ]
+                if collisions:
+                    raise ConflictError("phone already belongs to another Fleet identity")
+                external_membership = self.session.scalar(
+                    select(CompanyMembership.id).where(
+                        CompanyMembership.user_id == view.user.id,
+                        CompanyMembership.company_id != self.company_id,
+                        CompanyMembership.status == MembershipStatus.ACTIVE,
+                    )
+                )
+                if external_membership is not None:
+                    raise ConflictError(
+                        "phone for a multi-company identity requires administrator review"
+                    )
+                now = datetime.now(UTC)
+                identities = self.session.scalars(
+                    select(UserAuthIdentity).where(
+                        UserAuthIdentity.user_id == view.user.id,
+                        UserAuthIdentity.disabled_at.is_(None),
+                    )
+                ).all()
+                for identity in identities:
+                    identity.disabled_at = now
+                    identity.disabled_reason = "phone_change_requested"
+                    self._audit(
+                        action="AUTH_IDENTITY_DISABLED",
+                        entity_type="USER_AUTH_IDENTITY",
+                        entity_id=identity.id,
+                        new_values={"reason": "PHONE_CHANGE_REQUESTED"},
+                    )
+                view.user.phone_number = normalized_phone
+                self._audit(
+                    action="PHONE_CHANGE_REQUESTED",
+                    entity_type="USER",
+                    entity_id=view.user.id,
+                    old_values={"phone_last4": current_phone[-4:]},
+                    new_values={"phone_last4": normalized_phone[-4:]},
+                )
         if "role" in fields_set:
             if role not in (MembershipRole.DRIVER, MembershipRole.SUPERVISOR):
                 raise DomainError("role must be DRIVER or SUPERVISOR")
@@ -416,8 +504,7 @@ class OwnerPeopleSiteService:
                     CompanyMembership,
                     and_(
                         CompanyMembership.company_id == SupervisorSiteAccess.company_id,
-                        CompanyMembership.id
-                        == SupervisorSiteAccess.supervisor_membership_id,
+                        CompanyMembership.id == SupervisorSiteAccess.supervisor_membership_id,
                     ),
                 )
                 .join(User, User.id == CompanyMembership.user_id)
@@ -493,9 +580,7 @@ class OwnerPeopleSiteService:
             clean_short_name = clean_name
         assert clean_name is not None and clean_short_name is not None
         site_id = uuid4()
-        clean_code = (
-            normalize_site_code(code) if code is not None else generated_site_code(site_id)
-        )
+        clean_code = normalize_site_code(code) if code is not None else generated_site_code(site_id)
         self._ensure_unique_site(
             name=clean_name,
             short_name=clean_short_name,

@@ -376,6 +376,26 @@ describe("Owner management panels", () => {
     expect(invitedRow).toHaveTextContent("INVITED");
   });
 
+  it("shows phone-login readiness and submits a guarded identity change", async () => {
+    const props = common();
+    const readyDriver: OwnerPerson = { ...activeDriver, auth_state: "READY" };
+    render(<PeoplePanel assets={[assignedTipper]} people={[readyDriver]} sites={[siteOne]} {...props} />);
+
+    const row = within(screen.getByRole("table", { name: "People" })).getByRole("row", { name: /Operator Active/ });
+    expect(row).toHaveTextContent("Phone login: Ready");
+
+    fireEvent.click(within(row).getByRole("button", { name: "Manage person" }));
+    fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "+919100000099" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save identity" }));
+
+    await waitFor(() => expect(props.apiRequest).toHaveBeenCalledWith(
+      `/api/v1/owner/people/${activeDriver.membership_id}`,
+      expect.objectContaining({ method: "PATCH" }),
+    ));
+    const payload = JSON.parse(vi.mocked(props.apiRequest).mock.calls[0][1]?.body as string);
+    expect(payload).toEqual({ display_name: "Operator Active", phone: "+919100000099" });
+  });
+
   it("routes People and Site Details entry points to the same person or asset manager", () => {
     const props = common();
     render(<PeoplePanel assets={[assignedTipper]} people={[activeDriver]} sites={[siteOne]} {...props} />);

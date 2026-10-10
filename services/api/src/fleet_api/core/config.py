@@ -42,12 +42,16 @@ class Settings(BaseSettings):
     max_odometer_km: Decimal = DEFAULT_MAX_ODOMETER_KM
     max_hour_meter_hours: Decimal = DEFAULT_MAX_HOUR_METER_HOURS
     phone_default_region: str | None = None
+    auth_mode: str = "pilot"
     otp_provider: str = "unavailable"
     enable_development_otp: bool = False
     pilot_otp: str | None = Field(default=None, repr=False)
     pilot_driver_otp: str | None = Field(default=None, repr=False)
     pilot_supervisor_otp: str | None = Field(default=None, repr=False)
     pilot_owner_otp: str | None = Field(default=None, repr=False)
+    firebase_project_id: str | None = None
+    firebase_app_name: str = "fleet-manager-auth"
+    firebase_check_revoked_tokens: bool = True
     otp_ttl_seconds: int = 300
     otp_max_attempts: int = 5
     otp_resend_cooldown_seconds: int = 60
@@ -96,8 +100,11 @@ class Settings(BaseSettings):
             raise ValueError("max_hour_meter_hours cannot have more than two decimal places")
 
         environment = self.environment.lower()
+        auth_mode = self.auth_mode.strip().lower()
         otp_provider = self.otp_provider.lower()
         object_storage_provider = self.object_storage_provider.lower()
+        if auth_mode not in {"pilot", "firebase"}:
+            raise ValueError("FLEET_AUTH_MODE must be either pilot or firebase")
         if object_storage_provider == "filesystem" and self.filesystem_storage_root is None:
             raise ValueError("filesystem object storage requires FLEET_FILESYSTEM_STORAGE_ROOT")
         pilot_codes = {
@@ -109,6 +116,11 @@ class Settings(BaseSettings):
         for name, code in pilot_codes.items():
             if code is not None and (len(code) != 6 or not code.isdigit()):
                 raise ValueError(f"{name} must be exactly six digits")
+        if auth_mode == "firebase":
+            if not self.firebase_project_id or not self.firebase_project_id.strip():
+                raise ValueError("Firebase auth mode requires FLEET_FIREBASE_PROJECT_ID")
+            if otp_provider == "pilot" or any(pilot_codes.values()):
+                raise ValueError("pilot OTP configuration is forbidden in Firebase auth mode")
         if otp_provider == "pilot" and environment not in {"development", "pilot", "test"}:
             raise ValueError(
                 "pilot OTP provider is restricted to local non-production environments"
@@ -126,7 +138,9 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError("pilot OTP provider requires role codes: " + ", ".join(missing))
 
-        if environment in {"production", "prod"}:
+        if environment in {"production", "prod", "strict-production"}:
+            if auth_mode != "firebase":
+                raise ValueError("production requires Firebase authentication mode")
             if not self.web_public_base_url.strip():
                 raise ValueError("production requires a web public base URL")
             if not self.jwt_signing_key or len(self.jwt_signing_key) < 32:
@@ -143,8 +157,6 @@ class Settings(BaseSettings):
                 )
             ):
                 raise ValueError("pilot OTP material is forbidden in production")
-            if self.otp_provider.lower() == "unavailable":
-                raise ValueError("production requires a configured OTP provider")
             if not self.cors_origins or "*" in self.cors_origins:
                 raise ValueError("production requires explicit CORS origins")
             if not self.allowed_host_values or "*" in self.allowed_host_values:
@@ -175,7 +187,7 @@ class Settings(BaseSettings):
 
     @property
     def secure_cookies(self) -> bool:
-        return self.environment.lower() in {"pilot", "production", "prod"}
+        return self.environment.lower() in {"pilot", "production", "prod", "strict-production"}
 
     @property
     def evidence_mime_types(self) -> set[str]:

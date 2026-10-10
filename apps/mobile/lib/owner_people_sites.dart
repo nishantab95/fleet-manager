@@ -194,7 +194,7 @@ class _OwnerPeopleScreenState extends State<OwnerPeopleScreen> {
                 title: Text(person.displayName),
                 subtitle: Text(
                   '${person.role == 'DRIVER' ? 'Operator' : 'Supervisor'} · ${person.phone}\n'
-                  '${person.status}${person.sites.isEmpty ? '' : ' · ${person.sites.map((site) => site.name).join(', ')}'}'
+                  '${person.status} · Phone login: ${person.authState}${person.sites.isEmpty ? '' : ' · ${person.sites.map((site) => site.name).join(', ')}'}'
                   '${person.currentAssetCode == null ? '' : '\nCurrent: ${person.currentAssetCode} · ${person.currentSiteName ?? 'Site'}'}',
                 ),
                 isThreeLine: true,
@@ -296,9 +296,14 @@ class _PersonFormState extends State<_PersonForm> {
           TextField(
             key: const Key('person-phone'),
             controller: _phone,
-            enabled: widget.person == null,
+            enabled: true,
             keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(labelText: 'Phone'),
+            decoration: InputDecoration(
+              labelText: 'Phone',
+              helperText: widget.person == null
+                  ? null
+                  : 'Changing the phone disables the old login link until the new number is verified.',
+            ),
           ),
           DropdownButtonFormField<String>(
             key: const Key('person-role'),

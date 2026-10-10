@@ -244,15 +244,36 @@ Phase 2 dependencies are not a substitute for endpoint-specific validation.
 - Phone numbers use the existing normalization boundary. An existing global
   identity may be linked to another company without changing its global name;
   duplicate same-company role membership returns a conflict.
-- Invited memberships cannot authorize an API request. They become active only
-  after successful OTP verification and explicit membership selection through
-  the existing authentication service.
+- In pilot mode, invited memberships cannot authorize an API request and retain
+  the existing controlled OTP activation path. In Firebase mode, Owner-created
+  memberships are active only after the Owner-authorized People mutation
+  succeeds; a verified Firebase phone still cannot create or activate business
+  data by itself.
 - Inactive Sites and memberships cannot receive new operational access.
   Dependency checks prevent lifecycle transitions that would orphan a live
   assignment or duty. All accepted mutations write tenant-scoped audit rows.
 - No endpoint accepts credentials, plaintext OTPs, object-storage keys, or
   environment values as People/Site data. Mobile mutations use the shared
   access-token refresh-and-retry path.
+
+## Firebase phone authentication controls
+
+- Production profiles require explicit Firebase mode. Pilot OTP endpoints and
+  codes are unavailable in Firebase mode, preventing a fallback downgrade.
+- Firebase ID tokens are verified server-side for signature, project
+  audience/issuer, expiry, optional revocation, and phone sign-in provider.
+  Client-supplied phone, role, company, or membership values are not proof.
+- A verified phone must map to exactly one eligible existing Fleet User.
+  Unknown, ambiguous, inactive, disabled, and cross-tenant identity paths fail
+  closed and never auto-create a User or membership.
+- Durable provider-subject uniqueness prevents one Firebase UID from being
+  attached to multiple Fleet Users. Phone changes disable the old link and are
+  rejected when another active company shares the User.
+- Audit metadata excludes OTPs, ID/access/refresh tokens, credentials, and full
+  phone numbers. Client errors do not expose raw Firebase exception details.
+- Service-account material and generated Firebase configuration are excluded
+  from source control. Runtime credentials come from Application Default
+  Credentials or secret mounts outside the repository.
 
 ## Controlled internal pilot policy
 

@@ -154,6 +154,7 @@ export type OwnerPerson = {
   display_name: string;
   role: MembershipRole;
   status: MembershipStatus;
+  auth_state?: "READY" | "PHONE_MISSING" | "DUPLICATE_PHONE" | "DISABLED";
   sites: { site_id: string; site_name: string }[];
   has_active_assignment: boolean;
   has_active_duty: boolean;

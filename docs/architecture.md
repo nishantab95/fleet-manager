@@ -86,6 +86,23 @@ requires an authenticated `OWNER_ADMIN` membership and derives the company
 from that context. The default OTP provider is unavailable; no fake provider
 is selectable through production configuration.
 
+### Firebase phone authentication boundary
+
+Authentication has two explicit modes. `pilot` retains the controlled local
+OTP workflow, while `firebase` accepts only a Firebase Phone Authentication ID
+token. Production profiles require Firebase mode; there is no pilot-code
+fallback. The API verifies the Firebase token and exchanges it for the existing
+Fleet pre-session and membership-scoped session. Firebase is proof of phone
+control, not the business identity or authorization store.
+
+PostgreSQL remains authoritative for Users, People, companies, memberships,
+roles, and lifecycle state. `user_auth_identities` stores the durable
+Firebase-subject-to-User link. First login may link only one eligible existing
+User with an exact normalized phone match; it never creates business data.
+Every login and request rechecks active Fleet state. The client can select only
+memberships returned after verification, so a supplied role or company is not
+an authorization input. See [ADR 0011](adr/0011-firebase-phone-authentication.md).
+
 ## Phase 3 management boundary
 
 `fleet_api.domain.admin.AdminService` is the application service for the web
