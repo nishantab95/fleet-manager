@@ -6,7 +6,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$python = Join-Path $repoRoot "services\api\.venv\Scripts\python.exe"
+$pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+if (-not $pythonCommand) {
+    throw "Python is required for signer verification and private release transfer."
+}
+$python = $pythonCommand.Source
 $buildScript = Join-Path $PSScriptRoot "build-firebase-staging-apk.ps1"
 $fingerprintScript = Join-Path $PSScriptRoot "android_signer_fingerprints.py"
 $senderScript = Join-Path $PSScriptRoot "send_pilot_release.py"

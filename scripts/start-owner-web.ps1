@@ -12,6 +12,13 @@ $logRoot = Join-Path $repoRoot '.runtime\owner-web'
 $logFile = Join-Path $logRoot 'owner-web.log'
 $localUrl = "http://127.0.0.1:$Port"
 
+$nodeInstallDir = Join-Path $env:ProgramFiles 'nodejs'
+if ((-not (Get-Command node.exe -ErrorAction SilentlyContinue)) -and
+    (Test-Path -LiteralPath (Join-Path $nodeInstallDir 'node.exe') -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $nodeInstallDir 'npm.cmd') -PathType Leaf)) {
+    $env:Path = "$nodeInstallDir;$env:Path"
+}
+
 function Stop-WithMessage([string]$Message) {
     Write-Host "Fleet Manager Owner could not start: $Message" -ForegroundColor Red
     Read-Host 'Press Enter to close'

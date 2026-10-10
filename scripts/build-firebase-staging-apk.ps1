@@ -12,7 +12,7 @@ $jdkRoot = Join-Path $env:USERPROFILE "Tools\temurin-17"
 $sdkRoot = Join-Path $env:LOCALAPPDATA "Android\Sdk"
 $gradleHome = Join-Path $env:USERPROFILE ".gradle"
 $signingConfig = Join-Path $gradleHome "gradle.properties"
-$keystore = Join-Path $env:USERPROFILE ".fleet-manager\signing\fleet-pilot-release.jks"
+$keystore = Join-Path $env:USERPROFILE ".fleet-manager\signing\fleet-pilot-permanent-release.jks"
 $expectedPackage = "com.fleetmanager.fleet_manager_mobile.pilot"
 $buildProfile = if ($Company) { "firebase-company" } else { "firebase-staging" }
 

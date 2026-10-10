@@ -4,7 +4,7 @@ These steps switch authentication and publish a company-facing APK without chang
 
 1. In Firebase Console, open the company project and enable **Authentication > Sign-in method > Phone**.
 2. Register Android app package `com.fleetmanager.fleet_manager_mobile.pilot`. Do not create a different package for this update path.
-3. On the build PC, restore the existing permanent signer at `%USERPROFILE%\.fleet-manager\signing\fleet-pilot-release.jks` and its four user Gradle properties (`fleetPilotStoreFile`, `fleetPilotStorePassword`, `fleetPilotKeyAlias`, `fleetPilotKeyPassword`) in `%USERPROFILE%\.gradle\gradle.properties`; never generate a replacement identity. Run `services\api\.venv\Scripts\python.exe scripts\android_signer_fingerprints.py`, then add both reported SHA-1 and SHA-256 fingerprints to the Android app in Firebase Console.
+3. On the build PC, use the existing permanent signer at `%USERPROFILE%\.fleet-manager\signing\fleet-pilot-permanent-release.jks` and its four user Gradle properties (`fleetPilotStoreFile`, `fleetPilotStorePassword`, `fleetPilotKeyAlias`, `fleetPilotKeyPassword`) in `%USERPROFILE%\.gradle\gradle.properties`; never generate a replacement identity. Run `python scripts\android_signer_fingerprints.py`, then add both reported SHA-1 and SHA-256 fingerprints to the Android app in Firebase Console.
 4. Copy the Firebase Android app ID, Web API key, messaging sender ID, and project ID. These Android client values are identifiers, not a service-account credential.
 5. Create `%USERPROFILE%\.fleetaisystems\firebase-mobile.ps1` outside the repository with exactly these lines, replacing every placeholder:
 
