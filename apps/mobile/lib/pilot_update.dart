@@ -382,7 +382,7 @@ class PilotUpdateService {
       if (archive.packageName != pilotPackageName) {
         throw const PilotUpdateException(
           'WRONG_PACKAGE',
-          'The downloaded APK is not Fleet Manager Pilot.',
+          'The downloaded APK is not Fleet AI Systems Pilot.',
         );
       }
       if (archive.signerSha256.toLowerCase() != pilotSignerSha256) {
@@ -501,7 +501,7 @@ class PilotUpdateController {
         _message(
           context,
           check.state == PilotUpdateCheckState.current
-              ? 'Fleet Manager Pilot is up to date.'
+              ? 'Fleet AI Systems Pilot is up to date.'
               : 'The private update server is unavailable. Try again later.',
         );
       }
@@ -531,10 +531,10 @@ class PilotUpdateController {
             title: Text(
               release.mandatory
                   ? 'Update required'
-                  : 'Fleet Manager update available',
+                  : 'Fleet AI Systems update available',
             ),
             content: Text(
-              '${release.mandatory ? 'This version of Fleet Manager must be updated before continuing.\n\n' : ''}'
+              '${release.mandatory ? 'This version of Fleet AI Systems must be updated before continuing.\n\n' : ''}'
               'Current\n${installed.versionName} (build ${installed.versionCode})\n\n'
               'Available\n${release.versionName} (build ${release.versionCode})',
             ),
@@ -624,7 +624,7 @@ class PilotUpdateController {
         child: AlertDialog(
           title: const Text('Allow Pilot updates'),
           content: const Text(
-            'Android must allow Fleet Manager Pilot to install this private '
+            'Android must allow Fleet AI Systems Pilot to install this private '
             'update. Open “Install unknown apps”, allow this app, then return. '
             'Android will still show its normal installer confirmation.',
           ),

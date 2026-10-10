@@ -112,7 +112,7 @@ class FleetManagerApp extends StatelessWidget {
         ? const _UnavailableScreen()
         : DriverSessionScreen(dependencies: dependencies!);
     return MaterialApp(
-      title: isPilotBuild ? 'Fleet Manager Pilot' : 'Fleet Manager',
+      title: isPilotBuild ? 'Fleet AI Systems Pilot' : 'Fleet AI Systems',
       theme: fleetTheme(),
       home: dependencies?.pilotUpdater == null
           ? home
@@ -453,7 +453,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (_memberships.isEmpty) {
       throw const LoginAuthException(
         'This mobile number is not registered with your company. '
-        'Contact your Fleet Manager administrator.',
+        'Contact your Fleet AI Systems administrator.',
         code: 'ACCESS_DENIED',
       );
     }
@@ -504,7 +504,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final hasMembershipChoice = _memberships.isNotEmpty;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Fleet Manager'),
+        title: const Text('Fleet AI Systems'),
         actions: isPilotBuild
             ? [
                 IconButton(
@@ -541,7 +541,7 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(height: 6),
           Text(
             _isFirebase
-                ? 'Use the mobile number registered by your Fleet Manager.'
+                ? 'Use the mobile number registered by your Fleet AI Systems administrator.'
                 : 'Choose your role, then use your registered phone number.',
           ),
           const SizedBox(height: 20),
@@ -680,7 +680,7 @@ class _LoginScreenState extends State<LoginScreen> {
               const Divider(),
               const ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text('Fleet Manager Pilot'),
+                title: Text('Fleet AI Systems Pilot'),
                 subtitle: Text('Version $appVersion · Build $appBuild'),
               ),
               if (widget.dependencies.pilotUpdater != null)
@@ -720,8 +720,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             .testConnection();
                         setDialogState(
                           () => message = connected
-                              ? 'Connected to Fleet Manager server.'
-                              : 'Cannot reach Fleet Manager server.',
+                              ? 'Connected to Fleet AI Systems server.'
+                              : 'Cannot reach Fleet AI Systems server.',
                         );
                       } on FormatException catch (error) {
                         setDialogState(() => message = error.message);
@@ -1736,7 +1736,7 @@ class _DriverDiagnosticsScreenState extends State<DriverDiagnosticsScreen> {
             ),
           if (isPilotBuild) ...[
             ListTile(
-              title: const Text('Fleet Manager Pilot'),
+              title: const Text('Fleet AI Systems Pilot'),
               subtitle: const Text('Version $appVersion · Build $appBuild'),
               trailing: widget.dependencies.pilotUpdater == null
                   ? null

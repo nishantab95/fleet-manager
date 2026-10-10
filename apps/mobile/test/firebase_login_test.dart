@@ -214,7 +214,7 @@ void main() {
     expect(
       find.text(
         'This mobile number is not registered with your company. '
-        'Contact your Fleet Manager administrator.',
+        'Contact your Fleet AI Systems administrator.',
       ),
       findsOneWidget,
     );
@@ -225,7 +225,7 @@ void main() {
   ) async {
     final auth = _FakeFirebaseLoginAuth(
       verifyError: const LoginAuthException(
-        'This account is disabled. Contact your Fleet Manager administrator.',
+        'This account is disabled. Contact your Fleet AI Systems administrator.',
         code: 'ACCESS_DENIED',
       ),
     );
@@ -252,7 +252,7 @@ void main() {
 
     expect(
       find.text(
-        'This account is disabled. Contact your Fleet Manager administrator.',
+        'This account is disabled. Contact your Fleet AI Systems administrator.',
       ),
       findsOneWidget,
     );

@@ -16,10 +16,10 @@ export function Select({ label, value, onChange, options }: { label: string; val
 
 export function WorkspaceHeader({ eyebrow, title, onLogout, qaNavigation = false, activeRole }: { eyebrow: string; title: string; onLogout: () => void; qaNavigation?: boolean; activeRole?: "DRIVER" | "SUPERVISOR" | "OWNER" }) {
   useEffect(() => {
-    document.title = `${title} · Fleet Manager`;
+    document.title = `${title} · Fleet AI Systems`;
   }, [title]);
 
-  return <header className="topbar"><div className="topbar-main"><div><p className="eyebrow">Fleet Manager · {eyebrow}</p><h1>{title}</h1></div>{qaNavigation && <nav className="qa-nav" aria-label="PC test lab navigation"><a href="/lab">TEST LAB</a><a aria-current={activeRole === "DRIVER" ? "page" : undefined} href="/driver-test">DRIVER</a><a aria-current={activeRole === "SUPERVISOR" ? "page" : undefined} href="/supervisor">SUPERVISOR</a><a aria-current={activeRole === "OWNER" ? "page" : undefined} href="/owner">OWNER</a></nav>}</div><button className="secondary" onClick={onLogout} type="button">Log out</button></header>;
+  return <header className="topbar"><div className="topbar-main"><div><p className="eyebrow">Fleet AI Systems · {eyebrow}</p><h1>{title}</h1></div>{qaNavigation && <nav className="qa-nav" aria-label="PC test lab navigation"><a href="/lab">TEST LAB</a><a aria-current={activeRole === "DRIVER" ? "page" : undefined} href="/driver-test">DRIVER</a><a aria-current={activeRole === "SUPERVISOR" ? "page" : undefined} href="/supervisor">SUPERVISOR</a><a aria-current={activeRole === "OWNER" ? "page" : undefined} href="/owner">OWNER</a></nav>}</div><button className="secondary" onClick={onLogout} type="button">Log out</button></header>;
 }
 
 export function QaNotice({ children }: { children: ReactNode }) {

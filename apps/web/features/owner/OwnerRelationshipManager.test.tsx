@@ -371,7 +371,7 @@ describe("Owner relationship manager", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Deactivate asset" }));
     const manager = screen.getByRole("dialog", { name: "ABHI-BENZ" });
-    expect(await within(manager).findByRole("alert")).toHaveTextContent("Fleet Manager server must be updated before this action can be used.");
+    expect(await within(manager).findByRole("alert")).toHaveTextContent("Fleet AI Systems server must be updated before this action can be used.");
     expect(manager).not.toHaveTextContent("Not Found");
     expect(within(manager).getByRole("button", { name: "Deactivate asset" })).toBeEnabled();
     expect(requestBodies(apiRequest, "/execute")).toHaveLength(0);

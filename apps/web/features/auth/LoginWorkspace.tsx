@@ -107,7 +107,7 @@ export function LoginWorkspace() {
   return (
     <main className="auth-shell">
       <section className="auth-card">
-        <p className="eyebrow">Fleet Manager · Secure access</p>
+        <p className="eyebrow">Fleet AI Systems · Secure access</p>
         <h1>Choose your operations workspace</h1>
         {workspaceLabel && <div className="workspace-hint">{workspaceLabel}</div>}
         <p className="summary">Sign in with your phone and choose an active company membership. The access token is runtime-only; the refresh credential is an HttpOnly cookie.</p>

@@ -7,7 +7,7 @@ export function AccessDenied({ message = "This membership is not permitted to us
   return (
     <main className="auth-shell">
       <section className="auth-card">
-        <p className="eyebrow">Fleet Manager · Access denied</p>
+        <p className="eyebrow">Fleet AI Systems · Access denied</p>
         <h1>Workspace unavailable</h1>
         <div className="notice error">{message}</div>
         <button className="secondary" onClick={() => void logout()} type="button">Sign out</button>

@@ -91,7 +91,7 @@ function operationError(caught: unknown) {
       return "This record is no longer available. Refresh and try again.";
     }
     if (caught.status === 404 && !caught.code) {
-      return "The Fleet Manager server must be updated before this action can be used.";
+      return "The Fleet AI Systems server must be updated before this action can be used.";
     }
   }
   return caught instanceof Error ? caught.message : "The request could not be completed.";
@@ -443,7 +443,7 @@ function AssetManager(props: OwnerRelationshipManagerProps & { target: Extract<O
     if (!asset) return;
     if (!onForceCloseDutyAndDeactivate) {
       setForceStage("warning");
-      setForceError("Force-close is not available on the currently running Fleet Manager server.");
+      setForceError("Force-close is not available on the currently running Fleet AI Systems server.");
       return;
     }
     setForceBusy(true);
@@ -505,7 +505,7 @@ function AssetManager(props: OwnerRelationshipManagerProps & { target: Extract<O
     return <ManagerShell busy={forceBusy} eyebrow="Final confirmation" onDismiss={() => setForceStage("reason")} subtitle={subtitleForAsset(asset)} title={`Force close duty & deactivate ${assetLabel(asset)}?`}>
       <InlineFeedback error={forceError} />
       <div className="owner-manager-confirmation owner-manager-confirmation--danger">
-        <p>Fleet Manager will:</p>
+        <p>Fleet AI Systems will:</p>
         <ul className="owner-manager-change-list">
           <li>Force close {currentDriver?.display_name || "the Driver / Operator"}&apos;s active duty</li>
           <li>Mark {endMeterLabel} as missing when no legitimate end reading exists</li>

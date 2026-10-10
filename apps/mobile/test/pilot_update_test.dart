@@ -238,10 +238,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Fleet Manager update available'), findsOneWidget);
+    expect(find.text('Fleet AI Systems update available'), findsOneWidget);
     await tester.tap(find.text('LATER'));
     await tester.pumpAndSettle();
-    expect(find.text('Fleet Manager update available'), findsNothing);
+    expect(find.text('Fleet AI Systems update available'), findsNothing);
     expect(find.text('Operational app'), findsOneWidget);
   });
 

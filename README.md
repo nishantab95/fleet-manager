@@ -1,4 +1,20 @@
-# Fleet Manager
+# Fleet AI Systems
+
+Fleet AI Systems is the public product brand for this construction fleet
+operations platform. The canonical public website is
+`https://fleetaisystems.com`.
+
+The public marketing site is integrated into `apps/web` at `/`, `/features`,
+`/how-it-works`, `/solutions`, `/pricing`, and `/contact`. Operational access
+remains separate at `/login`, with role-specific workspaces under `/owner`,
+`/supervisor`, and the controlled QA routes.
+
+Internal identifiers such as package names, Android application IDs, API route
+prefixes, database names, environment variables, service identifiers, launcher
+filenames, and historical migration/release records intentionally retain their
+existing `fleet-manager` / `Fleet Manager` names. They are compatibility
+boundaries, not public brand copy, and renaming them would add deployment risk
+without improving the user experience.
 
 ## Owner web workstation
 
@@ -8,7 +24,11 @@ On an Owner laptop connected to the private Tailscale network, set the server-si
 FLEET_API_UPSTREAM_URL=https://your-private-fleet-api-host
 ```
 
-Then double-click `Start Fleet Manager Owner.bat`. The launcher checks the remote `/health` and `/ready` gates, starts only the local Next.js web app, waits for its same-origin API proxy, and opens the Owner workspace. It does not start a local API or database.
+Then double-click `Start Fleet Manager Owner.bat`. The compatibility launcher
+keeps its existing filename, checks the remote `/health` and `/ready` gates,
+starts only the local Next.js web app, waits for its same-origin API proxy, and
+opens the Fleet AI Systems Owner workspace. It does not start a local API or
+database.
 
 Production foundation for a civil-construction company's fleet operations.
 

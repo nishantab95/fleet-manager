@@ -2,7 +2,7 @@
 
 ## Decision
 
-Fleet Manager is a modular monolith in a monorepo. The backend is one FastAPI
+Fleet AI Systems is a modular monolith in a monorepo. The backend is one FastAPI
 deployment with explicit domain services, SQLAlchemy models, and one
 PostgreSQL database. Mobile and web clients remain separate shells and do not
 contain Phase 1 business workflows.

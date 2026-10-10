@@ -1435,7 +1435,7 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
         mimeType:
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       );
-      await Share.shareXFiles([file], text: 'Fleet Manager report');
+      await Share.shareXFiles([file], text: 'Fleet AI Systems report');
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = _friendlyError(error));
     } on Object catch (error) {
@@ -2478,7 +2478,7 @@ String _friendlyError(ApiException error) {
     return 'Your session expired. Please sign in again.';
   }
   if (error.isRetryable) {
-    return 'Fleet Manager server is unavailable. Check the Pilot server URL and connection.';
+    return 'Fleet AI Systems server is unavailable. Check the Pilot server URL and connection.';
   }
   if (error.statusCode == 403) {
     return 'This account is not authorized for this role or data.';

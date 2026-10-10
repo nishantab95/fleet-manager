@@ -44,7 +44,7 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        manifestPlaceholders["appLabel"] = "Fleet Manager"
+        manifestPlaceholders["appLabel"] = "Fleet AI Systems"
         manifestPlaceholders["usesCleartextTraffic"] = "false"
     }
 
@@ -54,12 +54,12 @@ android {
             dimension = "environment"
             applicationIdSuffix = ".pilot"
             versionNameSuffix = "-pilot"
-            manifestPlaceholders["appLabel"] = "Fleet Manager Pilot"
+            manifestPlaceholders["appLabel"] = "Fleet AI Systems Pilot"
             manifestPlaceholders["usesCleartextTraffic"] = "true"
         }
         create("production") {
             dimension = "environment"
-            manifestPlaceholders["appLabel"] = "Fleet Manager"
+            manifestPlaceholders["appLabel"] = "Fleet AI Systems"
             manifestPlaceholders["usesCleartextTraffic"] = "false"
         }
     }

@@ -36,7 +36,7 @@ type PreviewFailure = {
   message: string;
 };
 
-const SERVER_UPDATE_MESSAGE = "This management action is not supported by the currently running Fleet Manager server. Update the Fleet Manager server and try again.";
+const SERVER_UPDATE_MESSAGE = "This management action is not supported by the currently running Fleet AI Systems server. Update the Fleet AI Systems server and try again.";
 const MISSING_RECORD_MESSAGE = "This record no longer exists or its state changed. Refresh and try again.";
 
 function classifyPreviewFailure(caught: unknown): PreviewFailure {

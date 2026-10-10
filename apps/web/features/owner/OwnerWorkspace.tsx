@@ -124,7 +124,7 @@ export function OwnerWorkspace() {
 
   useEffect(() => { void Promise.resolve().then(reload); }, [reload]);
   useEffect(() => {
-    document.title = "Fleet command centre · Fleet Manager";
+    document.title = "Fleet command centre · Fleet AI Systems";
     const updateVisibility = () => setPageVisible(document.visibilityState !== "hidden");
     updateVisibility();
     document.addEventListener("visibilitychange", updateVisibility);
@@ -189,7 +189,7 @@ export function OwnerWorkspace() {
     <header className="owner-topbar">
       <FleetAmbientScene />
       <div className="owner-topbar__identity">
-        <p className="owner-topbar__eyebrow">Fleet Manager · Owner/Admin</p>
+        <p className="owner-topbar__eyebrow">Fleet AI Systems · Owner/Admin</p>
         <h1>Fleet command centre</h1>
       </div>
       <div aria-label="Current fleet summary" className="owner-command-strip" role="group">

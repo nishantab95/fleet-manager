@@ -264,6 +264,8 @@ async function mockOwnerApi(page: Page, options: { ownerOperationsAvailable?: bo
       ? { access_token: "owner-test-token", expires_in: 3600, membership_id: "owner-membership", company_id: "company-1", role: "OWNER_ADMIN" }
       : path.endsWith("/auth/me")
         ? { user_id: "owner-user", display_name: "Owner Test", membership_id: "owner-membership", company_id: "company-1", company_name: "Owner Test Company", role: "OWNER_ADMIN" }
+        : path.endsWith("/owner/maintenance/overview")
+          ? { overdue: 1, due: 1, due_soon: 1 }
         : path.endsWith("/owner/assets")
           ? assets
           : path.endsWith("/owner/people")
@@ -488,7 +490,7 @@ test.describe("mocked Owner workstation", () => {
     const dialog = page.getByRole("dialog", { name: "North Excavator" });
     await dialog.getByLabel("Site").selectOption("");
     await dialog.getByRole("button", { name: "Save changes" }).click();
-    await expect(dialog.getByRole("alert")).toContainText("Fleet Manager server must be updated");
+    await expect(dialog.getByRole("alert")).toContainText("Fleet AI Systems server must be updated");
     await expect(dialog.getByText("Not Found", { exact: true })).toHaveCount(0);
     await expect(dialog.getByRole("button", { name: "Continue" })).toHaveCount(0);
     await expect(dialog.getByRole("button", { name: "Close management form" })).toBeEnabled();
