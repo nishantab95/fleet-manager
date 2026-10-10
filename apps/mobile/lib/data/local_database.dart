@@ -548,18 +548,29 @@ class LocalDatabase extends _$LocalDatabase {
   Future<void> replaceCompoundEventForRetry({
     required String clientEventUuid,
     required String payloadJson,
+    required String evidencePath,
   }) {
     return (update(
       pendingEvents,
     )..where((row) => row.clientEventUuid.equals(clientEventUuid))).write(
       PendingEventsCompanion(
         payloadJson: Value(payloadJson),
-        evidencePath: const Value(null),
+        evidencePath: Value(evidencePath),
         syncState: const Value('pending'),
         retryCount: const Value(0),
         lastSyncError: const Value(null),
       ),
     );
+  }
+
+  Future<void> updatePendingPayload({
+    required String clientEventUuid,
+    required String payloadJson,
+  }) {
+    return (update(pendingEvents)
+          ..where((row) => row.clientEventUuid.equals(clientEventUuid))
+          ..where(_inActiveAccount))
+        .write(PendingEventsCompanion(payloadJson: Value(payloadJson)));
   }
 
   static Map<String, dynamic> _decodeEventPayload(String payloadJson) {

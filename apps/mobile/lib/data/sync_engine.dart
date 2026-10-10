@@ -195,20 +195,16 @@ class SyncEngine {
   Future<String> enqueueMeterCapture({
     required DriverAssignment assignment,
     required KmReadingType readingType,
+    required String evidencePath,
     String? odometerKm,
     String? hourMeter,
-    String? kmEvidencePath,
-    String? hmrEvidencePath,
   }) {
     final capabilities = assignment.capabilities;
-    final hasKm = odometerKm != null || kmEvidencePath != null;
-    final hasHmr = hourMeter != null || hmrEvidencePath != null;
-    final completeKm = odometerKm != null && kmEvidencePath != null;
-    final completeHmr = hourMeter != null && hmrEvidencePath != null;
-    if (hasKm != completeKm ||
-        hasHmr != completeHmr ||
-        completeKm != capabilities.supportsOdometer ||
-        completeHmr != capabilities.supportsHourMeter) {
+    final hasKm = odometerKm != null;
+    final hasHmr = hourMeter != null;
+    if (evidencePath.trim().isEmpty ||
+        hasKm != capabilities.supportsOdometer ||
+        hasHmr != capabilities.supportsHourMeter) {
       throw ArgumentError(
         'Meter values and evidence must exactly match the Asset capabilities.',
       );
@@ -220,11 +216,10 @@ class SyncEngine {
         'reading_type': readingType.wireName,
         if (odometerKm != null) 'odometer_km': odometerKm,
         if (odometerKm != null) 'km_client_event_uuid': _uuid.v4(),
-        if (kmEvidencePath != null) '_km_evidence_path': kmEvidencePath,
         if (hourMeter != null) 'hour_meter': hourMeter,
         if (hourMeter != null) 'hmr_client_event_uuid': _uuid.v4(),
-        if (hmrEvidencePath != null) '_hmr_evidence_path': hmrEvidencePath,
       },
+      evidencePath: evidencePath,
     );
   }
 
@@ -274,8 +269,7 @@ class SyncEngine {
     required String assignmentId,
     required String odometerKm,
     required String hourMeter,
-    required String kmEvidencePath,
-    required String hmrEvidencePath,
+    required String evidencePath,
   }) async {
     final session = await database.latestLocalDutySession(
       assignmentId: assignmentId,
@@ -298,13 +292,17 @@ class SyncEngine {
       ..['reading_type'] = 'START_READING'
       ..['odometer_km'] = odometerKm
       ..['hour_meter'] = hourMeter
-      ..['_km_evidence_path'] = kmEvidencePath
-      ..['_hmr_evidence_path'] = hmrEvidencePath;
+      ..remove('_km_evidence_path')
+      ..remove('_hmr_evidence_path')
+      ..remove('km_object_reference')
+      ..remove('hmr_object_reference')
+      ..remove('object_reference');
     final now = DateTime.now().toUtc();
     await database.transaction(() async {
       await database.replaceCompoundEventForRetry(
         clientEventUuid: session.startClientEventUuid,
         payloadJson: jsonEncode(payload),
+        evidencePath: evidencePath,
       );
       await database.unblockDutyDependentEvents(session.localSessionId);
       await database.updateLocalDutySession(
@@ -934,15 +932,34 @@ class SyncEngine {
     return 'REQUEST_REJECTED_${error.statusCode}';
   }
 
+  Future<void> _persistSyncPayload(
+    PendingEvent event,
+    Map<String, dynamic> payload,
+  ) {
+    return database.updatePendingPayload(
+      clientEventUuid: event.clientEventUuid,
+      payloadJson: jsonEncode({
+        ...payload,
+        if (event.dutySessionId != null)
+          '_duty_session_id': event.dutySessionId,
+        if (event.dependsOnEventUuid != null)
+          '_depends_on_event_uuid': event.dependsOnEventUuid,
+      }),
+    );
+  }
+
   Future<void> _syncOne(PendingEvent event) async {
     var refreshed = false;
+    var workingPayload = <String, dynamic>{...event.payload};
     while (true) {
       try {
-        var payload = <String, dynamic>{...event.payload};
+        var payload = <String, dynamic>{...workingPayload};
         if (event.eventType == DriverEventType.meterCapture) {
           final kmUuid = payload['km_client_event_uuid'] as String?;
-          final kmPath = payload.remove('_km_evidence_path') as String?;
-          if (kmUuid != null && kmPath != null) {
+          final kmPath = payload['_km_evidence_path'] as String?;
+          if (kmUuid != null &&
+              kmPath != null &&
+              payload['km_object_reference'] == null) {
             try {
               payload['km_object_reference'] = await remote.uploadEvidence(
                 clientEventUuid: kmUuid,
@@ -952,9 +969,15 @@ class SyncEngine {
               throw error.atSyncStage('KM_EVIDENCE_UPLOAD');
             }
           }
+          if (payload.remove('_km_evidence_path') != null) {
+            workingPayload = <String, dynamic>{...payload};
+            await _persistSyncPayload(event, workingPayload);
+          }
           final hmrUuid = payload['hmr_client_event_uuid'] as String?;
-          final hmrPath = payload.remove('_hmr_evidence_path') as String?;
-          if (hmrUuid != null && hmrPath != null) {
+          final hmrPath = payload['_hmr_evidence_path'] as String?;
+          if (hmrUuid != null &&
+              hmrPath != null &&
+              payload['hmr_object_reference'] == null) {
             try {
               payload['hmr_object_reference'] = await remote.uploadEvidence(
                 clientEventUuid: hmrUuid,
@@ -964,8 +987,12 @@ class SyncEngine {
               throw error.atSyncStage('HMR_EVIDENCE_UPLOAD');
             }
           }
+          if (payload.remove('_hmr_evidence_path') != null) {
+            workingPayload = <String, dynamic>{...payload};
+            await _persistSyncPayload(event, workingPayload);
+          }
         }
-        if (event.evidencePath != null) {
+        if (event.evidencePath != null && payload['object_reference'] == null) {
           late final String objectReference;
           try {
             objectReference = await remote.uploadEvidence(
@@ -976,6 +1003,8 @@ class SyncEngine {
             throw error.atSyncStage('EVIDENCE_UPLOAD');
           }
           payload['object_reference'] = objectReference;
+          workingPayload = <String, dynamic>{...payload};
+          await _persistSyncPayload(event, workingPayload);
         }
         if (event.eventType == DriverEventType.maintenanceProof) {
           if (remote is! DriverMaintenanceRemote) {

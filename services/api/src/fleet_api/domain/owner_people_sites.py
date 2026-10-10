@@ -16,6 +16,7 @@ from fleet_api.auth.service import AuthContext
 from fleet_api.db.models import (
     AssetSiteDeployment,
     Assignment,
+    AuthSession,
     CompanyMembership,
     DutySession,
     FleetAsset,
@@ -27,6 +28,7 @@ from fleet_api.db.models import (
 from fleet_api.domain.assets import generated_site_code, normalize_site_code
 from fleet_api.domain.audit import write_audit_log
 from fleet_api.domain.enums import (
+    AuthIdentityProvider,
     DutySessionStatus,
     MembershipRole,
     MembershipStatus,
@@ -54,6 +56,7 @@ class PersonView:
     current_site_id: UUID | None
     current_site_name: str | None
     auth_state: Literal["READY", "PHONE_MISSING", "DUPLICATE_PHONE", "DISABLED"]
+    phone_auth_linked: bool
 
 
 @dataclass(frozen=True)
@@ -212,6 +215,21 @@ class OwnerPeopleSiteService:
             current_site_id,
             current_site_name,
             self._auth_state(membership, user),
+            self._phone_auth_linked(user),
+        )
+
+    def _phone_auth_linked(self, user: User) -> bool:
+        return (
+            self.session.scalar(
+                select(UserAuthIdentity.id)
+                .where(
+                    UserAuthIdentity.user_id == user.id,
+                    UserAuthIdentity.provider == AuthIdentityProvider.FIREBASE_PHONE,
+                    UserAuthIdentity.disabled_at.is_(None),
+                )
+                .limit(1)
+            )
+            is not None
         )
 
     def _normalized_phone_matches(self, normalized_phone: str) -> list[User]:
@@ -382,7 +400,9 @@ class OwnerPeopleSiteService:
                     if user.id != view.user.id
                 ]
                 if collisions:
-                    raise ConflictError("phone already belongs to another Fleet identity")
+                    raise ConflictError(
+                        "This mobile number is already assigned to another active person."
+                    )
                 external_membership = self.session.scalar(
                     select(CompanyMembership.id).where(
                         CompanyMembership.user_id == view.user.id,
@@ -409,6 +429,25 @@ class OwnerPeopleSiteService:
                         entity_type="USER_AUTH_IDENTITY",
                         entity_id=identity.id,
                         new_values={"reason": "PHONE_CHANGE_REQUESTED"},
+                    )
+                sessions = self.session.scalars(
+                    select(AuthSession).where(
+                        AuthSession.user_id == view.user.id,
+                        AuthSession.revoked_at.is_(None),
+                    )
+                ).all()
+                for auth_session in sessions:
+                    auth_session.revoked_at = now
+                    auth_session.revocation_reason = "phone_change_requested"
+                if sessions:
+                    self._audit(
+                        action="AUTH_SESSIONS_REVOKED",
+                        entity_type="USER",
+                        entity_id=view.user.id,
+                        new_values={
+                            "reason": "PHONE_CHANGE_REQUESTED",
+                            "session_count": len(sessions),
+                        },
                     )
                 view.user.phone_number = normalized_phone
                 self._audit(

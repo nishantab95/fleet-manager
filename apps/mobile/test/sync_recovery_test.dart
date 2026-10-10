@@ -102,6 +102,50 @@ void main() {
   });
 
   test(
+    'dual-meter submit retry reuses one persisted evidence upload',
+    () async {
+      final database = LocalDatabase(NativeDatabase.memory());
+      final remote = _ControlledRemote()..submitFailures = 1;
+      final engine = SyncEngine(
+        database: database,
+        remote: remote,
+        installationIdentifier: 'test-device',
+      );
+      const dualMeterAssignment = DriverAssignment(
+        assignmentId: 'dual-assignment',
+        tipperId: 'dual-asset',
+        tipperRegistrationNumber: 'DUAL-12',
+        tipperShortName: 'Dual meter',
+        assetType: 'TIPPER',
+        supportsOdometerKm: true,
+        supportsHourMeter: true,
+        siteId: 'site',
+        siteName: 'Pilot Site',
+        supervisorName: 'Pilot Supervisor',
+      );
+      final id = await engine.enqueueMeterCapture(
+        assignment: dualMeterAssignment,
+        readingType: KmReadingType.startReading,
+        odometerKm: '1000',
+        hourMeter: '200',
+        evidencePath: 'dashboard.jpg',
+      );
+
+      expect(await engine.syncPending(), 0);
+      expect((await database.eventById(id))?.syncState, 'syncFailed');
+      expect(remote.evidenceAttempts, 1);
+
+      expect(await engine.syncPending(), 1);
+      expect(remote.evidenceAttempts, 1);
+      expect(remote.submitAttempts, 2);
+      expect(remote.lastEventPayload?['object_reference'], 'evidence/$id');
+      expect(remote.lastEventPayload, isNot(contains('km_object_reference')));
+      expect(remote.lastEventPayload, isNot(contains('hmr_object_reference')));
+      await database.close();
+    },
+  );
+
+  test(
     'maintenance proof uploads first and survives a retryable submit failure',
     () async {
       final database = LocalDatabase(NativeDatabase.memory());
@@ -186,8 +230,10 @@ class _ControlledRemote implements DriverRemoteApi, DriverMaintenanceRemote {
   bool unauthorizedOnce = false;
   bool commitThenFail = false;
   int submitAttempts = 0;
+  int evidenceAttempts = 0;
   int maintenanceSubmissions = 0;
   Map<String, dynamic>? lastMaintenancePayload;
+  Map<String, dynamic>? lastEventPayload;
   final Set<String> logicalEvents = <String>{};
 
   @override
@@ -206,6 +252,7 @@ class _ControlledRemote implements DriverRemoteApi, DriverMaintenanceRemote {
     required String clientEventUuid,
     required String evidencePath,
   }) async {
+    evidenceAttempts++;
     if (evidenceFailures > 0) {
       evidenceFailures--;
       throw const ApiException(503, 'object storage unavailable');
@@ -219,6 +266,7 @@ class _ControlledRemote implements DriverRemoteApi, DriverMaintenanceRemote {
     required String installationIdentifier,
   }) async {
     submitAttempts++;
+    lastEventPayload = event.payload;
     if (unauthorizedOnce) {
       unauthorizedOnce = false;
       throw const ApiException(401, 'expired');

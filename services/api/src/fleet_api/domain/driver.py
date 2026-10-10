@@ -846,6 +846,7 @@ def create_multi_meter_capture(
     reading_type: KmReadingType,
     device_created_at: datetime,
     device: Device,
+    object_reference: str | None,
     km_client_event_uuid: UUID | None,
     odometer_km: Decimal | str | None,
     km_object_reference: str | None,
@@ -880,6 +881,14 @@ def create_multi_meter_capture(
         raise DomainError("hour-meter value and client event UUID are both required")
     if device.company_id != context.company.id or device.membership_id != context.membership.id:
         raise TenantConsistencyError("device is not owned by the authenticated driver")
+    if object_reference is not None and (
+        km_object_reference is not None or hmr_object_reference is not None
+    ):
+        raise DomainError(
+            "meter capture must use one shared evidence reference or legacy per-meter evidence"
+        )
+    effective_km_reference = object_reference or km_object_reference
+    effective_hmr_reference = object_reference or hmr_object_reference
 
     km_value = (
         _validate_odometer_reading(settings, odometer_km) if odometer_km is not None else None
@@ -956,7 +965,15 @@ def create_multi_meter_capture(
     )
     if reused is not None:
         raise ConflictError("client event UUID is already used by another submission")
-    if km_client_event_uuid is not None:
+    if object_reference is not None:
+        _evidence_for_event(
+            session,
+            context=context,
+            client_event_uuid=capture_group_uuid,
+            object_reference=object_reference,
+            required=True,
+        )
+    elif km_client_event_uuid is not None:
         _evidence_for_event(
             session,
             context=context,
@@ -964,7 +981,7 @@ def create_multi_meter_capture(
             object_reference=km_object_reference,
             required=True,
         )
-    if hmr_client_event_uuid is not None:
+    if object_reference is None and hmr_client_event_uuid is not None:
         _evidence_for_event(
             session,
             context=context,
@@ -1028,7 +1045,7 @@ def create_multi_meter_capture(
             device_created_at=device_created_at,
             reading_type=reading_type,
             reading_value=km_value,
-            object_reference=km_object_reference,
+            object_reference=effective_km_reference,
             device_id=device.id,
             capture_group_uuid=capture_group_uuid,
         )
@@ -1042,7 +1059,7 @@ def create_multi_meter_capture(
             device_created_at=device_created_at,
             reading_type=HourMeterReadingType(reading_type.value),
             reading_value=hmr_value,
-            object_reference=hmr_object_reference,
+            object_reference=effective_hmr_reference,
             device_id=device.id,
             capture_group_uuid=capture_group_uuid,
         )

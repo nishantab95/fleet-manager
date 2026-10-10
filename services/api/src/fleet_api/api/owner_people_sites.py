@@ -52,6 +52,7 @@ def _person_response(view: PersonView) -> OwnerPersonResponse:
         role=view.membership.role,
         status=view.membership.status,
         auth_state=view.auth_state,
+        phone_auth_linked=view.phone_auth_linked,
         sites=[
             OwnerPersonSiteResponse(site_id=site.site_id, site_name=site.site_name)
             for site in view.sites

@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from fleet_api.api.dependencies import get_object_storage, get_otp_provider
 from fleet_api.auth.providers import FakeOtpProvider
 from fleet_api.core.config import Settings
-from fleet_api.db.models import CompanyMembership, User
+from fleet_api.db.models import CompanyMembership, HourMeterReading, KmReading, User
 from fleet_api.db.session import get_db as session_get_db
 from fleet_api.main import create_app
 
@@ -238,24 +238,36 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
                 assert response.status_code == 200
                 return cast(str, response.json()["object_reference"])
 
+            stored_before = len(storage.objects)
+            object_reference = upload(group_id)
+            assert len(storage.objects) == stored_before + 1
+            assert upload(group_id) == object_reference
+            assert len(storage.objects) == stored_before + 1
             payload = {
                 "capture_group_uuid": group_id,
                 "reading_type": reading_type,
                 "device_created_at": captured_at.isoformat(),
                 "installation_identifier": "pilot-device-12",
                 "platform": "ANDROID",
+                "object_reference": object_reference,
                 "km_client_event_uuid": km_event_id,
                 "odometer_km": odometer_km,
-                "km_object_reference": upload(km_event_id),
                 "hmr_client_event_uuid": hmr_event_id,
                 "hour_meter": hour_meter,
-                "hmr_object_reference": upload(hmr_event_id),
             }
             response = client.post("/api/v1/driver/meter-captures", json=payload)
             assert response.status_code == expected_status, response.text
             if expected_status != 200:
                 return []
             assert response.json()["capture_group_uuid"] == group_id
+            typed_references: list[str | None] = []
+            for event_id in response.json()["event_ids"]:
+                typed = db_session.get(KmReading, UUID(event_id))
+                if typed is None:
+                    typed = db_session.get(HourMeterReading, UUID(event_id))
+                assert typed is not None
+                typed_references.append(typed.object_reference)
+            assert typed_references == [object_reference, object_reference]
             retry = client.post("/api/v1/driver/meter-captures", json=payload)
             assert retry.status_code == 200, retry.text
             assert retry.json()["status"] == "already_accepted"

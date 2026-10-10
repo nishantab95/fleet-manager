@@ -140,7 +140,7 @@ export function InlineFeedback({
       className={`owner-feedback ${error ? "owner-feedback--error" : "owner-feedback--success"}`}
       role={error ? "alert" : "status"}
     >
-      {error ?? success}
+      {error || success}
     </div>
   );
 }

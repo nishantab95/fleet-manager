@@ -55,6 +55,10 @@ FLEET_JWT_SIGNING_KEY=<independent-random-secret-at-least-32-characters>
 
 The API and mobile build must reference the same environment-specific Firebase project. Do not put Firebase private keys in `FLEET_JWT_SIGNING_KEY`; Fleet JWT signing and Firebase credentials are independent trust domains.
 
+For local testing from `main`, keep backend settings in the gitignored root `.env` and start the API normally. Set `FLEET_AUTH_MODE=firebase`, `FLEET_FIREBASE_PROJECT_ID`, and either Application Default Credentials or `GOOGLE_APPLICATION_CREDENTIALS`; keep the existing independent Fleet JWT signing key. Do not switch the file to Firebase mode until all of those values are available, because an incomplete Firebase configuration intentionally fails closed.
+
+The Owner launcher remains independent of Flutter Firebase configuration. `Start Fleet Manager Owner.bat` only starts the Next.js application and reads `FLEET_API_UPSTREAM_URL` from `apps/web/.env.local`; it does not read Android API keys, app IDs, sender IDs, or `google-services.json`. Point it at the intended healthy API without copying mobile or backend credentials into the web directory.
+
 For local pilot development, use only the established controlled settings:
 
 ```text
@@ -86,7 +90,7 @@ Migration `0023_user_auth_identity` is additive. Do not reset the Pilot database
 4. Confirm only server-returned memberships can be selected and cross-tenant choices are rejected.
 5. Confirm logout signs out both Fleet and Firebase, while a different Driver cannot see the previous Driver's offline queue or assignment.
 6. Test real-device Android delivery in a controlled non-production environment, including resend, wrong/expired code, quota/rate limiting, no network, app restart, and the release signing certificate.
-7. Review audit logs for `AUTH_IDENTITY_LINKED`, `LOGIN_SUCCESS`, `LOGIN_DENIED`, `MEMBERSHIP_ACCESS_DENIED`, `AUTH_IDENTITY_DISABLED`, `PHONE_CHANGE_REQUESTED`, and `LOGOUT`; verify no token, OTP, credential, or full phone is recorded.
+7. Review audit logs for `AUTH_IDENTITY_LINKED`, `LOGIN_SUCCESS`, `LOGIN_DENIED`, `MEMBERSHIP_ACCESS_DENIED`, `AUTH_IDENTITY_DISABLED`, `AUTH_SESSIONS_REVOKED`, `PHONE_CHANGE_REQUESTED`, and `LOGOUT`; verify no token, OTP, credential, or full phone is recorded.
 
 Do not switch the production deployment to Firebase mode until credentials, signing fingerprints, quotas, monitoring, rollback procedure, and the production migration have been reviewed and approved.
 

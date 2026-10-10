@@ -131,6 +131,8 @@ def test_owner_people_crud_duplicate_and_tenant_boundaries(
         )
         assert created.status_code == 201
         person_id = created.json()["membership_id"]
+        user_id = created.json()["user_id"]
+        assert created.json()["phone_auth_linked"] is False
         second_role = client.post(
             "/api/v1/owner/people/invite",
             json={
@@ -141,6 +143,7 @@ def test_owner_people_crud_duplicate_and_tenant_boundaries(
         )
         assert second_role.status_code == 201
         assert second_role.json()["role"] == "SUPERVISOR"
+        second_role_id = second_role.json()["membership_id"]
         assert (
             client.post(
                 "/api/v1/owner/people/invite",
@@ -154,7 +157,53 @@ def test_owner_people_crud_duplicate_and_tenant_boundaries(
         )
         assert updated.status_code == 200
         assert updated.json()["display_name"] == "Edited Driver"
+        local_digits = f"9{uuid4().int % 1_000_000_000:09d}"
+        friendly_phone = f"{local_digits[:5]} {local_digits[5:]}"
+        normalized_phone = f"+91{local_digits}"
+        phone_updated = client.patch(
+            f"/api/v1/owner/people/{person_id}",
+            json={"phone": friendly_phone},
+        )
+        assert phone_updated.status_code == 200, phone_updated.text
+        assert phone_updated.json()["phone"] == normalized_phone
+        assert phone_updated.json()["user_id"] == user_id
+        reloaded = client.get(f"/api/v1/owner/people/{person_id}")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["phone"] == normalized_phone
+        matching_roles = [
+            item for item in client.get("/api/v1/owner/people").json() if item["user_id"] == user_id
+        ]
+        assert {item["membership_id"] for item in matching_roles} == {
+            person_id,
+            second_role_id,
+        }
+        assert {item["phone"] for item in matching_roles} == {normalized_phone}
+
+        invalid_phone = client.patch(
+            f"/api/v1/owner/people/{person_id}",
+            json={"phone": "not a phone"},
+        )
+        assert invalid_phone.status_code == 422
+        foreign_identity = db_session.get(User, foreign.user_id)
+        assert foreign_identity is not None
+        foreign_identity.phone_number = "+919199998888"
+        db_session.flush()
+        duplicate_phone = client.patch(
+            f"/api/v1/owner/people/{person_id}",
+            json={"phone": foreign_identity.phone_number},
+        )
+        assert duplicate_phone.status_code == 409
+        assert duplicate_phone.json()["detail"]["message"] == (
+            "This mobile number is already assigned to another active person."
+        )
         assert client.get(f"/api/v1/owner/people/{foreign.id}").status_code == 404
+        assert (
+            client.patch(
+                f"/api/v1/owner/people/{foreign.id}",
+                json={"phone": "+919111111111"},
+            ).status_code
+            == 404
+        )
         inactive = client.post(f"/api/v1/owner/people/{person_id}/deactivate")
         assert inactive.status_code == 200
         assert inactive.json()["status"] == "INACTIVE"
@@ -410,6 +459,13 @@ def test_owner_lists_operational_volume_and_non_owner_is_forbidden(
         assert len(client.get("/api/v1/owner/sites").json()) >= 51
         assert forbidden.get("/api/v1/owner/people").status_code == 403
         assert forbidden.get("/api/v1/owner/sites").status_code == 403
+        assert (
+            forbidden.patch(
+                f"/api/v1/owner/people/{value(tenant_records, 'driver_a', CompanyMembership).id}",
+                json={"phone": "+919122223333"},
+            ).status_code
+            == 403
+        )
     finally:
         client.close()
         forbidden.close()

@@ -378,14 +378,20 @@ describe("Owner management panels", () => {
 
   it("shows phone-login readiness and submits a guarded identity change", async () => {
     const props = common();
-    const readyDriver: OwnerPerson = { ...activeDriver, auth_state: "READY" };
+    const readyDriver: OwnerPerson = { ...activeDriver, auth_state: "READY", phone_auth_linked: true };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<PeoplePanel assets={[assignedTipper]} people={[readyDriver]} sites={[siteOne]} {...props} />);
 
     const row = within(screen.getByRole("table", { name: "People" })).getByRole("row", { name: /Operator Active/ });
-    expect(row).toHaveTextContent("Phone login: Ready");
+    expect(row).toHaveTextContent("Phone login: Linked");
 
     fireEvent.click(within(row).getByRole("button", { name: "Manage person" }));
-    fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "+919100000099" } });
+    expect(within(screen.getByRole("dialog")).getByText("Phone login: Linked")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "91000 00099" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save identity" }));
+    expect(props.apiRequest).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Save identity" }));
 
     await waitFor(() => expect(props.apiRequest).toHaveBeenCalledWith(
@@ -393,7 +399,28 @@ describe("Owner management panels", () => {
       expect.objectContaining({ method: "PATCH" }),
     ));
     const payload = JSON.parse(vi.mocked(props.apiRequest).mock.calls[0][1]?.body as string);
-    expect(payload).toEqual({ display_name: "Operator Active", phone: "+919100000099" });
+    expect(payload).toEqual({ display_name: "Operator Active", phone: "91000 00099" });
+    expect(confirm).toHaveBeenCalledWith("Changing this phone number will sign the person out and require Firebase phone verification on the new number. Continue?");
+    expect(await screen.findByText("Phone updated. New number must be verified on next login.")).toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it("updates an unlinked phone without confirmation and shows duplicate errors", async () => {
+    const apiRequest = vi.fn().mockRejectedValue(new Error("This mobile number is already assigned to another active person."));
+    const props = common(apiRequest);
+    const unlinkedDriver: OwnerPerson = { ...activeDriver, auth_state: "READY", phone_auth_linked: false };
+    const confirm = vi.spyOn(window, "confirm");
+    render(<PeoplePanel assets={[assignedTipper]} people={[unlinkedDriver]} sites={[siteOne]} {...props} />);
+
+    const row = within(screen.getByRole("table", { name: "People" })).getByRole("row", { name: /Operator Active/ });
+    expect(row).toHaveTextContent("Phone login: Phone verification required");
+    fireEvent.click(within(row).getByRole("button", { name: "Manage person" }));
+    fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "+919100000099" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save identity" }));
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(await screen.findByText("This mobile number is already assigned to another active person.")).toBeInTheDocument();
+    confirm.mockRestore();
   });
 
   it("routes People and Site Details entry points to the same person or asset manager", () => {

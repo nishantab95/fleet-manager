@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,13 +15,18 @@ from fleet_api.auth.providers import FakeOtpProvider, UnavailableOtpProvider
 from fleet_api.auth.service import AuthService
 from fleet_api.core.config import Settings
 from fleet_api.db.models import (
+    Assignment,
     AuditLog,
+    AuthSession,
     Company,
     CompanyMembership,
+    FleetAsset,
+    Site,
     User,
     UserAuthIdentity,
 )
 from fleet_api.db.session import get_db as session_get_db
+from fleet_api.domain.assignments import create_assignment
 from fleet_api.domain.enums import (
     AuthIdentityProvider,
     MembershipRole,
@@ -306,7 +311,7 @@ def test_firebase_subject_cannot_relink_or_replace_an_active_link(
     )
 
 
-def test_owner_phone_change_disables_old_identity_and_preserves_audit(
+def test_owner_phone_change_revokes_sessions_and_requires_new_firebase_verification(
     db_session: Session, tenant_records: dict[str, object]
 ) -> None:
     owner = _user(db_session, "Owner A")
@@ -334,6 +339,42 @@ def test_owner_phone_change_disables_old_identity_and_preserves_audit(
     )
     db_session.add(old_identity)
     db_session.flush()
+    driver_auth = _service(
+        db_session,
+        FakeFirebasePhoneAuthProvider(_identity("firebase-old-driver", driver.phone_number)),
+    )
+    driver_pre_session, _ = driver_auth.verify_firebase_identity(id_token="old-driver-token")
+    driver_auth.create_session(
+        pre_session_token=driver_pre_session,
+        membership_id=driver_membership.id,
+    )
+    driver_session = db_session.scalar(
+        select(AuthSession).where(AuthSession.membership_id == driver_membership.id)
+    )
+    assert driver_session is not None
+
+    supervisor_membership = tenant_records["supervisor_a"]
+    asset = tenant_records["tipper_a"]
+    site = tenant_records["site_a"]
+    assert isinstance(supervisor_membership, CompanyMembership)
+    assert isinstance(asset, FleetAsset)
+    assert isinstance(site, Site)
+    assignment = create_assignment(
+        db_session,
+        company_id=driver_membership.company_id,
+        driver_membership_id=driver_membership.id,
+        supervisor_membership_id=supervisor_membership.id,
+        asset_id=asset.id,
+        site_id=site.id,
+        starts_at=datetime.now(UTC) - timedelta(minutes=1),
+        ends_at=None,
+        regular_duty_minutes=600,
+    )
+    membership_ids_before = set(
+        db_session.scalars(
+            select(CompanyMembership.id).where(CompanyMembership.user_id == driver.id)
+        ).all()
+    )
 
     people = OwnerPeopleSiteService(
         db_session,
@@ -350,14 +391,56 @@ def test_owner_phone_change_disables_old_identity_and_preserves_audit(
     assert driver.phone_number == "+919876540043"
     assert old_identity.disabled_at is not None
     assert old_identity.disabled_reason == "phone_change_requested"
+    assert driver_session.revoked_at is not None
+    assert driver_session.revocation_reason == "phone_change_requested"
+    preserved_assignment = db_session.get(Assignment, assignment.id)
+    assert preserved_assignment is not None
+    assert preserved_assignment.driver_membership_id == driver_membership.id
+    assert (
+        set(
+            db_session.scalars(
+                select(CompanyMembership.id).where(CompanyMembership.user_id == driver.id)
+            ).all()
+        )
+        == membership_ids_before
+    )
+    assert people.get_person(driver_membership.id).phone_auth_linked is False
+
+    with pytest.raises(IdentityLinkConflictError):
+        _service(
+            db_session,
+            FakeFirebasePhoneAuthProvider(_identity("firebase-old-driver", "+919876540042")),
+        ).verify_firebase_identity(id_token="old-driver-token-again")
+
+    new_driver_auth = _service(
+        db_session,
+        FakeFirebasePhoneAuthProvider(_identity("firebase-new-driver", "+919876540043")),
+    )
+    new_pre_session, _ = new_driver_auth.verify_firebase_identity(id_token="new-driver-token")
+    new_tokens = new_driver_auth.create_session(
+        pre_session_token=new_pre_session,
+        membership_id=driver_membership.id,
+    )
+    assert new_tokens.context.user.id == driver.id
+    assert people.get_person(driver_membership.id).phone_auth_linked is True
     actions = set(
         db_session.scalars(
             select(AuditLog.action).where(
-                AuditLog.action.in_(("AUTH_IDENTITY_DISABLED", "PHONE_CHANGE_REQUESTED"))
+                AuditLog.action.in_(
+                    (
+                        "AUTH_IDENTITY_DISABLED",
+                        "AUTH_SESSIONS_REVOKED",
+                        "PHONE_CHANGE_REQUESTED",
+                    )
+                )
             )
         ).all()
     )
-    assert actions == {"AUTH_IDENTITY_DISABLED", "PHONE_CHANGE_REQUESTED"}
+    assert actions == {
+        "AUTH_IDENTITY_DISABLED",
+        "AUTH_SESSIONS_REVOKED",
+        "PHONE_CHANGE_REQUESTED",
+    }
 
 
 def test_firebase_membership_selection_cannot_cross_tenants(

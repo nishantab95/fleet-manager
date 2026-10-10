@@ -760,6 +760,7 @@ class DriverHomeScreen extends StatefulWidget {
     required this.assignment,
     this.duty = const DriverDutyState.none(),
     this.onRefreshState,
+    this.pickImage,
     required this.onSignOut,
     super.key,
   });
@@ -768,6 +769,7 @@ class DriverHomeScreen extends StatefulWidget {
   final DriverAssignment? assignment;
   final DriverDutyState duty;
   final Future<String?> Function()? onRefreshState;
+  final Future<XFile?> Function(ImageSource source)? pickImage;
   final Future<void> Function() onSignOut;
 
   @override
@@ -1032,17 +1034,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     if (type == null || !mounted) return;
     final result = await showDialog<_KmCapture>(
       context: context,
-      builder: (context) => _KmDialog(type: type),
+      builder: (context) => _KmDialog(
+        type: type,
+        captureEvidence: () async =>
+            (await _pickEvidence(mustChoose: true))?.path,
+      ),
     );
-    if (result == null) {
-      return;
-    }
-    final photo = await _pickEvidence(mustChoose: true);
-    if (photo == null) {
-      return;
-    }
+    if (result == null) return;
     if (_duty.canCorrectStart && result.type == KmReadingType.startReading) {
-      await _correctStart(result.value, photo.path, hourMeter: false);
+      await _correctStart(result.value, result.evidencePath, hourMeter: false);
       return;
     }
     await _queue(
@@ -1051,7 +1051,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         'reading_type': result.type.wireName,
         'reading_value': result.value,
       },
-      evidencePath: photo.path,
+      evidencePath: result.evidencePath,
     );
   }
 
@@ -1060,13 +1060,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     if (type == null || !mounted) return;
     final result = await showDialog<_KmCapture>(
       context: context,
-      builder: (context) => _KmDialog(type: type, hourMeter: true),
+      builder: (context) => _KmDialog(
+        type: type,
+        hourMeter: true,
+        captureEvidence: () async =>
+            (await _pickEvidence(mustChoose: true))?.path,
+      ),
     );
     if (result == null) return;
-    final photo = await _pickEvidence(mustChoose: true);
-    if (photo == null) return;
     if (_duty.canCorrectStart && result.type == KmReadingType.startReading) {
-      await _correctStart(result.value, photo.path, hourMeter: true);
+      await _correctStart(result.value, result.evidencePath, hourMeter: true);
       return;
     }
     await _queue(
@@ -1075,7 +1078,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         'reading_type': result.type.wireName,
         'reading_value': result.value,
       },
-      evidencePath: photo.path,
+      evidencePath: result.evidencePath,
     );
   }
 
@@ -1084,13 +1087,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     if (type == null || !mounted) return;
     final result = await showDialog<_DualMeterCapture>(
       context: context,
-      builder: (context) => _DualMeterDialog(type: type),
+      builder: (context) => _DualMeterDialog(
+        type: type,
+        captureEvidence: () async =>
+            (await _pickEvidence(mustChoose: true))?.path,
+      ),
     );
     if (result == null) return;
-    final kmPhoto = await _pickEvidence(mustChoose: true);
-    if (kmPhoto == null) return;
-    final hmrPhoto = await _pickEvidence(mustChoose: true);
-    if (hmrPhoto == null) return;
     final assignment = widget.assignment;
     if (assignment == null) return;
     if (_duty.canCorrectStart && type == KmReadingType.startReading) {
@@ -1100,8 +1103,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           assignmentId: assignment.assignmentId,
           odometerKm: result.odometerKm,
           hourMeter: result.hourMeter,
-          kmEvidencePath: kmPhoto.path,
-          hmrEvidencePath: hmrPhoto.path,
+          evidencePath: result.evidencePath,
         );
         await _refreshQueue();
         await _refreshDuty();
@@ -1120,8 +1122,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         readingType: type,
         odometerKm: result.odometerKm,
         hourMeter: result.hourMeter,
-        kmEvidencePath: kmPhoto.path,
-        hmrEvidencePath: hmrPhoto.path,
+        evidencePath: result.evidencePath,
       );
       await _refreshQueue();
       await _refreshDuty();
@@ -1354,7 +1355,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
     if (source == null) return null;
     try {
-      return await _picker.pickImage(source: source, imageQuality: 85);
+      return widget.pickImage != null
+          ? await widget.pickImage!(source)
+          : await _picker.pickImage(source: source, imageQuality: 85);
     } on PlatformException catch (error) {
       if (mounted) {
         _showMessage(
@@ -2078,23 +2081,26 @@ class _ActionButton extends StatelessWidget {
 }
 
 class _KmCapture {
-  const _KmCapture(this.type, this.value);
+  const _KmCapture(this.type, this.value, this.evidencePath);
 
   final KmReadingType type;
   final String value;
+  final String evidencePath;
 }
 
 class _DualMeterCapture {
-  const _DualMeterCapture(this.odometerKm, this.hourMeter);
+  const _DualMeterCapture(this.odometerKm, this.hourMeter, this.evidencePath);
 
   final String odometerKm;
   final String hourMeter;
+  final String evidencePath;
 }
 
 class _DualMeterDialog extends StatefulWidget {
-  const _DualMeterDialog({required this.type});
+  const _DualMeterDialog({required this.type, required this.captureEvidence});
 
   final KmReadingType type;
+  final Future<String?> Function() captureEvidence;
 
   @override
   State<_DualMeterDialog> createState() => _DualMeterDialogState();
@@ -2104,6 +2110,8 @@ class _DualMeterDialogState extends State<_DualMeterDialog> {
   final _km = TextEditingController();
   final _hours = TextEditingController();
   String? _error;
+  String? _evidencePath;
+  bool _capturing = false;
 
   bool _valid(String raw, double maximum) {
     final value = raw.trim();
@@ -2122,6 +2130,19 @@ class _DualMeterDialogState extends State<_DualMeterDialog> {
     super.dispose();
   }
 
+  Future<void> _capturePhoto() async {
+    setState(() => _capturing = true);
+    final path = await widget.captureEvidence();
+    if (!mounted) return;
+    setState(() {
+      _capturing = false;
+      if (path != null) {
+        _evidencePath = path;
+        _error = null;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final prefix = widget.type == KmReadingType.startReading ? 'START' : 'END';
@@ -2130,6 +2151,34 @@ class _DualMeterDialogState extends State<_DualMeterDialog> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Dashboard / meter photo',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _capturing ? null : _capturePhoto,
+              icon: const Icon(Icons.add_a_photo_outlined),
+              label: Text(
+                _capturing
+                    ? 'OPENING CAMERA…'
+                    : _evidencePath == null
+                    ? 'TAKE DASHBOARD PHOTO'
+                    : 'RETAKE DASHBOARD PHOTO',
+              ),
+            ),
+          ),
+          if (_evidencePath != null)
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('✓ Dashboard photo captured'),
+            ),
+          const SizedBox(height: 12),
           TextField(
             controller: _km,
             decoration: const InputDecoration(labelText: 'Odometer KM'),
@@ -2167,12 +2216,20 @@ class _DualMeterDialogState extends State<_DualMeterDialog> {
               );
               return;
             }
+            if (_evidencePath == null) {
+              setState(() => _error = 'Dashboard / meter photo is required.');
+              return;
+            }
             Navigator.pop(
               context,
-              _DualMeterCapture(_km.text.trim(), _hours.text.trim()),
+              _DualMeterCapture(
+                _km.text.trim(),
+                _hours.text.trim(),
+                _evidencePath!,
+              ),
             );
           },
-          child: const Text('CONTINUE'),
+          child: Text('$prefix DUTY'),
         ),
       ],
     );
@@ -2180,10 +2237,15 @@ class _DualMeterDialogState extends State<_DualMeterDialog> {
 }
 
 class _KmDialog extends StatefulWidget {
-  const _KmDialog({required this.type, this.hourMeter = false});
+  const _KmDialog({
+    required this.type,
+    required this.captureEvidence,
+    this.hourMeter = false,
+  });
 
   final KmReadingType type;
   final bool hourMeter;
+  final Future<String?> Function() captureEvidence;
 
   @override
   State<_KmDialog> createState() => _KmDialogState();
@@ -2192,6 +2254,8 @@ class _KmDialog extends StatefulWidget {
 class _KmDialogState extends State<_KmDialog> {
   final _value = TextEditingController();
   String? _error;
+  String? _evidencePath;
+  bool _capturing = false;
 
   String? _validateReading(String raw) {
     final value = raw.trim();
@@ -2218,6 +2282,19 @@ class _KmDialogState extends State<_KmDialog> {
     super.dispose();
   }
 
+  Future<void> _capturePhoto() async {
+    setState(() => _capturing = true);
+    final path = await widget.captureEvidence();
+    if (!mounted) return;
+    setState(() {
+      _capturing = false;
+      if (path != null) {
+        _evidencePath = path;
+        _error = null;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -2231,6 +2308,37 @@ class _KmDialogState extends State<_KmDialog> {
                 : 'END ${widget.hourMeter ? 'HMR' : 'KM'}',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              widget.hourMeter
+                  ? 'Dashboard / hour meter photo'
+                  : 'Dashboard / meter photo',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _capturing ? null : _capturePhoto,
+              icon: const Icon(Icons.add_a_photo_outlined),
+              label: Text(
+                _capturing
+                    ? 'OPENING CAMERA…'
+                    : _evidencePath == null
+                    ? 'TAKE DASHBOARD PHOTO'
+                    : 'RETAKE DASHBOARD PHOTO',
+              ),
+            ),
+          ),
+          if (_evidencePath != null)
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('✓ Dashboard photo captured'),
+            ),
+          const SizedBox(height: 12),
           TextField(
             controller: _value,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -2262,9 +2370,20 @@ class _KmDialogState extends State<_KmDialog> {
               setState(() => _error = error);
               return;
             }
-            Navigator.pop(context, _KmCapture(widget.type, _value.text.trim()));
+            if (_evidencePath == null) {
+              setState(() => _error = 'Dashboard / meter photo is required.');
+              return;
+            }
+            Navigator.pop(
+              context,
+              _KmCapture(widget.type, _value.text.trim(), _evidencePath!),
+            );
           },
-          child: const Text('CONTINUE'),
+          child: Text(
+            widget.type == KmReadingType.startReading
+                ? 'START DUTY'
+                : 'END DUTY',
+          ),
         ),
       ],
     );

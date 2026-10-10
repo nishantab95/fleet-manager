@@ -150,16 +150,14 @@ void main() {
         readingType: KmReadingType.startReading,
         odometerKm: '42150',
         hourMeter: '8421.3',
-        kmEvidencePath: 'start-km.jpg',
-        hmrEvidencePath: 'start-hmr.jpg',
+        evidencePath: 'start-dashboard.jpg',
       );
       final endGroup = await engine.enqueueMeterCapture(
         assignment: assignment,
         readingType: KmReadingType.endReading,
         odometerKm: '42280',
         hourMeter: '8430.8',
-        kmEvidencePath: 'end-km.jpg',
-        hmrEvidencePath: 'end-hmr.jpg',
+        evidencePath: 'end-dashboard.jpg',
       );
       expect(startGroup, isNot(endGroup));
       expect(await engine.pendingCount(), 2);
@@ -190,11 +188,17 @@ void main() {
           payload['km_client_event_uuid'],
           isNot(payload['hmr_client_event_uuid']),
         );
-        expect(payload['km_object_reference'], isNotNull);
-        expect(payload['hmr_object_reference'], isNotNull);
+        expect(payload['object_reference'], isNotNull);
+        expect(payload, isNot(contains('km_object_reference')));
+        expect(payload, isNot(contains('hmr_object_reference')));
         expect(payload, isNot(contains('_km_evidence_path')));
         expect(payload, isNot(contains('_hmr_evidence_path')));
       }
+      expect(remote.evidenceEventUuids, [startGroup, endGroup]);
+      expect(remote.evidencePaths, [
+        'start-dashboard.jpg',
+        'end-dashboard.jpg',
+      ]);
       expect(
         (await engine.localDutyState(assignment.assignmentId)).localState,
         LocalDutyState.closedConfirmed,
@@ -451,6 +455,8 @@ class _RecordingRemote implements DriverRemoteApi, DriverDutyLookup {
   final String startErrorCode;
   final List<DriverEventType> eventTypes = <DriverEventType>[];
   final List<Map<String, dynamic>> payloads = <Map<String, dynamic>>[];
+  final List<String> evidenceEventUuids = <String>[];
+  final List<String> evidencePaths = <String>[];
   var _startAttempts = 0;
 
   @override
@@ -471,7 +477,11 @@ class _RecordingRemote implements DriverRemoteApi, DriverDutyLookup {
   Future<String> uploadEvidence({
     required String clientEventUuid,
     required String evidencePath,
-  }) async => 'evidence/$clientEventUuid';
+  }) async {
+    evidenceEventUuids.add(clientEventUuid);
+    evidencePaths.add(evidencePath);
+    return 'evidence/$clientEventUuid';
+  }
 
   @override
   Future<void> submitEvent({

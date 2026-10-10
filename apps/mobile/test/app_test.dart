@@ -1,6 +1,7 @@
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:fleet_manager_mobile/app.dart';
 import 'package:fleet_manager_mobile/data/api_client.dart';
@@ -181,32 +182,83 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final harness = _Harness();
     addTearDown(harness.close);
+    var photoCalls = 0;
+    Future<XFile?> pickImage(ImageSource source) async {
+      photoCalls++;
+      return XFile('dashboard-$photoCalls.jpg');
+    }
 
     await _pumpDriver(
       tester,
       harness.dependencies,
       assignment: _tipper,
       duty: const DriverDutyState.none(),
+      pickImage: pickImage,
     );
     await tester.tap(find.text('START DUTY'));
     await tester.pumpAndSettle();
     expect(find.text('START READINGS'), findsOneWidget);
     expect(find.text('Odometer KM'), findsOneWidget);
     expect(find.text('Hour Meter / HMR'), findsOneWidget);
-    await tester.tap(find.text('CANCEL'));
+    expect(find.text('Dashboard / meter photo'), findsOneWidget);
+    await tester.tap(find.text('TAKE DASHBOARD PHOTO'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Take Photo'));
+    await tester.pumpAndSettle();
+    expect(find.text('✓ Dashboard photo captured'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, '42150');
+    await tester.enterText(find.byType(TextField).last, '8421.3');
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('START DUTY'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(photoCalls, 1);
 
     await _pumpDriver(
       tester,
       harness.dependencies,
       assignment: _tipper,
       duty: const DriverDutyState(status: DriverDutyStatus.active),
+      pickImage: pickImage,
     );
     await tester.tap(find.text('END DUTY'));
     await tester.pumpAndSettle();
     expect(find.text('END READINGS'), findsOneWidget);
     expect(find.text('Odometer KM'), findsOneWidget);
     expect(find.text('Hour Meter / HMR'), findsOneWidget);
+    await tester.tap(find.text('TAKE DASHBOARD PHOTO'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Take Photo'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '42280');
+    await tester.enterText(find.byType(TextField).last, '8430.8');
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('END DUTY'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(photoCalls, 2);
+    final captures = (await harness.database.allEventsForDiagnostics())
+        .where((event) => event.eventType == 'METER_CAPTURE')
+        .toList();
+    expect(captures, hasLength(2));
+    expect(captures.map((event) => event.evidencePath), [
+      'dashboard-1.jpg',
+      'dashboard-2.jpg',
+    ]);
+    expect(
+      captures.every(
+        (event) =>
+            !event.payloadJson.contains('_km_evidence_path') &&
+            !event.payloadJson.contains('_hmr_evidence_path'),
+      ),
+      isTrue,
+    );
   });
 
   testWidgets(
@@ -266,6 +318,12 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final harness = _Harness();
     addTearDown(harness.close);
+    var photoCalls = 0;
+    Future<XFile?> pickImage(ImageSource source) async {
+      photoCalls++;
+      return XFile('hmr-dashboard-$photoCalls.jpg');
+    }
+
     const rentedTracked = DriverAssignment(
       assignmentId: 'rented-tracked-assignment',
       tipperId: 'rented-excavator',
@@ -286,25 +344,52 @@ void main() {
       harness.dependencies,
       assignment: rentedTracked,
       duty: const DriverDutyState.none(),
+      pickImage: pickImage,
     );
     await tester.tap(find.text('START DUTY'));
     await tester.pumpAndSettle();
     expect(find.text('START HMR'), findsOneWidget);
     expect(find.text('Odometer KM'), findsNothing);
-    await tester.tap(find.text('CANCEL'));
+    expect(find.text('Dashboard / hour meter photo'), findsOneWidget);
+    await tester.tap(find.text('TAKE DASHBOARD PHOTO'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Take Photo'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '500.5');
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('START DUTY'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(photoCalls, 1);
 
     await _pumpDriver(
       tester,
       harness.dependencies,
       assignment: rentedTracked,
       duty: const DriverDutyState(status: DriverDutyStatus.active),
+      pickImage: pickImage,
     );
     expect(find.text('MAINTENANCE'), findsNothing);
     await tester.tap(find.text('END DUTY'));
     await tester.pumpAndSettle();
     expect(find.text('END HMR'), findsOneWidget);
     expect(find.text('Odometer KM'), findsNothing);
+    await tester.tap(find.text('TAKE DASHBOARD PHOTO'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Take Photo'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '510.5');
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('END DUTY'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(photoCalls, 2);
   });
 
   testWidgets('machinery duty start and end require the matching HMR', (
@@ -507,7 +592,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '5676543455.81');
     await tester.enterText(find.byType(TextField).last, '1250.25');
-    await tester.tap(find.text('CONTINUE'));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('START DUTY'),
+      ),
+    );
     await tester.pump();
 
     expect(
@@ -630,6 +720,7 @@ Future<void> _pumpDriver(
   DriverAppDependencies dependencies, {
   required DriverAssignment? assignment,
   required DriverDutyState duty,
+  Future<XFile?> Function(ImageSource source)? pickImage,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -637,6 +728,7 @@ Future<void> _pumpDriver(
         dependencies: dependencies,
         assignment: assignment,
         duty: duty,
+        pickImage: pickImage,
         onSignOut: () async {},
       ),
     ),

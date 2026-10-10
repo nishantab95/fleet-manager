@@ -387,6 +387,7 @@ def submit_meter_capture(
             reading_type=payload.reading_type,
             device_created_at=payload.device_created_at,
             device=device,
+            object_reference=payload.object_reference,
             km_client_event_uuid=payload.km_client_event_uuid,
             odometer_km=payload.odometer_km,
             km_object_reference=payload.km_object_reference,

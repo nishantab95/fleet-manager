@@ -407,6 +407,7 @@ class OwnerPersonResponse(BaseModel):
     role: MembershipRole
     status: MembershipStatus
     auth_state: Literal["READY", "PHONE_MISSING", "DUPLICATE_PHONE", "DISABLED"]
+    phone_auth_linked: bool
     sites: list[OwnerPersonSiteResponse]
     has_active_assignment: bool
     has_active_duty: bool
@@ -597,6 +598,7 @@ class DriverMeterCaptureRequest(BaseModel):
     device_created_at: datetime
     installation_identifier: str = Field(min_length=1, max_length=200)
     platform: DevicePlatform
+    object_reference: str | None = Field(default=None, max_length=500)
     km_client_event_uuid: UUID | None = None
     odometer_km: Decimal | str | None = None
     km_object_reference: str | None = Field(default=None, max_length=500)

@@ -393,19 +393,24 @@ export function FleetPanel({ assets, people = [], sites = [], apiRequest, reload
   );
 }
 
-type PersonGroup = { userId: string; phone: string; displayName: string; authState: string; memberships: OwnerPerson[] };
+type PersonGroup = { userId: string; phone: string; displayName: string; authState: string; phoneAuthLinked: boolean; memberships: OwnerPerson[] };
 type PeopleSort = "name" | "phone" | "roles" | "lifecycle" | "asset" | "site" | "status";
 
 function authStateLabel(value: string) {
   return ({ READY: "Ready", PHONE_MISSING: "Phone missing", DUPLICATE_PHONE: "Duplicate phone", DISABLED: "Disabled" } as Record<string, string>)[value] ?? "Unavailable";
 }
 
+function phoneLoginLabel(group: PersonGroup) {
+  if (group.authState !== "READY") return authStateLabel(group.authState);
+  return group.phoneAuthLinked ? "Linked" : "Phone verification required";
+}
+
 function personGroups(people: OwnerPerson[]): PersonGroup[] {
   const groups = new Map<string, PersonGroup>();
   for (const membership of people) {
-    const group = groups.get(membership.user_id) ?? { userId: membership.user_id, phone: membership.phone, displayName: membership.display_name, authState: membership.auth_state ?? "READY", memberships: [] };
+    const group = groups.get(membership.user_id) ?? { userId: membership.user_id, phone: membership.phone, displayName: membership.display_name, authState: membership.auth_state ?? "READY", phoneAuthLinked: membership.phone_auth_linked ?? false, memberships: [] };
     group.memberships.push(membership);
-    if (membership.status === "ACTIVE") { group.displayName = membership.display_name; group.authState = membership.auth_state ?? "READY"; }
+    if (membership.status === "ACTIVE") { group.displayName = membership.display_name; group.authState = membership.auth_state ?? "READY"; group.phoneAuthLinked = membership.phone_auth_linked ?? false; }
     groups.set(membership.user_id, group);
   }
   return [...groups.values()];
@@ -440,8 +445,11 @@ export function PeoplePanel({ people, assets = [], apiRequest, reload, setError,
   const saveIdentity = async (event: FormEvent) => {
     event.preventDefault();
     if (!editing) return;
+    const phoneChanged = editingPhone.trim() !== editing.phone.trim();
+    if (phoneChanged && editing.phoneAuthLinked && !window.confirm("Changing this phone number will sign the person out and require Firebase phone verification on the new number. Continue?")) return;
     const membership = editing.memberships.find((item) => item.status === "ACTIVE") ?? editing.memberships[0];
-    const ok = await mutation.run("Person identity updated.", () => apiRequest(`/api/v1/owner/people/${membership.membership_id}`, { method: "PATCH", body: JSON.stringify({ display_name: editingName, phone: editingPhone }) }));
+    const success = phoneChanged ? "Phone updated. New number must be verified on next login." : "Person identity updated.";
+    const ok = await mutation.run(success, () => apiRequest(`/api/v1/owner/people/${membership.membership_id}`, { method: "PATCH", body: JSON.stringify({ display_name: editingName, phone: editingPhone }) }));
     if (ok) setEditing(null);
   };
   return (
@@ -453,11 +461,11 @@ export function PeoplePanel({ people, assets = [], apiRequest, reload, setError,
       <FilterToolbar><label className="owner-search-field"><span>Search people</span><input aria-label="Search people" onChange={(event) => setQuery(event.target.value)} placeholder="Name, phone, site or role" type="search" value={query} /></label><label>Role<select aria-label="Filter people role" onChange={(event) => setRoleFilter(event.target.value)} value={roleFilter}><option value="">All roles</option><option value="OWNER_ADMIN">Owner</option><option value="DRIVER">Driver / Operator</option><option value="SUPERVISOR">Supervisor</option></select></label><label>Lifecycle<select aria-label="Filter people lifecycle" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="">All lifecycle states</option><option value="INVITED">Invited</option><option value="ACTIVE">Active</option><option value="INACTIVE">Deactivated</option></select></label></FilterToolbar>
       <OperationsTable label="People"><thead><tr>{([['name', 'Name'], ['phone', 'Phone'], ['roles', 'Role(s)'], ['lifecycle', 'Lifecycle'], ['asset', 'Current asset'], ['site', 'Current site'], ['status', 'Status']] as [PeopleSort, string][]).map(([key, label]) => <th aria-sort={sortKey === key ? (sortDirection === "asc" ? "ascending" : "descending") : "none"} key={key} scope="col"><SortButton active={sortKey === key} direction={sortDirection} label={label} onClick={() => changeSort(key)} /></th>)}<th scope="col">Actions</th></tr></thead><tbody>
         {shown.length === 0 && <EmptyTableRow colSpan={8} detail="Adjust the filters or add the first person." title="No people match" />}
-        {shown.map((group) => { const active = group.memberships.filter((item) => item.status !== "INACTIVE"); const driver = active.find((item) => item.role === "DRIVER"); const currentAsset = driver?.current_asset_id ? assetById.get(driver.current_asset_id) : undefined; const personSites = [...new Set(active.flatMap((item) => item.sites.map((site) => site.site_name)))]; const operationalStatus = driver?.has_active_duty ? "On duty" : driver?.has_active_assignment ? "Assigned · off duty" : driver ? "Available" : active.some((item) => item.role === "OWNER_ADMIN") ? "Owner access" : `${personSites.length} site${personSites.length === 1 ? "" : "s"}`; return <tr key={group.userId}><td data-label="Name"><strong>{group.displayName}</strong></td><td data-label="Phone">{group.phone}<small>Phone login: {authStateLabel(group.authState)}</small></td><td data-label="Role(s)"><div className="owner-chip-list">{active.map((membership) => <span className="owner-chip" key={membership.membership_id}>{membership.role === "OWNER_ADMIN" ? "Owner" : title(membership.role)}</span>)}</div></td><td data-label="Lifecycle"><div className="owner-chip-list">{group.memberships.map((membership) => <StatusChip key={membership.membership_id} label={`${membership.role === "OWNER_ADMIN" ? "Owner" : title(membership.role)} · ${title(membership.status)}`} status={membership.status} />)}</div></td><td data-label="Current asset">{currentAsset ? <><strong>{assetLabel(currentAsset)}</strong><small>{currentAsset.registration_number || title(currentAsset.asset_type)}</small></> : <span className="owner-dim">—</span>}</td><td data-label="Current site">{driver?.current_site_name || personSites.join(", ") || <span className="owner-dim">—</span>}</td><td data-label="Status"><StatusChip label={operationalStatus} status={driver?.has_active_duty ? "ON_DUTY" : driver?.has_active_assignment ? "ASSIGNED" : "AVAILABLE"} /></td><td data-label="Actions"><button className="owner-text-button" onClick={() => beginEditing(group)} type="button">Manage person</button></td></tr>; })}
+        {shown.map((group) => { const active = group.memberships.filter((item) => item.status !== "INACTIVE"); const driver = active.find((item) => item.role === "DRIVER"); const currentAsset = driver?.current_asset_id ? assetById.get(driver.current_asset_id) : undefined; const personSites = [...new Set(active.flatMap((item) => item.sites.map((site) => site.site_name)))]; const operationalStatus = driver?.has_active_duty ? "On duty" : driver?.has_active_assignment ? "Assigned · off duty" : driver ? "Available" : active.some((item) => item.role === "OWNER_ADMIN") ? "Owner access" : `${personSites.length} site${personSites.length === 1 ? "" : "s"}`; return <tr key={group.userId}><td data-label="Name"><strong>{group.displayName}</strong></td><td data-label="Phone">{group.phone}<small>Phone login: {phoneLoginLabel(group)}</small></td><td data-label="Role(s)"><div className="owner-chip-list">{active.map((membership) => <span className="owner-chip" key={membership.membership_id}>{membership.role === "OWNER_ADMIN" ? "Owner" : title(membership.role)}</span>)}</div></td><td data-label="Lifecycle"><div className="owner-chip-list">{group.memberships.map((membership) => <StatusChip key={membership.membership_id} label={`${membership.role === "OWNER_ADMIN" ? "Owner" : title(membership.role)} · ${title(membership.status)}`} status={membership.status} />)}</div></td><td data-label="Current asset">{currentAsset ? <><strong>{assetLabel(currentAsset)}</strong><small>{currentAsset.registration_number || title(currentAsset.asset_type)}</small></> : <span className="owner-dim">—</span>}</td><td data-label="Current site">{driver?.current_site_name || personSites.join(", ") || <span className="owner-dim">—</span>}</td><td data-label="Status"><StatusChip label={operationalStatus} status={driver?.has_active_duty ? "ON_DUTY" : driver?.has_active_assignment ? "ASSIGNED" : "AVAILABLE"} /></td><td data-label="Actions"><button className="owner-text-button" onClick={() => beginEditing(group)} type="button">Manage person</button></td></tr>; })}
       </tbody></OperationsTable>
       <DetailsDialog onClose={() => setEditing(null)} open={Boolean(editing)} title={editing ? `Manage ${editing.displayName}` : "Manage person"}>
         {editing && <div className="owner-dialog-form">
-          <form className="owner-form-grid" onSubmit={(event) => void saveIdentity(event)}><label>Name<input aria-label="Edit person name" onChange={(event) => setEditingName(event.target.value)} required value={editingName} /></label><label>Phone<input aria-label="Edit person phone" inputMode="tel" onChange={(event) => setEditingPhone(event.target.value)} required value={editingPhone} /></label><small>Changing the phone disables the old Firebase login link until the new number is verified.</small><button disabled={mutation.busy} type="submit">Save identity</button></form>
+          <form className="owner-form-grid" onSubmit={(event) => void saveIdentity(event)}><label>Name<input aria-label="Edit person name" onChange={(event) => setEditingName(event.target.value)} required value={editingName} /></label><label>Phone<input aria-label="Edit person phone" inputMode="tel" onChange={(event) => setEditingPhone(event.target.value)} required value={editingPhone} /></label><small>Phone login: {phoneLoginLabel(editing)}</small><small>Changing the phone signs the person out, disables the old Firebase login link, and requires verification of the new number.</small><button disabled={mutation.busy} type="submit">Save identity</button></form>
           <h3>Roles and operational setup</h3>
           <div className="owner-role-management">{editing.memberships.map((membership) => <div key={membership.membership_id}>
             <div><strong>{membership.role === "OWNER_ADMIN" ? "Owner" : title(membership.role)}</strong><StatusChip status={membership.status} /></div>
