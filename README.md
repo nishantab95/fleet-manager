@@ -4,10 +4,12 @@ Fleet AI Systems is the public product brand for this construction fleet
 operations platform. The canonical public website is
 `https://fleetaisystems.com`.
 
-The public marketing site is integrated into `apps/web` at `/`, `/features`,
-`/how-it-works`, `/solutions`, `/pricing`, and `/contact`. Operational access
-remains separate at `/login`, with role-specific workspaces under `/owner`,
-`/supervisor`, and the controlled QA routes.
+The public marketing site is the isolated `apps/marketing` deployment at `/`,
+`/features`, `/how-it-works`, `/solutions`, `/pricing`, and `/contact`.
+`apps/web` remains the private Owner/Supervisor operations client and is never
+routed through the public website proxy. See
+[`docs/public-website-deployment.md`](docs/public-website-deployment.md) for the
+Windows/Caddy topology, go-live gates, and website-only update process.
 
 Internal identifiers such as package names, Android application IDs, API route
 prefixes, database names, environment variables, service identifiers, launcher
@@ -43,7 +45,8 @@ modules into scope.
 
 ```text
 apps/mobile/       Flutter / Dart Android-first shell
-apps/web/          React / Next.js TypeScript shell
+apps/web/          Private React / Next.js operations shell
+apps/marketing/    Public React / Next.js marketing site
 services/api/      FastAPI modular-monolith backend
 infra/             Local infrastructure notes and configuration
 docs/              Architecture, domain, development, security, and ADRs

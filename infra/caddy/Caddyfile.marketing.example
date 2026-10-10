@@ -1,0 +1,36 @@
+{
+	admin 127.0.0.1:2019
+	email __TLS_EMAIL__
+}
+
+www.__DOMAIN__ {
+	redir https://__DOMAIN__{uri} permanent
+}
+
+__DOMAIN__ {
+	encode zstd gzip
+
+	# Defense in depth: these private product surfaces do not exist in the
+	# marketing application and are also refused at the public proxy boundary.
+	@private path /login* /owner* /supervisor* /lab* /api /api/* /admin* /docs* /redoc* /openapi.json /evidence* /internal*
+	respond @private 404
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	import "__UPSTREAM_INCLUDE__"
+
+	log {
+		output file "__ACCESS_LOG__" {
+			roll_size 25MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+}

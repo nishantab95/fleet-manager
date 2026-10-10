@@ -24,6 +24,10 @@ apps/web/next-env.d.ts
 apps/web/test-results/
 apps/web/playwright-report/
 apps/web/blob-report/
+apps/marketing/next-env.d.ts
+apps/marketing/test-results/
+apps/marketing/playwright-report/
+apps/marketing/blob-report/
 *.tsbuildinfo
 out/
 dist/

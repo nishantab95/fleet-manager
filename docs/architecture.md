@@ -7,6 +7,28 @@ deployment with explicit domain services, SQLAlchemy models, and one
 PostgreSQL database. Mobile and web clients remain separate shells and do not
 contain Phase 1 business workflows.
 
+## Public marketing deployment boundary
+
+`apps/marketing` is a separate Next.js build and runtime containing only the
+Fleet AI Systems public pages, metadata, safe health response, and isolated
+lead-create handler. It has no dependency on the authenticated Fleet API and no
+route to Owner, Supervisor, Driver QA, evidence, database, OpenAPI, or internal
+tooling. `apps/web` remains the private operations client and disallows search
+indexing.
+
+On the prepared Windows topology, Caddy is the only Internet listener. It sends
+the canonical marketing domain to a loopback-only standalone Next.js release on
+port 3100 or 3101 and explicitly refuses known private paths. Website releases
+are blue/green at the process level: a new immutable release must pass `/health`
+before an atomic upstream-file replacement and Caddy reload. The old marketing
+process stops after the switch. The Fleet API, private web app, PostgreSQL,
+object storage, evidence, and mobile distribution are not restarted or routed.
+
+Public leads are individual JSON records in an ACL-restricted directory outside
+the repository and Fleet data stores. This deliberately small write-only store
+keeps anonymous form traffic outside the authenticated product boundary. See
+`docs/public-website-deployment.md` and ADR 0012.
+
 ## Phase 1 and Phase 2 backend boundaries
 
 - `fleet_api.db.models`: persistence models grouped by company, membership,

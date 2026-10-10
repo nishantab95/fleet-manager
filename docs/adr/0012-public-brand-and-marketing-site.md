@@ -6,11 +6,11 @@ Accepted.
 
 ## Context
 
-The operational product already uses one Next.js application for authenticated
-Owner, Supervisor, and controlled QA workspaces. The public product brand is now
-Fleet AI Systems and its canonical domain is `fleetaisystems.com`. The product
-needs a public marketing surface without coupling anonymous visits to an
-operations session or introducing a second deployment unnecessarily.
+The operational product uses one Next.js application for authenticated Owner,
+Supervisor, and controlled QA workspaces. The public product brand is Fleet AI
+Systems and its canonical domain is `fleetaisystems.com`. Public Internet
+traffic must not share an application process, route tree, runtime credentials,
+or deployment lifecycle with those private operations surfaces.
 
 The repository also contains mature compatibility identifiers: Android package
 IDs, API route prefixes, PostgreSQL names, environment variables, service names,
@@ -19,49 +19,50 @@ They are operational boundaries rather than customer-facing copy.
 
 ## Decision
 
-- Public pages live in an App Router route group inside `apps/web`. The group
-  provides the Fleet AI Systems navigation, footer, design system, and public
-  routes while preserving the existing operational URLs.
-- `/` is the public homepage. Operational access is explicit through `/login`,
-  then the existing role-specific workspaces.
-- The root provider activates the browser authentication session only for
-  operational routes. Anonymous marketing visits do not call session-refresh or
-  Fleet API endpoints.
+- Public pages live in the independent `apps/marketing` Next.js application.
+  Its deployment contains no Owner, Supervisor, Driver QA, authentication, API
+  proxy, evidence, administration, or OpenAPI routes.
+- `apps/web` remains private. Its `/` redirects to the private login workspace,
+  and its root metadata disallows indexing.
+- Caddy exposes only the marketing process on ports 80/443. The Fleet API,
+  operations web app, PostgreSQL, object storage, evidence, and internal tooling
+  are not upstreams in the public Caddyfile.
 - Public pages are statically renderable. Metadata, Open Graph artwork, the
   favicon, `robots.txt`, and `sitemap.xml` use `fleetaisystems.com`.
-- The public contact form does not pretend to persist a lead. Until a reviewed
-  first-party capture endpoint or mail provider is configured, it validates the
-  fields locally and prepares an email draft for the visitor to review and send.
-  The page identifies the channel as a pre-launch dependency.
-- The Owner showcase includes a curated capture from the working interface with
-  representative test data. Driver and Supervisor device previews are
-  constructed from their working interaction patterns. The showcase contains no
-  real customer data and does not claim unavailable functionality.
+- The contact form posts only to `POST /public/leads` in the marketing process.
+  It has strict field/enum/length validation, JSON size and origin checks, a
+  honeypot, bounded in-memory source throttling, no read route, PII-free
+  application logging, and fail-closed storage. Each accepted lead is written
+  once to an administrator-protected directory outside the repository. It does
+  not call the authenticated Fleet API or store data in the Fleet database.
+- Product imagery is generated from the working Owner and Flutter role screens
+  with deterministic representative fixtures. The capture command is explicit,
+  is not part of normal tests, and never uses customer records.
 - Visible application branding changes to Fleet AI Systems where safe. Internal
   compatibility identifiers remain unchanged.
 
 ## Consequences
 
-The marketing site and operations console share a build, security headers, and
-deployment unit, but have separate layouts and runtime behavior. This is the
-lowest-risk architecture for the current product size. A separate marketing app
-can be reconsidered if independent release cadence, content management, or edge
-hosting becomes a concrete requirement.
+The marketing site and operations console have independent builds, processes,
+ports, routing boundaries, and update lifecycles. A website release can switch
+between loopback ports after a health gate and reload Caddy without restarting
+the Fleet API, database, private web app, object storage, or mobile publication.
 
 Before public deployment, the business must confirm that
-`hello@fleetaisystems.com` is active, replace the pre-launch legal placeholders,
-and decide whether to connect a consent-aware server-side lead store. No backend,
-database, authentication, Android package, or infrastructure rename is required
-for the public brand launch.
+`hello@fleetaisystems.com` is active, approve privacy/terms copy and lead
+retention, configure DNS/router/firewall/public-IP prerequisites, and execute the
+go-live checks. No backend, database, authentication, Android package, or
+infrastructure rename is required for the public brand launch.
 
 ## Alternatives rejected
 
-- A separate marketing application now: it would duplicate tooling and
-  deployment work without a current independent-release requirement.
-- Reusing `/` as an authenticated redirect: it prevents a canonical public
-  homepage and mixes anonymous discovery with operations session restoration.
+- Integrating marketing routes into `apps/web`: rejected because it expands the
+  Internet-facing artifact and couples public updates to the private operations
+  client.
+- Publishing the private app and relying only on route middleware: rejected
+  because deployment isolation is a stronger and more auditable boundary.
 - Renaming every technical identifier: this would risk application identity,
   migrations, scripts, evidence paths, and existing deployments for no public
   benefit.
-- Returning a successful contact response without persistence: this would create
-  false lead-delivery behavior.
+- Returning a successful contact response without durable persistence: this
+  would create false lead-delivery behavior.

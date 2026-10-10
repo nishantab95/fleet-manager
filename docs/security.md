@@ -366,3 +366,25 @@ Tokens and OTP values are never written to handover audit records.
   hours. Driver refresh/sync reconciliation accepts the server's current
   Assignment and duty state instead of retaining a stale phone-side relationship
   as authoritative.
+
+## Public website boundary
+
+- Only the standalone `apps/marketing` process is approved for Caddy routing.
+  The private Next.js app, Fleet API, PostgreSQL, object storage, evidence,
+  authentication, OpenAPI, and internal tools have no public upstream.
+- The Caddy template explicitly returns 404 for known private route families and
+  binds its admin API to loopback. The marketing process binds only to loopback;
+  router and firewall guidance exposes TCP 80/443 only.
+- `POST /public/leads` accepts JSON only, enforces a small content length,
+  validates required fields/enums/lengths, rejects markup and a filled
+  honeypot, applies bounded source throttling, checks browser origins, and has no
+  public read counterpart.
+- Lead filenames are server-generated. Each record is created once in a
+  pre-existing absolute directory outside the repository. The runtime fails
+  closed if storage is absent or unsafe, and application logs omit submitted PII,
+  addresses, and user agents.
+- The lead directory is separate from Fleet backups and must have an approved
+  retention, encrypted backup, restore test, and access-review process. Caddy
+  access logs contain network metadata and are configured for bounded rotation.
+- Product screenshots use deterministic representative fixtures and are
+  reviewed before commit; no customer environment or record is captured.

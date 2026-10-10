@@ -43,7 +43,7 @@ export function TestLabHome() {
     <section className="lab-panel" aria-labelledby="lab-title">
       <header className="lab-header">
         <div>
-          <p className="eyebrow">FLEET MANAGER</p>
+          <p className="eyebrow">FLEET AI SYSTEMS</p>
           <h1 id="lab-title">PC TEST LAB</h1>
           <p className="lab-warning">INTERNAL / QA ONLY</p>
         </div>

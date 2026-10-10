@@ -1,7 +1,10 @@
 """Add company-scoped report templates and deterministic built-ins."""
 
+# ruff: noqa: S608 -- dynamic SQL contains only fixed, checked-in migration values.
+
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -63,6 +66,95 @@ MACHINERY_COLUMNS = [
 
 def _builtin_id(company_id: UUID, key: str) -> UUID:
     return uuid5(NAMESPACE_URL, f"fleet-manager:{company_id}:report-template:{key}")
+
+
+def _insert_builtins_offline() -> None:
+    definitions = (
+        (
+            "management_summary",
+            "Management Summary",
+            ["management_dashboard", "tipper_daily", "machinery_daily", "exceptions"],
+            MANAGEMENT_COLUMNS,
+            True,
+        ),
+        (
+            "detailed_operations",
+            "Detailed Operations",
+            SHEETS,
+            MANAGEMENT_COLUMNS,
+            False,
+        ),
+        (
+            "diesel_report",
+            "Diesel Report",
+            ["management_dashboard", "diesel_register", "exceptions"],
+            [
+                "asset",
+                "asset_type",
+                "site",
+                "operator",
+                "verified_diesel_l",
+                "pending_status",
+            ],
+            False,
+        ),
+    )
+    values = ",\n".join(
+        "("
+        + ", ".join(
+            (
+                f"'{key}'",
+                f"'{name}'",
+                f"'{json.dumps(sheets)}'::jsonb",
+                f"'{json.dumps(management)}'::jsonb",
+                "TRUE" if is_default else "FALSE",
+            )
+        )
+        + ")"
+        for key, name, sheets, management, is_default in definitions
+    )
+    tipper_columns = json.dumps(TIPPER_COLUMNS)
+    machinery_columns = json.dumps(MACHINERY_COLUMNS)
+    op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+    statement = f"""
+        WITH definitions (
+            builtin_key,
+            name,
+            included_sheets,
+            management_dashboard_columns,
+            is_default
+        ) AS (VALUES {values})
+        INSERT INTO report_templates (
+            id,
+            company_id,
+            name,
+            builtin_key,
+            is_builtin,
+            is_default,
+            included_sheets,
+            management_dashboard_columns,
+            tipper_daily_columns,
+            machinery_daily_columns
+        )
+        SELECT
+            uuid_generate_v5(
+                '6ba7b811-9dad-11d1-80b4-00c04fd430c8'::uuid,
+                'fleet-manager:' || companies.id::text || ':report-template:'
+                    || definitions.builtin_key
+            ),
+            companies.id,
+            definitions.name,
+            definitions.builtin_key,
+            TRUE,
+            definitions.is_default,
+            definitions.included_sheets,
+            definitions.management_dashboard_columns,
+            '{tipper_columns}'::jsonb,
+            '{machinery_columns}'::jsonb
+        FROM companies
+        CROSS JOIN definitions;
+        """
+    op.execute(statement)
 
 
 def upgrade() -> None:
@@ -134,6 +226,9 @@ def upgrade() -> None:
         sa.column("tipper_daily_columns", postgresql.JSONB()),
         sa.column("machinery_daily_columns", postgresql.JSONB()),
     )
+    if op.get_context().as_sql:
+        _insert_builtins_offline()
+        return
     company_ids = [
         row[0] for row in op.get_bind().execute(sa.text("SELECT id FROM companies ORDER BY id"))
     ]

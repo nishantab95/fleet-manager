@@ -49,6 +49,7 @@ if ($LASTEXITCODE -eq 0) {
         Invoke-RequiredCheck "Backend formatter" { & $projectPython -m ruff format --check src tests migrations }
         Invoke-RequiredCheck "Backend mypy" { & $projectPython -m mypy src tests }
         Invoke-RequiredCheck "Backend pytest" { & $projectPython -m pytest -p no:cacheprovider }
+        Invoke-RequiredCheck "Alembic upgrade" { & $projectPython -m alembic upgrade head }
         Invoke-RequiredCheck "Alembic schema check" { & $projectPython -m alembic check }
         Invoke-RequiredCheck "Alembic offline migration check" { & $projectPython -m alembic upgrade head --sql }
     } finally {
@@ -61,19 +62,35 @@ if ($LASTEXITCODE -eq 0) {
 $npm = Get-Command npm -ErrorAction SilentlyContinue
 if ($npm) {
     Invoke-RequiredCheck "Web lint" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm run lint } finally { Pop-Location } }
+    Invoke-RequiredCheck "Web build" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm run build } finally { Pop-Location } }
     Invoke-RequiredCheck "Web typecheck" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm run typecheck } finally { Pop-Location } }
     Invoke-RequiredCheck "Web tests" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm test } finally { Pop-Location } }
-    Invoke-RequiredCheck "Web build" { Push-Location (Join-Path $repoRoot "apps\web"); try { npm run build } finally { Pop-Location } }
+    Invoke-RequiredCheck "Marketing lint" { Push-Location (Join-Path $repoRoot "apps\marketing"); try { npm run lint } finally { Pop-Location } }
+    Invoke-RequiredCheck "Marketing typecheck" { Push-Location (Join-Path $repoRoot "apps\marketing"); try { npm run typecheck } finally { Pop-Location } }
+    Invoke-RequiredCheck "Marketing tests" { Push-Location (Join-Path $repoRoot "apps\marketing"); try { npm test } finally { Pop-Location } }
+    Invoke-RequiredCheck "Marketing build" { Push-Location (Join-Path $repoRoot "apps\marketing"); try { npm run build } finally { Pop-Location } }
 } else {
     Write-Warning "Web checks skipped: Node.js/npm is not installed."
 }
 
-$flutter = Get-Command flutter -ErrorAction SilentlyContinue
+$flutter = Get-Command flutter.bat -ErrorAction SilentlyContinue
+$dart = Get-Command dart.bat -ErrorAction SilentlyContinue
 if ($flutter) {
-    Invoke-RequiredCheck "Flutter format" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { dart format --output=none --set-exit-if-changed lib test integration_test } finally { Pop-Location } }
-    Invoke-RequiredCheck "Flutter analyze" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { flutter analyze } finally { Pop-Location } }
-    Invoke-RequiredCheck "Flutter tests" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { flutter test } finally { Pop-Location } }
-    Invoke-RequiredCheck "Flutter debug APK" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { flutter build apk --debug } finally { Pop-Location } }
+    $flutterOriginalPath = $env:Path
+    try {
+        # A disabled WindowsApps pwsh alias can prevent Flutter's own batch
+        # scripts from falling back to the working Windows PowerShell binary.
+        $windowsAppsDirectory = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Microsoft\WindowsApps"
+        $env:Path = (($env:Path -split ";") | Where-Object {
+            $_ -and $_.TrimEnd("\") -ine $windowsAppsDirectory.TrimEnd("\")
+        }) -join ";"
+        Invoke-RequiredCheck "Flutter format" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { & $dart.Source format --output=none --set-exit-if-changed lib test integration_test tool } finally { Pop-Location } }
+        Invoke-RequiredCheck "Flutter analyze" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { & $flutter.Source analyze } finally { Pop-Location } }
+        Invoke-RequiredCheck "Flutter tests" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { & $flutter.Source test } finally { Pop-Location } }
+        Invoke-RequiredCheck "Flutter Pilot debug APK" { Push-Location (Join-Path $repoRoot "apps\mobile"); try { & $flutter.Source build apk --flavor pilot --debug } finally { Pop-Location } }
+    } finally {
+        $env:Path = $flutterOriginalPath
+    }
 } else {
     Write-Warning "Flutter checks skipped: Flutter is not installed."
 }

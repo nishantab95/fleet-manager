@@ -39,13 +39,25 @@ def upgrade() -> None:
         "ORDER BY (d.starts_at = a.starts_at) DESC, d.starts_at DESC, d.id "
         "LIMIT 1)"
     )
-    missing = (
-        op.get_bind()
-        .execute(sa.text("SELECT count(*) FROM assignments WHERE asset_site_deployment_id IS NULL"))
-        .scalar_one()
-    )
-    if missing:
-        raise RuntimeError("cannot link every historical assignment to an asset deployment")
+    missing_query = "SELECT count(*) FROM assignments WHERE asset_site_deployment_id IS NULL"
+    if op.get_context().as_sql:
+        op.execute(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM assignments WHERE asset_site_deployment_id IS NULL
+                ) THEN
+                    RAISE EXCEPTION
+                        'cannot link every historical assignment to an asset deployment';
+                END IF;
+            END $$;
+            """
+        )
+    else:
+        missing = op.get_bind().execute(sa.text(missing_query)).scalar_one()
+        if missing:
+            raise RuntimeError("cannot link every historical assignment to an asset deployment")
     op.alter_column(
         "assignments", "asset_site_deployment_id", existing_type=postgresql.UUID(), nullable=False
     )

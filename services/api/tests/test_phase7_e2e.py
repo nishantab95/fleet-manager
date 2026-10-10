@@ -262,7 +262,9 @@ def test_owned_tipper_pilot_flow_reconciles_api_and_excel(
             assert response.json()["capture_group_uuid"] == group_id
             typed_references: list[str | None] = []
             for event_id in response.json()["event_ids"]:
-                typed = db_session.get(KmReading, UUID(event_id))
+                typed: KmReading | HourMeterReading | None = db_session.get(
+                    KmReading, UUID(event_id)
+                )
                 if typed is None:
                     typed = db_session.get(HourMeterReading, UUID(event_id))
                 assert typed is not None

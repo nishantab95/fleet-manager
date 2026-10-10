@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">Fleet AI Systems mark</title>
+  <desc id="desc">A connected geometric route around an amber operations core.</desc>
+  <rect width="96" height="96" rx="24" fill="#0b3a37"/>
+  <path d="M18 66V30L48 12l30 18v36L48 84 18 66Z" fill="none" stroke="#78d4bb" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M33 59V37l15-9 15 9v22l-15 9-15-9Z" fill="#d9932e"/>
+  <path d="M18 48h15m30 0h15M48 12v16m0 40v16" stroke="#f7fbf9" stroke-width="5" stroke-linecap="round"/>
+</svg>

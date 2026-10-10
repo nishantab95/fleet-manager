@@ -7,9 +7,7 @@ database names and adds future-safe asset attributes.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
-from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
@@ -34,37 +32,66 @@ def _enum(name: str, *values: str) -> postgresql.ENUM:
     return postgresql.ENUM(*values, name=name, create_type=False)
 
 
-def _normalized_legacy_code(short_name: str | None, registration: str) -> str:
-    source = short_name.strip() if short_name and short_name.strip() else registration
-    code = re.sub(r"[^A-Z0-9]+", "-", source.upper()).strip("-")
-    return (code or "ASSET")[:64]
-
-
 def _backfill_asset_codes() -> None:
-    connection = op.get_bind()
-    rows = connection.execute(
-        sa.text(
-            "SELECT id, company_id, short_name, registration_number "
-            "FROM fleet_assets ORDER BY company_id, id"
-        )
-    ).mappings()
-    used_by_company: dict[Any, set[str]] = {}
-    for row in rows:
-        used = used_by_company.setdefault(row["company_id"], set())
-        base = _normalized_legacy_code(row["short_name"], row["registration_number"])
-        candidate = base
-        counter = 0
-        while candidate in used:
-            counter += 1
-            suffix = f"-LEGACY-{row['id'].hex}"
-            if counter > 1:
-                suffix += f"-{counter}"
-            candidate = f"{base[: 64 - len(suffix)]}{suffix}"
-        used.add(candidate)
-        connection.execute(
-            sa.text("UPDATE fleet_assets SET asset_code = :asset_code WHERE id = :id"),
-            {"asset_code": candidate, "id": row["id"]},
-        )
+    # Keep this data migration executable in both Alembic online mode and an
+    # offline ``--sql`` deployment artifact. The loop preserves the original
+    # deterministic, per-company collision handling without loading rows into
+    # the migration runner.
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            asset RECORD;
+            current_company UUID;
+            used_codes TEXT[] := ARRAY[]::TEXT[];
+            base_code TEXT;
+            candidate TEXT;
+            suffix TEXT;
+            counter INTEGER;
+        BEGIN
+            FOR asset IN
+                SELECT id, company_id, short_name, registration_number
+                FROM fleet_assets
+                ORDER BY company_id, id
+            LOOP
+                IF current_company IS DISTINCT FROM asset.company_id THEN
+                    current_company := asset.company_id;
+                    used_codes := ARRAY[]::TEXT[];
+                END IF;
+
+                base_code := LEFT(
+                    TRIM(BOTH '-' FROM REGEXP_REPLACE(
+                        UPPER(COALESCE(
+                            NULLIF(BTRIM(asset.short_name), ''),
+                            asset.registration_number
+                        )),
+                        '[^A-Z0-9]+',
+                        '-',
+                        'g'
+                    )),
+                    64
+                );
+                IF base_code IS NULL OR base_code = '' THEN
+                    base_code := 'ASSET';
+                END IF;
+
+                candidate := base_code;
+                counter := 0;
+                WHILE candidate = ANY (used_codes) LOOP
+                    counter := counter + 1;
+                    suffix := '-LEGACY-' || REPLACE(asset.id::TEXT, '-', '');
+                    IF counter > 1 THEN
+                        suffix := suffix || '-' || counter::TEXT;
+                    END IF;
+                    candidate := LEFT(base_code, GREATEST(0, 64 - LENGTH(suffix))) || suffix;
+                END LOOP;
+
+                used_codes := ARRAY_APPEND(used_codes, candidate);
+                UPDATE fleet_assets SET asset_code = candidate WHERE id = asset.id;
+            END LOOP;
+        END $$;
+        """
+    )
 
 
 def upgrade() -> None:

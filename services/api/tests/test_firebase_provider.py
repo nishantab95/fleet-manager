@@ -9,6 +9,8 @@ from fleet_api.core.config import Settings
 from fleet_api.domain.enums import AuthIdentityProvider
 from fleet_api.domain.errors import FirebaseTokenError
 
+firebase_auth: Any = vars(firebase_module)["auth"]
+
 
 def _settings() -> Settings:
     return Settings(
@@ -35,7 +37,7 @@ def test_firebase_adapter_verifies_with_revocation_and_returns_trusted_phone(
             "firebase": {"sign_in_provider": "phone"},
         }
 
-    monkeypatch.setattr(firebase_module.auth, "verify_id_token", verify_token)
+    monkeypatch.setattr(firebase_auth, "verify_id_token", verify_token)
 
     identity = provider.verify("signed-token")
 
@@ -52,8 +54,8 @@ def test_firebase_adapter_verifies_with_revocation_and_returns_trusted_phone(
 @pytest.mark.parametrize(
     "failure",
     [
-        lambda: firebase_module.auth.InvalidIdTokenError("wrong audience"),
-        lambda: firebase_module.auth.ExpiredIdTokenError("expired", None),
+        lambda: firebase_auth.InvalidIdTokenError("wrong audience"),
+        lambda: firebase_auth.ExpiredIdTokenError("expired", None),
     ],
 )
 def test_firebase_adapter_maps_invalid_or_expired_tokens_to_safe_domain_error(
@@ -67,7 +69,7 @@ def test_firebase_adapter_maps_invalid_or_expired_tokens_to_safe_domain_error(
         del args, kwargs
         raise failure()
 
-    monkeypatch.setattr(firebase_module.auth, "verify_id_token", reject)
+    monkeypatch.setattr(firebase_auth, "verify_id_token", reject)
 
     with pytest.raises(FirebaseTokenError):
         provider.verify("rejected-token")
@@ -79,7 +81,7 @@ def test_firebase_adapter_rejects_non_phone_sign_in_claim(
     provider = FirebasePhoneAuthProvider(_settings())
     monkeypatch.setattr(provider, "_firebase_app", object)
     monkeypatch.setattr(
-        firebase_module.auth,
+        firebase_auth,
         "verify_id_token",
         lambda *args, **kwargs: {
             "sub": "password-user",
