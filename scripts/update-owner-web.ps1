@@ -42,7 +42,8 @@ function Invoke-RepoGit {
 if ((Invoke-RepoGit @('branch', '--show-current')) -ne 'main') {
     throw 'Owner update requires the main branch.'
 }
-if ((Invoke-RepoGit @('status', '--porcelain', '--untracked-files=normal')).Count -ne 0) {
+$sourceStatus = @(Invoke-RepoGit @('status', '--porcelain', '--untracked-files=normal'))
+if ($sourceStatus.Count -ne 0) {
     throw 'Owner update requires a clean source checkout.'
 }
 
