@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$ToolingOnly,
-    [switch]$Company
+    [switch]$Company,
+    [string]$TargetPlatforms = "android-arm,android-arm64,android-x64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -164,6 +165,7 @@ $buildArguments = @(
     "--release",
     "--build-name=$versionName",
     "--build-number=$versionCode",
+    "--target-platform=$TargetPlatforms",
     "--dart-define=FLEET_PILOT=true",
     "--dart-define=FLEET_AUTH_MODE=firebase",
     "--dart-define=FLEET_BUILD_PROFILE=$buildProfile",
