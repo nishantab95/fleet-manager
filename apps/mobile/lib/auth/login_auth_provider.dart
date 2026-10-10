@@ -9,6 +9,7 @@ import '../domain/role_models.dart';
 enum FleetAuthMode { pilot, firebase }
 
 const _configuredAuthMode = String.fromEnvironment('FLEET_AUTH_MODE');
+const _configuredBuildProfile = String.fromEnvironment('FLEET_BUILD_PROFILE');
 
 FleetAuthMode resolveFleetAuthMode({
   required String configured,
@@ -31,6 +32,35 @@ FleetAuthMode get fleetAuthMode => resolveFleetAuthMode(
   configured: _configuredAuthMode,
   pilotBuild: isPilotBuild,
   productionBuild: appFlavor == 'production',
+);
+
+bool pilotRuntimeFeaturesEnabled({
+  required bool pilotBuild,
+  required FleetAuthMode authMode,
+}) => pilotBuild && authMode == FleetAuthMode.pilot;
+
+bool resolveFirebaseStagingProfile({
+  required String configured,
+  required bool pilotBuild,
+  required FleetAuthMode authMode,
+}) {
+  final normalized = configured.trim().toLowerCase();
+  if (normalized.isEmpty) return false;
+  if (normalized != 'firebase-staging') {
+    throw StateError('FLEET_BUILD_PROFILE is not supported.');
+  }
+  if (!pilotBuild || authMode != FleetAuthMode.firebase) {
+    throw StateError(
+      'The Firebase staging profile requires the Pilot package and Firebase authentication.',
+    );
+  }
+  return true;
+}
+
+bool get isFirebaseStagingBuild => resolveFirebaseStagingProfile(
+  configured: _configuredBuildProfile,
+  pilotBuild: isPilotBuild,
+  authMode: fleetAuthMode,
 );
 
 class LoginChallenge {

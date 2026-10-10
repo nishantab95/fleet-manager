@@ -37,6 +37,8 @@ pnpm-debug.log*
 .flutter-plugins
 .flutter-plugins-dependencies
 build/
+*.apk
+*.aab
 
 # Android signing material and local SDK configuration
 **/*.jks

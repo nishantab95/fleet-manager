@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import get_otp_provider
@@ -114,6 +114,71 @@ def test_owner_invites_existing_identity_and_invitee_activates_through_otp(
         membership = db_session.get(CompanyMembership, invited_id)
         assert membership is not None
         assert membership.status == MembershipStatus.ACTIVE
+    finally:
+        client.close()
+
+
+def test_owner_invite_matches_legacy_phone_format_without_creating_a_duplicate_user(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    owner = value(tenant_records, "owner_a", CompanyMembership)
+    existing_membership = value(tenant_records, "driver_b", CompanyMembership)
+    identity = db_session.get(User, existing_membership.user_id)
+    assert identity is not None
+    local_digits = f"9{uuid4().int % 1_000_000_000:09d}"
+    identity.phone_number = f"0{local_digits}"
+    db_session.flush()
+    original_user_count = db_session.scalar(select(func.count(User.id)))
+    client = owner_client(db_session, owner)
+    try:
+        response = client.post(
+            "/api/v1/owner/people/invite",
+            json={
+                "phone": f"+91{local_digits}",
+                "display_name": "Legacy Format Driver",
+                "role": "DRIVER",
+            },
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["user_id"] == str(identity.id)
+        assert db_session.scalar(select(func.count(User.id))) == original_user_count
+    finally:
+        client.close()
+
+
+def test_owner_invite_denies_ambiguous_normalized_legacy_phones(
+    db_session: Session, tenant_records: dict[str, object]
+) -> None:
+    owner = value(tenant_records, "owner_a", CompanyMembership)
+    existing_membership = value(tenant_records, "driver_b", CompanyMembership)
+    identity = db_session.get(User, existing_membership.user_id)
+    assert identity is not None
+    local_digits = f"9{uuid4().int % 1_000_000_000:09d}"
+    identity.phone_number = f"0{local_digits}"
+    db_session.add(
+        User(
+            phone_number=f"+91{local_digits}",
+            display_name="Ambiguous Legacy Person",
+            status=UserStatus.ACTIVE,
+        )
+    )
+    db_session.flush()
+    original_user_count = db_session.scalar(select(func.count(User.id)))
+    client = owner_client(db_session, owner)
+    try:
+        response = client.post(
+            "/api/v1/owner/people/invite",
+            json={
+                "phone": f"+91{local_digits}",
+                "display_name": "Ambiguous Driver",
+                "role": "DRIVER",
+            },
+        )
+
+        assert response.status_code == 409
+        assert "multiple existing people" in response.json()["detail"]["message"]
+        assert db_session.scalar(select(func.count(User.id))) == original_user_count
     finally:
         client.close()
 

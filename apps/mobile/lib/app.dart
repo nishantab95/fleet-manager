@@ -111,8 +111,15 @@ class FleetManagerApp extends StatelessWidget {
     final home = dependencies == null
         ? const _UnavailableScreen()
         : DriverSessionScreen(dependencies: dependencies!);
+    final firebaseStaging =
+        isFirebaseStagingBuild &&
+        dependencies?.authentication.mode == FleetAuthMode.firebase;
     return MaterialApp(
-      title: isPilotBuild ? 'Fleet AI Systems Pilot' : 'Fleet AI Systems',
+      title: firebaseStaging
+          ? 'Fleet AI Systems Staging'
+          : isPilotBuild
+          ? 'Fleet AI Systems Pilot'
+          : 'Fleet AI Systems',
       theme: fleetTheme(),
       home: dependencies?.pilotUpdater == null
           ? home
@@ -505,7 +512,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Fleet AI Systems'),
-        actions: isPilotBuild
+        actions: isPilotBuild && !_isFirebase
             ? [
                 IconButton(
                   tooltip: 'Server settings',
@@ -522,7 +529,11 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               if (isPilotBuild)
                 Text(
-                  'PILOT / TEST',
+                  isFirebaseStagingBuild
+                      ? 'FIREBASE STAGING'
+                      : _isFirebase
+                      ? 'FIREBASE TEST'
+                      : 'PILOT / TEST',
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
               const Spacer(),

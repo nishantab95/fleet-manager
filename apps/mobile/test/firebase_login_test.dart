@@ -26,6 +26,60 @@ void main() {
     );
   });
 
+  test(
+    'Firebase on the Pilot package disables mutable Pilot runtime features',
+    () {
+      final mode = resolveFleetAuthMode(
+        configured: 'firebase',
+        pilotBuild: true,
+        productionBuild: false,
+      );
+
+      expect(mode, FleetAuthMode.firebase);
+      expect(
+        pilotRuntimeFeaturesEnabled(pilotBuild: true, authMode: mode),
+        isFalse,
+      );
+      expect(
+        pilotRuntimeFeaturesEnabled(
+          pilotBuild: true,
+          authMode: FleetAuthMode.pilot,
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'Firebase staging profile fails closed outside its exact build boundary',
+    () {
+      expect(
+        resolveFirebaseStagingProfile(
+          configured: 'firebase-staging',
+          pilotBuild: true,
+          authMode: FleetAuthMode.firebase,
+        ),
+        isTrue,
+      );
+      expect(
+        () => resolveFirebaseStagingProfile(
+          configured: 'firebase-staging',
+          pilotBuild: true,
+          authMode: FleetAuthMode.pilot,
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => resolveFirebaseStagingProfile(
+          configured: 'unexpected',
+          pilotBuild: true,
+          authMode: FleetAuthMode.firebase,
+        ),
+        throwsStateError,
+      );
+    },
+  );
+
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
   for (final role in const ['DRIVER', 'SUPERVISOR', 'OWNER_ADMIN']) {

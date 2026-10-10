@@ -258,7 +258,7 @@ Phase 2 dependencies are not a substitute for endpoint-specific validation.
 
 ## Firebase phone authentication controls
 
-- Production profiles require explicit Firebase mode. Pilot OTP endpoints and
+- Staging and production profiles require explicit Firebase mode. Pilot OTP endpoints and
   codes are unavailable in Firebase mode, preventing a fallback downgrade.
 - Firebase ID tokens are verified server-side for signature, project
   audience/issuer, expiry, optional revocation, and phone sign-in provider.
@@ -274,6 +274,10 @@ Phase 2 dependencies are not a substitute for endpoint-specific validation.
 - Service-account material and generated Firebase configuration are excluded
   from source control. Runtime credentials come from Application Default
   Credentials or secret mounts outside the repository.
+- A Firebase staging APK uses the `.pilot` package and protected Pilot signer,
+  but disables saved Pilot server overrides and Pilot self-update behavior. It
+  carries an explicit `firebase-staging` build profile and an immutable HTTPS
+  API URL. Pilot fallback requires a separate artifact and runtime profile.
 
 ## Controlled internal pilot policy
 

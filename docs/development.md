@@ -128,6 +128,9 @@ Firebase identifiers as build-time Dart defines. Detailed console, Android
 fingerprint, migration, and test-number steps are in
 [Firebase phone authentication setup](firebase-auth-setup.md). Automated tests
 inject provider adapters and do not send SMS.
+The end-to-end staging configuration, protected APK build command, physical
+device matrix, and explicit Pilot rollback are in
+[Firebase staging and real-device OTP runbook](firebase-staging-runbook.md).
 
 The web shell uses `NEXT_PUBLIC_API_BASE_URL` when set and otherwise calls
 `http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3

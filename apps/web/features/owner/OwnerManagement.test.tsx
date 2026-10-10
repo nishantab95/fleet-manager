@@ -383,10 +383,10 @@ describe("Owner management panels", () => {
     render(<PeoplePanel assets={[assignedTipper]} people={[readyDriver]} sites={[siteOne]} {...props} />);
 
     const row = within(screen.getByRole("table", { name: "People" })).getByRole("row", { name: /Operator Active/ });
-    expect(row).toHaveTextContent("Phone login: Linked");
+    expect(row).toHaveTextContent("Firebase sign-in: Linked");
 
     fireEvent.click(within(row).getByRole("button", { name: "Manage person" }));
-    expect(within(screen.getByRole("dialog")).getByText("Phone login: Linked")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByText("Firebase sign-in: Linked")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "91000 00099" } });
     fireEvent.click(screen.getByRole("button", { name: "Save identity" }));
     expect(props.apiRequest).not.toHaveBeenCalled();
@@ -413,7 +413,7 @@ describe("Owner management panels", () => {
     render(<PeoplePanel assets={[assignedTipper]} people={[unlinkedDriver]} sites={[siteOne]} {...props} />);
 
     const row = within(screen.getByRole("table", { name: "People" })).getByRole("row", { name: /Operator Active/ });
-    expect(row).toHaveTextContent("Phone login: Phone verification required");
+    expect(row).toHaveTextContent("Firebase sign-in: Ready — verify on first login");
     fireEvent.click(within(row).getByRole("button", { name: "Manage person" }));
     fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "+919100000099" } });
     fireEvent.click(screen.getByRole("button", { name: "Save identity" }));

@@ -1,6 +1,12 @@
 # Firebase phone authentication setup
 
-This runbook prepares Firebase Phone Authentication for Fleet Manager. It does not authorize a production deployment. Use separate Firebase projects for development/test and production, and never reuse a development service account in production.
+This guide describes the Firebase authentication architecture and base setup.
+For the controlled staging build, exact configuration placement, real-device
+test matrix, and rollback procedure, use
+[Firebase staging and real-device OTP runbook](firebase-staging-runbook.md).
+Neither document authorizes a production deployment. Use separate Firebase
+projects for staging and production, and never reuse a staging service account
+in production.
 
 ## 1. Create and harden Firebase projects
 
@@ -11,10 +17,10 @@ This runbook prepares Firebase Phone Authentication for Fleet Manager. It does n
 
 ## 2. Register Android applications
 
-Register the Android package IDs that will actually use Firebase:
+Register only the Android package IDs that will actually use Firebase:
 
-- Production flavor: `com.fleetmanager.fleet_manager_mobile`
-- Pilot flavor, only if Firebase testing is intentionally enabled for that flavor: `com.fleetmanager.fleet_manager_mobile.pilot`
+- Controlled staging/Pilot flavor: `com.fleetmanager.fleet_manager_mobile.pilot`
+- Future production flavor, not part of staging: `com.fleetmanager.fleet_manager_mobile`
 
 Add SHA-1 and SHA-256 fingerprints for every signing certificate used by Firebase builds: local debug, CI/staging, and the protected release keystore. Obtain fingerprints with Gradle's `signingReport` or `keytool`. Phone sign-in can fail on a real device when the installed build's package name or certificate fingerprint is missing.
 
@@ -22,11 +28,17 @@ The current client receives Firebase values through build-time Dart defines; do 
 
 ## 3. Configure the mobile build
 
-Supply the selected project's public Android app values at build/run time:
+For staging, use `scripts/build-firebase-staging-apk.ps1`; it forces Firebase
+mode, the staging build profile, the `.pilot` package, the protected Pilot
+signer, and an explicit HTTPS API URL. Supply the selected project's public
+Android app values at build time:
 
 ```powershell
-flutter run --flavor production `
+flutter run --flavor pilot `
+  --dart-define=FLEET_PILOT=true `
   --dart-define=FLEET_AUTH_MODE=firebase `
+  --dart-define=FLEET_BUILD_PROFILE=firebase-staging `
+  --dart-define=FLEET_API_BASE_URL=https://<staging-api-host> `
   --dart-define=FIREBASE_ANDROID_API_KEY=<android-api-key> `
   --dart-define=FIREBASE_ANDROID_APP_ID=<android-app-id> `
   --dart-define=FIREBASE_MESSAGING_SENDER_ID=<sender-id> `
@@ -46,7 +58,7 @@ flutter run --flavor pilot --dart-define=FLEET_AUTH_MODE=pilot
 Use Application Default Credentials in the deployed runtime (recommended), or mount a narrowly scoped service-account file outside the repository and point `GOOGLE_APPLICATION_CREDENTIALS` to that mounted path.
 
 ```text
-FLEET_ENVIRONMENT=production
+FLEET_ENVIRONMENT=staging
 FLEET_AUTH_MODE=firebase
 FLEET_FIREBASE_PROJECT_ID=<firebase-project-id>
 FLEET_FIREBASE_CHECK_REVOKED_TOKENS=true
@@ -68,7 +80,10 @@ FLEET_OTP_PROVIDER=development
 FLEET_ENABLE_DEVELOPMENT_OTP=true
 ```
 
-Production profiles reject pilot mode and development OTP configuration.
+Staging and production profiles reject Pilot mode and development OTP
+configuration. A controlled Pilot fallback uses a separate
+`FLEET_ENVIRONMENT=pilot` runtime and separately built Pilot-auth APK; it is not
+a hidden fallback inside Firebase mode.
 
 ## 5. Apply the database migration
 

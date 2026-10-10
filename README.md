@@ -137,5 +137,5 @@ production-profile validation, API/web security headers, browser refresh
 cookies, durable mobile sync diagnostics, cold-restart/retry tests, evidence
 content validation, backup/restore tooling, and pilot documentation. It does
 not add new equipment or change the Driver event/offline contract. See
-`docs/phase7-e2e-matrix.md`, `docs/pilot-runbook.md`, and
-`docs/pilot-checklist.md`.
+`docs/phase7-e2e-matrix.md`, `docs/pilot-runbook.md`,
+`docs/pilot-checklist.md`, and `docs/firebase-staging-runbook.md`.

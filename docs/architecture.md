@@ -103,6 +103,15 @@ Every login and request rechecks active Fleet state. The client can select only
 memberships returned after verification, so a supplied role or company is not
 an authorization input. See [ADR 0011](adr/0011-firebase-phone-authentication.md).
 
+The controlled staging profile requires Firebase mode, explicit HTTPS web/CORS
+and host boundaries, secure cookies, and an independent Fleet JWT signing key.
+Its Android artifact reuses the `.pilot` package and protected Pilot signer but
+disables mutable Pilot server overrides and Pilot self-update behavior. An
+explicit Firebase-staging build script verifies the package, signer, version,
+API/Firebase public identifiers, and absence of service-account markers. Pilot
+fallback remains a separately configured runtime and artifact, never an
+in-build downgrade path.
+
 ## Phase 3 management boundary
 
 `fleet_api.domain.admin.AdminService` is the application service for the web

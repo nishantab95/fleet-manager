@@ -15,8 +15,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final sessionStore = SecureSessionStore();
   final api = ApiClient(persistSession: sessionStore.save);
+  final authMode = fleetAuthMode;
+  final pilotRuntimeEnabled = pilotRuntimeFeaturesEnabled(
+    pilotBuild: isPilotBuild,
+    authMode: authMode,
+  );
   FleetLoginAuthProvider loginAuthProvider;
-  if (fleetAuthMode == FleetAuthMode.firebase) {
+  if (authMode == FleetAuthMode.firebase) {
     try {
       await Firebase.initializeApp(options: FleetFirebaseOptions.android);
       loginAuthProvider = FirebasePhoneAuthProvider(api);
@@ -26,7 +31,7 @@ Future<void> main() async {
   } else {
     loginAuthProvider = PilotOtpAuthProvider(api);
   }
-  if (isPilotBuild) {
+  if (pilotRuntimeEnabled) {
     final pilotBaseUrl = await sessionStore.readPilotBaseUrl();
     if (pilotBaseUrl != null && pilotBaseUrl.isNotEmpty) {
       try {
@@ -45,7 +50,7 @@ Future<void> main() async {
     remote: api,
     installationIdentifier: installationIdentifier,
   );
-  final pilotUpdater = isPilotBuild
+  final pilotUpdater = pilotRuntimeEnabled
       ? PilotUpdateController(
           service: PilotUpdateService(
             baseUrl: () => api.baseUrl,

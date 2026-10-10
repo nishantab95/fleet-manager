@@ -291,7 +291,13 @@ class OwnerPeopleSiteService:
             raise DomainError("role must be DRIVER or SUPERVISOR")
         normalized_phone = normalize_phone(phone, default_region=self.phone_default_region)
         clean_name = _clean_required(display_name, "display_name")
-        user = self.session.scalar(select(User).where(User.phone_number == normalized_phone))
+        phone_matches = self._normalized_phone_matches(normalized_phone)
+        if len(phone_matches) > 1:
+            raise ConflictError(
+                "This mobile number matches multiple existing people. "
+                "Resolve the duplicate phone records before adding a role."
+            )
+        user = phone_matches[0] if phone_matches else None
         if user is None:
             user = User(
                 phone_number=normalized_phone,

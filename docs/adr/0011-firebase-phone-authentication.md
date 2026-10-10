@@ -34,7 +34,13 @@ Firebase service-account JSON and generated platform configuration containing pr
 
 Migration `0023_user_auth_identity` is additive and preserves all existing Users, memberships, sessions, operational data, and offline data. It may be applied directly from `0022`; no database reset is required.
 
-Implementation is isolated on `feature/real-firebase-auth`. Development and staging use the dedicated non-production Firebase project and the existing disposable Fleet test database. They do not create a second permanent business database. Before a future merge, update the branch from the latest main line, resolve any Alembic divergence to one head, and repeat fresh-to-head plus prior-main-head-to-auth-head tests. The eventual production migration adds authentication links to the same canonical database, so People, Assets, Duties, and history require no re-entry or business-data migration.
+The implementation is merged on `main`. Development and staging use a
+dedicated non-production Firebase project and the existing disposable Fleet
+test database; they do not create a second permanent business database.
+Migration and authentication regression checks must still cover fresh-to-head
+and prior-head-to-current-head upgrades. The eventual production migration
+adds authentication links to the same canonical database, so People, Assets,
+Duties, and history require no re-entry or business-data migration.
 
 Firebase delivery limits, abuse protection, APNs/iOS setup, Android SHA fingerprints, Play Integrity/device behavior, and real-device SMS delivery are external operational concerns. CI and automated tests use provider adapters and Firebase console test numbers; they do not send SMS.
 

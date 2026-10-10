@@ -138,15 +138,20 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError("pilot OTP provider requires role codes: " + ", ".join(missing))
 
-        if environment in {"production", "prod", "strict-production"}:
+        protected_environments = {"staging", "production", "prod", "strict-production"}
+        if environment in protected_environments:
             if auth_mode != "firebase":
-                raise ValueError("production requires Firebase authentication mode")
+                raise ValueError(f"{environment} requires Firebase authentication mode")
             if not self.web_public_base_url.strip():
-                raise ValueError("production requires a web public base URL")
+                raise ValueError(f"{environment} requires a web public base URL")
             if not self.jwt_signing_key or len(self.jwt_signing_key) < 32:
-                raise ValueError("production requires a JWT signing key of at least 32 characters")
+                raise ValueError(
+                    f"{environment} requires a JWT signing key of at least 32 characters"
+                )
             if self.enable_development_otp or otp_provider in {"development", "fake", "pilot"}:
-                raise ValueError("development and pilot OTP providers are forbidden in production")
+                raise ValueError(
+                    f"development and pilot OTP providers are forbidden in {environment}"
+                )
             if any(
                 code
                 for code in (
@@ -156,11 +161,15 @@ class Settings(BaseSettings):
                     self.pilot_owner_otp,
                 )
             ):
-                raise ValueError("pilot OTP material is forbidden in production")
+                raise ValueError(f"pilot OTP material is forbidden in {environment}")
             if not self.cors_origins or "*" in self.cors_origins:
-                raise ValueError("production requires explicit CORS origins")
+                raise ValueError(f"{environment} requires explicit CORS origins")
             if not self.allowed_host_values or "*" in self.allowed_host_values:
-                raise ValueError("production requires explicit allowed hosts")
+                raise ValueError(f"{environment} requires explicit allowed hosts")
+            if not self.web_public_base_url.lower().startswith("https://"):
+                raise ValueError(f"{environment} requires an HTTPS web public base URL")
+
+        if environment in {"production", "prod", "strict-production"}:
             if object_storage_provider != "s3":
                 raise ValueError("production requires private S3-compatible object storage")
             if not self.s3_access_key_id or not self.s3_secret_access_key:
@@ -173,8 +182,6 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "production object-storage credentials must not use local defaults"
                 )
-            if not self.web_public_base_url.lower().startswith("https://"):
-                raise ValueError("production requires an HTTPS web public base URL")
         return self
 
     @property
@@ -187,7 +194,13 @@ class Settings(BaseSettings):
 
     @property
     def secure_cookies(self) -> bool:
-        return self.environment.lower() in {"pilot", "production", "prod", "strict-production"}
+        return self.environment.lower() in {
+            "pilot",
+            "staging",
+            "production",
+            "prod",
+            "strict-production",
+        }
 
     @property
     def evidence_mime_types(self) -> set[str]:
