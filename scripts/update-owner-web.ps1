@@ -47,9 +47,9 @@ if ($sourceStatus.Count -ne 0) {
     throw 'Owner update requires a clean source checkout.'
 }
 
-$currentCommit = (Invoke-RepoGit @('rev-parse', 'HEAD'))[0]
+$currentCommit = Invoke-RepoGit @('rev-parse', 'HEAD') | Select-Object -First 1
 [void](Invoke-RepoGit @('fetch', '--no-tags', 'origin', 'main'))
-$approvedCommit = (Invoke-RepoGit @('rev-parse', 'origin/main'))[0]
+$approvedCommit = Invoke-RepoGit @('rev-parse', 'origin/main') | Select-Object -First 1
 if ($currentCommit -ne $approvedCommit) {
     $currentIsAncestor = $false
     & git -c "safe.directory=$repoRoot" -C $repoRoot merge-base --is-ancestor $currentCommit $approvedCommit 2>$null
@@ -141,7 +141,7 @@ $ownerHealth = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/a
 if ([int]$ownerHealth.StatusCode -ne 200) {
     throw "Owner app health check returned $([int]$ownerHealth.StatusCode)."
 }
-$deployedCommit = (Invoke-RepoGit @('rev-parse', 'HEAD'))[0]
+$deployedCommit = Invoke-RepoGit @('rev-parse', 'HEAD') | Select-Object -First 1
 Write-Output "OWNER_COMMIT=$deployedCommit"
 Write-Output "OWNER_HEALTH=$([int]$ownerHealth.StatusCode)"
 Write-Output 'OWNER_UPDATE=PASS'
