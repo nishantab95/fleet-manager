@@ -14,7 +14,7 @@ $jdkRoot = Join-Path $env:USERPROFILE "Tools\temurin-17"
 $sdkRoot = Join-Path $env:LOCALAPPDATA "Android\Sdk"
 $gradleHome = Join-Path $env:USERPROFILE ".gradle"
 $signingConfig = Join-Path $gradleHome "gradle.properties"
-$keystore = Join-Path $env:USERPROFILE ".fleet-manager\signing\fleet-pilot-release.jks"
+$keystore = $null
 $expectedPackage = "com.fleetmanager.fleet_manager_mobile.pilot"
 if ($Company -and $CompanyPin) {
     throw "Choose either Firebase Company or Company PIN, not both."
@@ -48,8 +48,18 @@ $signingBlockers = [System.Collections.Generic.List[string]]::new()
 if (-not (Test-Path -LiteralPath $signingConfig -PathType Leaf)) {
     $signingBlockers.Add("missing user Gradle signing configuration")
 }
-if (-not (Test-Path -LiteralPath $keystore -PathType Leaf)) {
-    $signingBlockers.Add("missing protected Pilot keystore")
+else {
+    $storeFileSetting = Select-String `
+        -LiteralPath $signingConfig `
+        -Pattern "^fleetPilotStoreFile=(.+)$" |
+        Select-Object -First 1
+    if ($storeFileSetting) {
+        $keystore = $storeFileSetting.Matches[0].Groups[1].Value.Trim()
+    }
+}
+if ([string]::IsNullOrWhiteSpace($keystore) -or
+    -not (Test-Path -LiteralPath $keystore -PathType Leaf)) {
+    $signingBlockers.Add("missing protected Pilot keystore configured by fleetPilotStoreFile")
 }
 foreach ($propertyName in @(
         "fleetPilotStoreFile",
