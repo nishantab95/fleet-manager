@@ -81,13 +81,9 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_company_pin_credentials"),
-        sa.UniqueConstraint(
-            "credential_hash", name="uq_company_pin_credentials_credential_hash"
-        ),
+        sa.UniqueConstraint("credential_hash", name="uq_company_pin_credentials_credential_hash"),
     )
-    op.create_index(
-        "ix_company_pin_credentials_user_id", "company_pin_credentials", ["user_id"]
-    )
+    op.create_index("ix_company_pin_credentials_user_id", "company_pin_credentials", ["user_id"])
     op.create_index(
         "ix_company_pin_credentials_company_id", "company_pin_credentials", ["company_id"]
     )
@@ -130,15 +126,11 @@ def downgrade() -> None:
         "ix_company_pin_credentials_company_membership",
         table_name="company_pin_credentials",
     )
-    op.drop_index(
-        "ix_company_pin_credentials_membership_id", table_name="company_pin_credentials"
-    )
+    op.drop_index("ix_company_pin_credentials_membership_id", table_name="company_pin_credentials")
     op.drop_index("ix_company_pin_credentials_company_id", table_name="company_pin_credentials")
     op.drop_index("ix_company_pin_credentials_user_id", table_name="company_pin_credentials")
     op.drop_table("company_pin_credentials")
     op.drop_index("ix_otp_challenges_membership_id", table_name="otp_challenges")
-    op.drop_constraint(
-        "fk_otp_challenges_membership_id", "otp_challenges", type_="foreignkey"
-    )
+    op.drop_constraint("fk_otp_challenges_membership_id", "otp_challenges", type_="foreignkey")
     op.drop_column("otp_challenges", "purpose")
     op.drop_column("otp_challenges", "membership_id")
