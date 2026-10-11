@@ -72,7 +72,8 @@ function Test-CloudflareWebsiteHealth {
 
 function Get-CloudflareWebsiteListeners {
     param([int]$Port = 3001)
-    @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+    return ,$listeners
 }
 
 function Get-CloudflareManagedProcess {
