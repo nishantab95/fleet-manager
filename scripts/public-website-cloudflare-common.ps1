@@ -34,7 +34,12 @@ function Get-CloudflareWebsiteState {
     param([Parameter(Mandatory)][string]$DeployRoot)
     $path = (Get-CloudflareWebsitePaths -DeployRoot $DeployRoot).State
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
-    Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    try {
+        Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+        throw
+    }
 }
 
 function Get-CloudflareWebsitePreviousRelease {

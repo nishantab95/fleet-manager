@@ -64,7 +64,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $stagePath '.next\static') -Force | Out-Null
     Get-ChildItem -LiteralPath $static -Force | Copy-Item -Destination (Join-Path $stagePath '.next\static') -Recurse -Force
     Copy-Item -LiteralPath $public -Destination (Join-Path $stagePath 'public') -Recurse -Force
-    & icacls.exe $stagePath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T | Out-Null
+    & icacls.exe $stagePath /inheritance:r /grant:r '*S-1-5-18:RX' '*S-1-5-32-544:F' /T /C | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Unable to restrict the immutable release ACL.' }
     Move-Item -LiteralPath $stagePath -Destination $releasePath
 } catch {
