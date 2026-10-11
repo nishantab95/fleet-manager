@@ -42,7 +42,8 @@ if ($owner.ReturnValue -ne 0 -or $owner.User -ne 'SYSTEM') { throw 'The marketin
 $leadAcl = Get-Acl -LiteralPath ([string]$config.leadDirectory)
 if (-not $leadAcl.AreAccessRulesProtected) { throw 'Lead directory permissions still inherit parent access.' }
 $identities = @($leadAcl.Access | ForEach-Object { $_.IdentityReference.Value })
-if (($identities | Where-Object { $_ -notmatch '(?i)(SYSTEM|Administrators)$' }).Count -gt 0) {
+$unexpectedIdentities = @($identities | Where-Object { $_ -notmatch '(?i)(SYSTEM|Administrators)$' })
+if ($unexpectedIdentities.Length -gt 0) {
     throw 'Lead directory ACL contains an identity beyond SYSTEM and Administrators.'
 }
 
