@@ -376,17 +376,17 @@ describe("Owner management panels", () => {
     expect(invitedRow).toHaveTextContent("INVITED");
   });
 
-  it("shows phone-login readiness and submits a guarded identity change", async () => {
+  it("shows device-login readiness and submits a guarded identity change", async () => {
     const props = common();
-    const readyDriver: OwnerPerson = { ...activeDriver, auth_state: "READY", phone_auth_linked: true };
+    const readyDriver: OwnerPerson = { ...activeDriver, auth_state: "READY", device_activated: true };
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<PeoplePanel assets={[assignedTipper]} people={[readyDriver]} sites={[siteOne]} {...props} />);
 
     const row = within(screen.getByRole("table", { name: "People" })).getByRole("row", { name: /Operator Active/ });
-    expect(row).toHaveTextContent("Firebase sign-in: Linked");
+    expect(row).toHaveTextContent("Device login: Device activated");
 
     fireEvent.click(within(row).getByRole("button", { name: "Manage person" }));
-    expect(within(screen.getByRole("dialog")).getByText("Firebase sign-in: Linked")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByText("Device login: Device activated")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "91000 00099" } });
     fireEvent.click(screen.getByRole("button", { name: "Save identity" }));
     expect(props.apiRequest).not.toHaveBeenCalled();
@@ -400,7 +400,7 @@ describe("Owner management panels", () => {
     ));
     const payload = JSON.parse(vi.mocked(props.apiRequest).mock.calls[0][1]?.body as string);
     expect(payload).toEqual({ display_name: "Operator Active", phone: "91000 00099" });
-    expect(confirm).toHaveBeenCalledWith("Changing this phone number will sign the person out and require Firebase phone verification on the new number. Continue?");
+    expect(confirm).toHaveBeenCalledWith("Changing this phone number will sign the person out and require device activation on the new number. Continue?");
     expect(await screen.findByText("Phone updated. New number must be verified on next login.")).toBeInTheDocument();
     confirm.mockRestore();
   });
@@ -408,12 +408,12 @@ describe("Owner management panels", () => {
   it("updates an unlinked phone without confirmation and shows duplicate errors", async () => {
     const apiRequest = vi.fn().mockRejectedValue(new Error("This mobile number is already assigned to another active person."));
     const props = common(apiRequest);
-    const unlinkedDriver: OwnerPerson = { ...activeDriver, auth_state: "READY", phone_auth_linked: false };
+    const unlinkedDriver: OwnerPerson = { ...activeDriver, auth_state: "READY", device_activated: false };
     const confirm = vi.spyOn(window, "confirm");
     render(<PeoplePanel assets={[assignedTipper]} people={[unlinkedDriver]} sites={[siteOne]} {...props} />);
 
     const row = within(screen.getByRole("table", { name: "People" })).getByRole("row", { name: /Operator Active/ });
-    expect(row).toHaveTextContent("Firebase sign-in: Ready — verify on first login");
+    expect(row).toHaveTextContent("Device login: Activation required");
     fireEvent.click(within(row).getByRole("button", { name: "Manage person" }));
     fireEvent.change(screen.getByLabelText("Edit person phone"), { target: { value: "+919100000099" } });
     fireEvent.click(screen.getByRole("button", { name: "Save identity" }));
@@ -421,6 +421,23 @@ describe("Owner management panels", () => {
     expect(confirm).not.toHaveBeenCalled();
     expect(await screen.findByText("This mobile number is already assigned to another active person.")).toBeInTheDocument();
     confirm.mockRestore();
+  });
+
+  it("generates and resets a one-time device activation code", async () => {
+    const expiresAt = "2026-10-12T12:00:00Z";
+    const apiRequest = vi.fn().mockResolvedValue({ activation_code: "614209", expires_at: expiresAt });
+    const props = common(apiRequest);
+    render(<PeoplePanel assets={[assignedTipper]} people={[{ ...activeDriver, device_activated: false }]} sites={[siteOne]} {...props} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage person" }));
+    fireEvent.click(screen.getByRole("button", { name: "Generate activation code" }));
+
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
+      `/api/v1/owner/people/${activeDriver.membership_id}/activation-code`,
+      { method: "POST" },
+    ));
+    expect(await screen.findByLabelText("Activation code")).toHaveTextContent("614209");
+    expect(screen.getByText("It will not be shown again.", { exact: false })).toBeInTheDocument();
   });
 
   it("routes People and Site Details entry points to the same person or asset manager", () => {

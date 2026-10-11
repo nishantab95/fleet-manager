@@ -1,4 +1,4 @@
-"""Verify a Firebase client APK without printing configured client values."""
+"""Verify a company client APK without printing configured client values."""
 
 from __future__ import annotations
 
@@ -54,14 +54,14 @@ def verify_staging_apk(
     version_name: str,
     version_code: int,
     api_base_url: str,
-    api_key: str,
-    app_id: str,
-    sender_id: str,
-    project_id: str,
+    api_key: str = "",
+    app_id: str = "",
+    sender_id: str = "",
+    project_id: str = "",
     build_profile: str = "firebase-staging",
 ) -> dict[str, object]:
-    if build_profile not in {"firebase-staging", "firebase-company"}:
-        raise RuntimeError("Unsupported Firebase build profile")
+    if build_profile not in {"firebase-staging", "firebase-company", "company-pin"}:
+        raise RuntimeError("Unsupported company build profile")
     identity = inspect_apk(path)
     validate_expected_identity(identity)
     if (
@@ -71,18 +71,25 @@ def verify_staging_apk(
         raise RuntimeError("APK version does not match pubspec.yaml")
 
     required = {
-        "Firebase build profile": build_profile.encode("utf-8"),
+        "Company build profile": build_profile.encode("utf-8"),
         "API base URL": api_base_url.encode("utf-8"),
-        "Firebase Android API key": api_key.encode("utf-8"),
-        "Firebase Android app ID": app_id.encode("utf-8"),
-        "Firebase messaging sender ID": sender_id.encode("utf-8"),
-        "Firebase project ID": project_id.encode("utf-8"),
     }
+    if build_profile == "company-pin":
+        required["Company PIN auth mode"] = b"company_pin"
+    else:
+        required.update(
+            {
+                "Firebase Android API key": api_key.encode("utf-8"),
+                "Firebase Android app ID": app_id.encode("utf-8"),
+                "Firebase messaging sender ID": sender_id.encode("utf-8"),
+                "Firebase project ID": project_id.encode("utf-8"),
+            }
+        )
     found, forbidden = scan_apk_strings(path, required=required)
     missing = sorted(set(required) - found)
     if missing:
         raise RuntimeError(
-            "APK is missing expected Firebase markers: " + ", ".join(missing)
+            "APK is missing expected company-build markers: " + ", ".join(missing)
         )
     if forbidden:
         raise RuntimeError(
@@ -95,7 +102,7 @@ def verify_staging_apk(
         "versionCode": identity.version_code,
         "signerSha256": identity.signer_sha256,
         "apkSha256": identity.apk_sha256,
-        "authMode": "firebase",
+        "authMode": "company_pin" if build_profile == "company-pin" else "firebase",
         "buildProfile": build_profile,
         "requiredMarkersVerified": sorted(found),
         "forbiddenCredentialMarkers": [],
@@ -108,13 +115,13 @@ def main() -> None:
     parser.add_argument("--version-name", required=True)
     parser.add_argument("--version-code", required=True, type=int)
     parser.add_argument("--api-base-url", required=True)
-    parser.add_argument("--api-key", required=True)
-    parser.add_argument("--app-id", required=True)
-    parser.add_argument("--sender-id", required=True)
-    parser.add_argument("--project-id", required=True)
+    parser.add_argument("--api-key", default="")
+    parser.add_argument("--app-id", default="")
+    parser.add_argument("--sender-id", default="")
+    parser.add_argument("--project-id", default="")
     parser.add_argument(
         "--build-profile",
-        choices=("firebase-staging", "firebase-company"),
+        choices=("firebase-staging", "firebase-company", "company-pin"),
         default="firebase-staging",
     )
     args = parser.parse_args()

@@ -6,7 +6,7 @@ import 'package:flutter/services.dart' show appFlavor;
 import '../data/api_client.dart';
 import '../domain/role_models.dart';
 
-enum FleetAuthMode { pilot, firebase }
+enum FleetAuthMode { pilot, firebase, companyPin }
 
 const _configuredAuthMode = String.fromEnvironment('FLEET_AUTH_MODE');
 const _configuredBuildProfile = String.fromEnvironment('FLEET_BUILD_PROFILE');
@@ -22,8 +22,11 @@ FleetAuthMode resolveFleetAuthMode({
   }
   if (normalized == 'pilot') return FleetAuthMode.pilot;
   if (normalized == 'firebase') return FleetAuthMode.firebase;
+  if (normalized == 'company_pin') return FleetAuthMode.companyPin;
   if (normalized.isNotEmpty) {
-    throw StateError('FLEET_AUTH_MODE must be pilot or firebase.');
+    throw StateError(
+      'FLEET_AUTH_MODE must be pilot, firebase, or company_pin.',
+    );
   }
   return pilotBuild ? FleetAuthMode.pilot : FleetAuthMode.firebase;
 }
@@ -46,8 +49,18 @@ String resolveFirebaseBuildProfile({
 }) {
   final normalized = configured.trim().toLowerCase();
   if (normalized.isEmpty) return '';
-  if (normalized != 'firebase-staging' && normalized != 'firebase-company') {
+  if (normalized != 'firebase-staging' &&
+      normalized != 'firebase-company' &&
+      normalized != 'company-pin') {
     throw StateError('FLEET_BUILD_PROFILE is not supported.');
+  }
+  if (normalized == 'company-pin') {
+    if (!pilotBuild || authMode != FleetAuthMode.companyPin) {
+      throw StateError(
+        'The company PIN profile requires the update-compatible Pilot package and company PIN authentication.',
+      );
+    }
+    return normalized;
   }
   if (!pilotBuild || authMode != FleetAuthMode.firebase) {
     throw StateError(
@@ -93,14 +106,24 @@ bool get isFirebaseCompanyBuild => resolveFirebaseCompanyProfile(
   authMode: fleetAuthMode,
 );
 
+bool get isCompanyPinBuild =>
+    resolveFirebaseBuildProfile(
+      configured: _configuredBuildProfile,
+      pilotBuild: isPilotBuild,
+      authMode: fleetAuthMode,
+    ) ==
+    'company-pin';
+
 bool privateApkUpdatesEnabled({
   required bool pilotBuild,
   required FleetAuthMode authMode,
   required bool firebaseCompanyBuild,
+  bool companyPinBuild = false,
 }) =>
     pilotBuild &&
     (authMode == FleetAuthMode.pilot ||
-        (authMode == FleetAuthMode.firebase && firebaseCompanyBuild));
+        (authMode == FleetAuthMode.firebase && firebaseCompanyBuild) ||
+        (authMode == FleetAuthMode.companyPin && companyPinBuild));
 
 class LoginChallenge {
   const LoginChallenge({
@@ -162,6 +185,36 @@ class PilotOtpAuthProvider implements FleetLoginAuthProvider {
   @override
   Future<String> verifyOtp(LoginChallenge challenge, String otp) =>
       api.verifyOtp(challengeId: challenge.id, otp: otp);
+
+  @override
+  Future<void> signOut() async {}
+}
+
+class CompanyPinAuthProvider implements FleetLoginAuthProvider {
+  const CompanyPinAuthProvider();
+
+  @override
+  FleetAuthMode get mode => FleetAuthMode.companyPin;
+
+  @override
+  Future<LoginChallenge> sendOtp(
+    String phone, {
+    String? requestedRole,
+    bool forceResend = false,
+  }) {
+    throw const LoginAuthException(
+      'Use your company activation code.',
+      code: 'COMPANY_ACTIVATION_REQUIRED',
+    );
+  }
+
+  @override
+  Future<String> verifyOtp(LoginChallenge challenge, String otp) {
+    throw const LoginAuthException(
+      'Use your company activation code.',
+      code: 'COMPANY_ACTIVATION_REQUIRED',
+    );
+  }
 
   @override
   Future<void> signOut() async {}

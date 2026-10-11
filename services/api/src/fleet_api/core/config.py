@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     otp_ttl_seconds: int = 300
     otp_max_attempts: int = 5
     otp_resend_cooldown_seconds: int = 60
+    activation_code_ttl_seconds: int = 86_400
+    activation_setup_ttl_seconds: int = 900
+    pin_max_attempts: int = 5
+    pin_lock_seconds: int = 900
     jwt_signing_key: str | None = Field(default=None, repr=False)
     jwt_issuer: str = "fleet-manager-api"
     jwt_audience: str = "fleet-manager-client"
@@ -70,6 +74,10 @@ class Settings(BaseSettings):
             raise ValueError("OTP lifetime and attempt limit must be positive")
         if self.otp_resend_cooldown_seconds < 0:
             raise ValueError("OTP resend cooldown cannot be negative")
+        if self.activation_code_ttl_seconds <= 0 or self.activation_setup_ttl_seconds <= 0:
+            raise ValueError("activation lifetimes must be positive")
+        if self.pin_max_attempts <= 0 or self.pin_lock_seconds <= 0:
+            raise ValueError("PIN attempt limit and lock lifetime must be positive")
         if self.access_token_ttl_seconds <= 0 or self.pre_session_ttl_seconds <= 0:
             raise ValueError("token lifetimes must be positive")
         if self.refresh_token_ttl_seconds <= self.access_token_ttl_seconds:
@@ -103,8 +111,8 @@ class Settings(BaseSettings):
         auth_mode = self.auth_mode.strip().lower()
         otp_provider = self.otp_provider.lower()
         object_storage_provider = self.object_storage_provider.lower()
-        if auth_mode not in {"pilot", "firebase"}:
-            raise ValueError("FLEET_AUTH_MODE must be either pilot or firebase")
+        if auth_mode not in {"pilot", "firebase", "company_pin"}:
+            raise ValueError("FLEET_AUTH_MODE must be pilot, firebase, or company_pin")
         if object_storage_provider == "filesystem" and self.filesystem_storage_root is None:
             raise ValueError("filesystem object storage requires FLEET_FILESYSTEM_STORAGE_ROOT")
         pilot_codes = {
@@ -121,6 +129,8 @@ class Settings(BaseSettings):
                 raise ValueError("Firebase auth mode requires FLEET_FIREBASE_PROJECT_ID")
             if otp_provider == "pilot" or any(pilot_codes.values()):
                 raise ValueError("pilot OTP configuration is forbidden in Firebase auth mode")
+        if auth_mode == "company_pin" and (otp_provider == "pilot" or any(pilot_codes.values())):
+            raise ValueError("pilot OTP configuration is forbidden in company PIN auth mode")
         if otp_provider == "pilot" and environment not in {"development", "pilot", "test"}:
             raise ValueError(
                 "pilot OTP provider is restricted to local non-production environments"
@@ -140,8 +150,11 @@ class Settings(BaseSettings):
 
         protected_environments = {"staging", "production", "prod", "strict-production"}
         if environment in protected_environments:
-            if auth_mode != "firebase":
-                raise ValueError(f"{environment} requires Firebase authentication mode")
+            if auth_mode not in {"firebase", "company_pin"}:
+                raise ValueError(
+                    f"{environment} requires Firebase authentication mode "
+                    "or company PIN authentication mode"
+                )
             if not self.web_public_base_url.strip():
                 raise ValueError(f"{environment} requires a web public base URL")
             if not self.jwt_signing_key or len(self.jwt_signing_key) < 32:

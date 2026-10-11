@@ -50,6 +50,30 @@ class FirebaseTokenRequest(BaseModel):
     id_token: str = Field(min_length=1, max_length=16_384)
 
 
+class CompanyActivationRequest(BaseModel):
+    phone: str = Field(min_length=3, max_length=64)
+    activation_code: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+    installation_identifier: str = Field(min_length=1, max_length=200)
+
+
+class CompanyActivationResponse(BaseModel):
+    status: Literal["verified"] = "verified"
+    activation_token: str
+    expires_in: int
+
+
+class CompanyPinSetupRequest(BaseModel):
+    activation_token: str = Field(min_length=32, max_length=256)
+    installation_identifier: str = Field(min_length=1, max_length=200)
+    pin: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+
+
+class CompanyPinLoginRequest(BaseModel):
+    device_credential: str = Field(min_length=32, max_length=256)
+    installation_identifier: str = Field(min_length=1, max_length=200)
+    pin: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+
+
 class MembershipOption(BaseModel):
     membership_id: UUID
     company_id: UUID
@@ -82,6 +106,10 @@ class TokenResponse(BaseModel):
     membership_id: UUID
     company_id: UUID
     role: MembershipRole
+
+
+class CompanyPinSessionResponse(TokenResponse):
+    device_credential: str
 
 
 class WebTokenResponse(BaseModel):
@@ -408,6 +436,8 @@ class OwnerPersonResponse(BaseModel):
     status: MembershipStatus
     auth_state: Literal["READY", "PHONE_MISSING", "DUPLICATE_PHONE", "DISABLED"]
     phone_auth_linked: bool
+    device_activated: bool = False
+    activation_pending: bool = False
     sites: list[OwnerPersonSiteResponse]
     has_active_assignment: bool
     has_active_duty: bool
@@ -415,6 +445,11 @@ class OwnerPersonResponse(BaseModel):
     current_asset_code: str | None
     current_site_id: UUID | None
     current_site_name: str | None
+
+
+class OwnerActivationCodeResponse(BaseModel):
+    activation_code: str
+    expires_at: datetime
 
 
 class OwnerSiteCreateRequest(BaseModel):

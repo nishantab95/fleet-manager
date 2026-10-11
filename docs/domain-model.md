@@ -30,6 +30,7 @@ without adding a new persistence boundary.
 | `EventVerification` | Append-only verification history while the envelope stores current status. |
 | `AuditLog` | Explicit append-only operational audit record with old/new JSON values and reason. |
 | `OtpChallenge` | Short-lived normalized-phone challenge with salted OTP hash, bounded attempts, cooldown, expiry, and delivery metadata hashes. |
+| `CompanyPinCredential` | Company/User device activation with hashed device and installation identifiers, a slow salted PIN hash, failed-attempt lock state, and revocation history. |
 | `AuthSession` | Company/membership-scoped server session with hashed refresh token, rotation state, expiry, revocation, and replay family. |
 | `EvidenceObject` | Private object-storage metadata scoped to one company, driver membership, and client event UUID. |
 | `MaintenanceProofSubmission` | Driver service evidence and immutable assignment/Site context awaiting Supervisor review. |
@@ -120,6 +121,12 @@ collisions.
    company/membership foreign key prevents a cross-tenant session row.
 9. Refresh rotation stores only hashes. Reuse of a previous refresh hash
    revokes the complete session family.
+- A company activation code is membership-bound, hashed, expires after 24
+    hours, has bounded attempts, and is consumed once. Regeneration invalidates
+    all earlier codes for that person in the company. A company PIN credential
+    stores no recoverable PIN or device secret; only one unrevoked credential
+    may exist per company/User. Owner reset revokes every company session and
+    device credential for that person without changing assignments or history.
 10. Administrative status changes preserve records for audit/history. New
     assignments may reference only active, same-company driver/supervisor
     memberships, sites, and compatible active assets; their effective-date overlap rules stay

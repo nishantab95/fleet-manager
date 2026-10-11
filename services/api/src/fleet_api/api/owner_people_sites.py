@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import get_owner_people_site_service
 from fleet_api.api.schemas import (
+    OwnerActivationCodeResponse,
     OwnerPersonInviteRequest,
     OwnerPersonResponse,
     OwnerPersonSiteResponse,
@@ -53,6 +54,8 @@ def _person_response(view: PersonView) -> OwnerPersonResponse:
         status=view.membership.status,
         auth_state=view.auth_state,
         phone_auth_linked=view.phone_auth_linked,
+        device_activated=view.device_activated,
+        activation_pending=view.activation_pending,
         sites=[
             OwnerPersonSiteResponse(site_id=site.site_id, site_name=site.site_name)
             for site in view.sites
@@ -173,6 +176,49 @@ def reactivate_person(
         view = service.reactivate_person(membership_id)
         db.commit()
         return _person_response(view)
+    except DomainError as exc:
+        _fail(db, exc)
+
+
+@router.post(
+    "/people/{membership_id}/activation-code",
+    response_model=OwnerActivationCodeResponse,
+)
+def generate_person_activation_code(
+    membership_id: UUID,
+    service: OwnerPeopleSiteService = Depends(get_owner_people_site_service),
+    db: Session = Depends(get_db),
+) -> OwnerActivationCodeResponse:
+    try:
+        result = service.generate_person_activation_code(membership_id)
+        db.commit()
+        return OwnerActivationCodeResponse(
+            activation_code=result.activation_code,
+            expires_at=result.expires_at,
+        )
+    except DomainError as exc:
+        _fail(db, exc)
+
+
+@router.post(
+    "/people/{membership_id}/reset-device",
+    response_model=OwnerActivationCodeResponse,
+)
+def reset_person_device(
+    membership_id: UUID,
+    service: OwnerPeopleSiteService = Depends(get_owner_people_site_service),
+    db: Session = Depends(get_db),
+) -> OwnerActivationCodeResponse:
+    try:
+        result = service.generate_person_activation_code(
+            membership_id,
+            reset_device=True,
+        )
+        db.commit()
+        return OwnerActivationCodeResponse(
+            activation_code=result.activation_code,
+            expires_at=result.expires_at,
+        )
     except DomainError as exc:
         _fail(db, exc)
 

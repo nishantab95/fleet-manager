@@ -819,6 +819,8 @@ class OwnerPerson {
     required this.role,
     required this.status,
     this.authState = 'READY',
+    this.deviceActivated = false,
+    this.activationPending = false,
     required this.sites,
     required this.hasActiveAssignment,
     required this.hasActiveDuty,
@@ -835,6 +837,8 @@ class OwnerPerson {
   final String role;
   final String status;
   final String authState;
+  final bool deviceActivated;
+  final bool activationPending;
   final List<OwnerPersonSite> sites;
   final bool hasActiveAssignment;
   final bool hasActiveDuty;
@@ -855,6 +859,8 @@ class OwnerPerson {
     role: '${json['role']}',
     status: '${json['status']}',
     authState: '${json['auth_state'] ?? 'READY'}',
+    deviceActivated: json['device_activated'] == true,
+    activationPending: json['activation_pending'] == true,
     sites: (json['sites'] as List<dynamic>? ?? const [])
         .whereType<Map<String, dynamic>>()
         .map(OwnerPersonSite.fromJson)
@@ -866,6 +872,19 @@ class OwnerPerson {
     currentSiteId: json['current_site_id'] as String?,
     currentSiteName: json['current_site_name'] as String?,
   );
+}
+
+class OwnerActivationCode {
+  const OwnerActivationCode({required this.code, required this.expiresAt});
+
+  final String code;
+  final DateTime expiresAt;
+
+  factory OwnerActivationCode.fromJson(Map<String, dynamic> json) =>
+      OwnerActivationCode(
+        code: '${json['activation_code']}',
+        expiresAt: DateTime.parse('${json['expires_at']}'),
+      );
 }
 
 class OwnerPersonInput {

@@ -117,8 +117,11 @@ class FleetManagerApp extends StatelessWidget {
     final firebaseCompany =
         isFirebaseCompanyBuild &&
         dependencies?.authentication.mode == FleetAuthMode.firebase;
+    final companyPin =
+        isCompanyPinBuild &&
+        dependencies?.authentication.mode == FleetAuthMode.companyPin;
     return MaterialApp(
-      title: firebaseCompany
+      title: firebaseCompany || companyPin
           ? 'Fleet AI Systems'
           : firebaseStaging
           ? 'Fleet AI Systems Staging'
@@ -369,27 +372,151 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _phoneController = TextEditingController();
   final _otpController = TextEditingController();
+  final _activationCodeController = TextEditingController();
+  final _pinController = TextEditingController();
+  final _confirmPinController = TextEditingController();
   LoginChallenge? _challenge;
   String? _preSessionToken;
+  String? _activationToken;
+  String? _deviceCredential;
   List<MembershipOption> _memberships = const [];
   String _selectedRole = 'DRIVER';
   String? _error;
   bool _busy = false;
+  bool _credentialLoaded = false;
 
   bool get _isFirebase =>
       widget.dependencies.authentication.mode == FleetAuthMode.firebase;
+  bool get _isCompanyPin =>
+      widget.dependencies.authentication.mode == FleetAuthMode.companyPin;
 
   @override
   void initState() {
     super.initState();
     _error = widget.initialError;
+    if (_isCompanyPin) unawaited(_loadCompanyCredential());
+  }
+
+  Future<void> _loadCompanyCredential() async {
+    final credential = await widget.dependencies.sessionStore
+        .readCompanyDeviceCredential();
+    if (!mounted) return;
+    setState(() {
+      _deviceCredential = credential;
+      _credentialLoaded = true;
+    });
   }
 
   @override
   void dispose() {
     _phoneController.dispose();
     _otpController.dispose();
+    _activationCodeController.dispose();
+    _pinController.dispose();
+    _confirmPinController.dispose();
     super.dispose();
+  }
+
+  String get _companyPhone {
+    final entered = _phoneController.text.trim();
+    return entered.startsWith('+') ? entered : '+91$entered';
+  }
+
+  Future<void> _activateCompanyDevice() async {
+    await _run(() async {
+      if (!RegExp(r'^\d{10}$').hasMatch(_phoneController.text.trim())) {
+        throw const LoginAuthException(
+          'Enter a valid 10-digit mobile number.',
+          code: 'INVALID_PHONE',
+        );
+      }
+      final code = _activationCodeController.text.trim();
+      if (!RegExp(r'^\d{6}$').hasMatch(code)) {
+        throw const LoginAuthException(
+          'Enter the 6-digit activation code.',
+          code: 'INVALID_ACTIVATION_CODE',
+        );
+      }
+      _activationToken = await widget.dependencies.api.beginCompanyActivation(
+        phone: _companyPhone,
+        activationCode: code,
+        installationIdentifier: widget.dependencies.installationIdentifier,
+      );
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _createCompanyPin() async {
+    final activationToken = _activationToken;
+    if (activationToken == null) return;
+    await _run(() async {
+      final pin = _pinController.text.trim();
+      if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
+        throw const LoginAuthException(
+          'Create an exactly 6-digit PIN.',
+          code: 'INVALID_PIN',
+        );
+      }
+      if (pin != _confirmPinController.text.trim()) {
+        throw const LoginAuthException(
+          'PIN confirmation does not match.',
+          code: 'PIN_MISMATCH',
+        );
+      }
+      final result = await widget.dependencies.api.completeCompanyActivation(
+        activationToken: activationToken,
+        installationIdentifier: widget.dependencies.installationIdentifier,
+        pin: pin,
+      );
+      await widget.dependencies.sessionStore.saveCompanyDeviceCredential(
+        result.deviceCredential,
+      );
+      _deviceCredential = result.deviceCredential;
+      await _completeSignedIn(result.tokens);
+    });
+  }
+
+  Future<void> _loginCompanyPin() async {
+    final deviceCredential = _deviceCredential;
+    if (deviceCredential == null) return;
+    await _run(() async {
+      final pin = _pinController.text.trim();
+      if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
+        throw const LoginAuthException(
+          'Enter your 6-digit PIN.',
+          code: 'INVALID_PIN',
+        );
+      }
+      try {
+        final tokens = await widget.dependencies.api.loginCompanyPin(
+          deviceCredential: deviceCredential,
+          installationIdentifier: widget.dependencies.installationIdentifier,
+          pin: pin,
+        );
+        await _completeSignedIn(tokens);
+      } on ApiException catch (error) {
+        if (error.code == 'DEVICE_REACTIVATION_REQUIRED') {
+          await widget.dependencies.sessionStore.clearCompanyDeviceCredential();
+          _deviceCredential = null;
+          _pinController.clear();
+          if (mounted) setState(() {});
+        }
+        rethrow;
+      }
+    });
+  }
+
+  Future<void> _useAnotherAccount() async {
+    await widget.dependencies.sessionStore.clearCompanyDeviceCredential();
+    widget.dependencies.api.clearSession();
+    if (!mounted) return;
+    setState(() {
+      _deviceCredential = null;
+      _activationToken = null;
+      _pinController.clear();
+      _confirmPinController.clear();
+      _error = null;
+    });
   }
 
   Future<void> _requestOtp() async {
@@ -480,6 +607,10 @@ class _LoginScreenState extends State<LoginScreen> {
       preSessionToken: _preSessionToken!,
       membershipId: membership.membershipId,
     );
+    await _completeSignedIn(tokens);
+  }
+
+  Future<void> _completeSignedIn(SessionTokens tokens) async {
     try {
       if (tokens.role == 'DRIVER') {
         await widget.dependencies.registerDriverAccount(tokens);
@@ -512,6 +643,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isCompanyPin) return _buildCompanyPinLogin(context);
     final hasChallenge = _challenge != null;
     final hasMembershipChoice = _memberships.isNotEmpty;
     return Scaffold(
@@ -658,6 +790,132 @@ class _LoginScreenState extends State<LoginScreen> {
                 onTap: _busy
                     ? null
                     : () => _run(() => _selectMembership(membership)),
+              ),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompanyPinLogin(BuildContext context) {
+    if (!_credentialLoaded) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    final returning = _deviceCredential != null;
+    final creatingPin = _activationToken != null;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Fleet AI Systems')),
+      body: ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          Text(
+            returning
+                ? 'Enter PIN'
+                : creatingPin
+                ? 'Create PIN'
+                : 'Activate this device',
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            returning
+                ? 'Use the 6-digit PIN created for this device.'
+                : creatingPin
+                ? 'Create a 6-digit PIN for future access on this device.'
+                : 'Use your registered mobile number and the one-time code from your Owner.',
+          ),
+          const SizedBox(height: 20),
+          if (!returning && !creatingPin) ...[
+            TextField(
+              key: const Key('company-phone'),
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(10),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'Mobile Number',
+                prefixText: '+91 ',
+                hintText: '9876543210',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('activation-code'),
+              controller: _activationCodeController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(6),
+              ],
+              maxLength: 6,
+              decoration: const InputDecoration(
+                labelText: 'One-time activation code',
+              ),
+            ),
+            FilledButton(
+              key: const Key('activate-device'),
+              onPressed: _busy ? null : _activateCompanyDevice,
+              child: Text(_busy ? 'ACTIVATING…' : 'ACTIVATE'),
+            ),
+          ] else ...[
+            TextField(
+              key: const Key('company-pin'),
+              controller: _pinController,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(6),
+              ],
+              maxLength: 6,
+              decoration: InputDecoration(
+                labelText: returning ? 'PIN' : 'Create PIN',
+              ),
+            ),
+            if (creatingPin) ...[
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('confirm-company-pin'),
+                controller: _confirmPinController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(6),
+                ],
+                maxLength: 6,
+                decoration: const InputDecoration(labelText: 'Confirm PIN'),
+              ),
+            ],
+            FilledButton(
+              key: Key(returning ? 'pin-login' : 'create-pin'),
+              onPressed: _busy
+                  ? null
+                  : returning
+                  ? _loginCompanyPin
+                  : _createCompanyPin,
+              child: Text(
+                _busy
+                    ? 'PLEASE WAIT…'
+                    : returning
+                    ? 'SIGN IN'
+                    : 'CREATE PIN',
+              ),
+            ),
+            if (returning)
+              TextButton(
+                key: const Key('use-another-account'),
+                onPressed: _busy ? null : _useAnotherAccount,
+                child: const Text('Use another account'),
               ),
           ],
           if (_error != null) ...[

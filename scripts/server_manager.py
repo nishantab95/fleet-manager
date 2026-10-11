@@ -79,6 +79,8 @@ SERVER_AUTH_ENV_FILE = (
 SERVER_AUTH_ENV_KEYS = frozenset(
     {
         "FLEET_AUTH_MODE",
+        "FLEET_OTP_PROVIDER",
+        "FLEET_ENABLE_DEVELOPMENT_OTP",
         "FLEET_FIREBASE_PROJECT_ID",
         "FLEET_FIREBASE_CHECK_REVOKED_TOKENS",
         "FLEET_JWT_SIGNING_KEY",
@@ -245,8 +247,8 @@ def load_server_environment() -> dict[str, str]:
     if missing:
         raise ServerError("Server configuration is incomplete: " + ", ".join(missing))
     auth_mode = effective.get("FLEET_AUTH_MODE", "pilot").strip().casefold()
-    if auth_mode not in {"pilot", "firebase"}:
-        raise ServerError("FLEET_AUTH_MODE must be pilot or firebase.")
+    if auth_mode not in {"pilot", "firebase", "company_pin"}:
+        raise ServerError("FLEET_AUTH_MODE must be pilot, firebase, or company_pin.")
     if auth_mode == "firebase":
         firebase_required = (
             "FLEET_FIREBASE_PROJECT_ID",
@@ -274,6 +276,7 @@ def load_server_environment() -> dict[str, str]:
             raise ServerError(
                 "GOOGLE_APPLICATION_CREDENTIALS must remain outside the repository."
             )
+    if auth_mode in {"firebase", "company_pin"}:
         pilot_secrets = (
             "FLEET_PILOT_OTP",
             "FLEET_PILOT_DRIVER_OTP",
@@ -285,7 +288,7 @@ def load_server_environment() -> dict[str, str]:
         ]
         if enabled_pilot_secrets:
             raise ServerError(
-                "Firebase mode refuses Pilot OTP values: "
+                "Company authentication refuses Pilot OTP values: "
                 + ", ".join(enabled_pilot_secrets)
             )
     # Alembic intentionally honors FLEET_TEST_DATABASE_URL for the test suite.
@@ -965,11 +968,12 @@ def operator_check() -> int:
     database_status = "NOT READY"
     try:
         env = load_server_environment()
-        firebase_status = (
-            "FIREBASE"
-            if env.get("FLEET_AUTH_MODE", "pilot").strip().casefold() == "firebase"
-            else "PILOT"
-        )
+        auth_mode = env.get("FLEET_AUTH_MODE", "pilot").strip().casefold()
+        firebase_status = {
+            "firebase": "FIREBASE",
+            "company_pin": "COMPANY PIN",
+            "pilot": "PILOT",
+        }.get(auth_mode, "MISCONFIGURED")
         docker = shutil.which("docker")
         if docker and docker_ready(docker):
             health = compose_health(docker, env)

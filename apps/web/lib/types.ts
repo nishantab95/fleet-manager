@@ -156,6 +156,8 @@ export type OwnerPerson = {
   status: MembershipStatus;
   auth_state?: "READY" | "PHONE_MISSING" | "DUPLICATE_PHONE" | "DISABLED";
   phone_auth_linked?: boolean;
+  device_activated?: boolean;
+  activation_pending?: boolean;
   sites: { site_id: string; site_name: string }[];
   has_active_assignment: boolean;
   has_active_duty: boolean;
@@ -164,6 +166,7 @@ export type OwnerPerson = {
   current_site_id: string | null;
   current_site_name: string | null;
 };
+export type OwnerActivationCode = { activation_code: string; expires_at: string };
 export type OwnerSite = {
   id: string;
   name: string;

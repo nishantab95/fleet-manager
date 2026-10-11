@@ -5,6 +5,11 @@ from sqlalchemy.orm import Session
 
 from fleet_api.api.dependencies import get_auth_service, get_current_session
 from fleet_api.api.schemas import (
+    CompanyActivationRequest,
+    CompanyActivationResponse,
+    CompanyPinLoginRequest,
+    CompanyPinSessionResponse,
+    CompanyPinSetupRequest,
     FirebaseTokenRequest,
     MembershipOption,
     MembershipOptionsRequest,
@@ -22,9 +27,12 @@ from fleet_api.api.schemas import (
 from fleet_api.auth.service import AuthContext, AuthService, SessionTokens
 from fleet_api.db.session import get_db
 from fleet_api.domain.errors import (
+    ActivationCodeError,
     AmbiguousPhoneIdentityError,
     AuthConfigurationError,
     AuthenticationError,
+    DeviceAlreadyActivatedError,
+    DeviceCredentialError,
     FirebaseProviderUnavailableError,
     FirebaseTokenError,
     FleetIdentityAccessDeniedError,
@@ -35,6 +43,8 @@ from fleet_api.domain.errors import (
     OtpProviderUnavailableError,
     OtpRateLimitError,
     PhoneNormalizationError,
+    PinAuthenticationError,
+    PinLockedError,
     RefreshTokenReuseError,
 )
 
@@ -218,6 +228,124 @@ def verify_firebase_token(
         raise _error(
             "AUTH_NOT_CONFIGURED",
             "Phone authentication is temporarily unavailable.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
+@router.post("/company/activate", response_model=CompanyActivationResponse)
+def activate_company_device(
+    payload: CompanyActivationRequest,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> CompanyActivationResponse:
+    try:
+        activation = service.begin_company_activation(
+            phone=payload.phone,
+            activation_code=payload.activation_code,
+            installation_identifier=payload.installation_identifier,
+        )
+        db.commit()
+        return CompanyActivationResponse(
+            activation_token=activation.device_credential,
+            expires_in=activation.expires_in,
+        )
+    except DeviceAlreadyActivatedError as exc:
+        db.rollback()
+        raise _error(
+            "DEVICE_ALREADY_ACTIVATED",
+            str(exc),
+            status.HTTP_409_CONFLICT,
+        ) from exc
+    except (ActivationCodeError, PhoneNormalizationError) as exc:
+        # Failed challenge attempts are durable security state.
+        db.commit()
+        raise _error(
+            "ACTIVATION_FAILED",
+            "Mobile number or activation code is invalid, expired, or already used.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except AuthConfigurationError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_NOT_CONFIGURED",
+            "company activation is unavailable",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
+@router.post("/company/set-pin", response_model=CompanyPinSessionResponse)
+def set_company_pin(
+    payload: CompanyPinSetupRequest,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> CompanyPinSessionResponse:
+    try:
+        tokens, device_credential = service.complete_company_pin_activation(
+            activation_token=payload.activation_token,
+            installation_identifier=payload.installation_identifier,
+            pin=payload.pin,
+        )
+        db.commit()
+        return CompanyPinSessionResponse(
+            **_token_response(tokens).model_dump(),
+            device_credential=device_credential,
+        )
+    except DeviceCredentialError as exc:
+        db.rollback()
+        raise _error(
+            "ACTIVATION_EXPIRED",
+            "Activation has expired. Ask an Owner for a new activation code.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except AuthConfigurationError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_NOT_CONFIGURED",
+            "company PIN authentication is unavailable",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
+@router.post("/company/pin-login", response_model=TokenResponse)
+def login_with_company_pin(
+    payload: CompanyPinLoginRequest,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    try:
+        tokens = service.login_company_pin(
+            device_credential=payload.device_credential,
+            installation_identifier=payload.installation_identifier,
+            pin=payload.pin,
+        )
+        db.commit()
+        return _token_response(tokens)
+    except PinLockedError as exc:
+        db.commit()
+        raise _error(
+            "PIN_LOCKED",
+            "Too many incorrect PIN attempts. Try again later.",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        ) from exc
+    except PinAuthenticationError as exc:
+        db.commit()
+        raise _error(
+            "AUTHENTICATION_FAILED",
+            "PIN is incorrect.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except DeviceCredentialError as exc:
+        db.rollback()
+        raise _error(
+            "DEVICE_REACTIVATION_REQUIRED",
+            "This device must be activated again.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except AuthConfigurationError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_NOT_CONFIGURED",
+            "company PIN authentication is unavailable",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
 

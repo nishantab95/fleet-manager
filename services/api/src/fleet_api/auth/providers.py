@@ -89,7 +89,7 @@ class PilotOtpProvider:
 
 
 def build_otp_provider(settings: Settings) -> OtpProvider:
-    if settings.auth_mode.lower() == "firebase":
+    if settings.auth_mode.lower() != "pilot":
         return UnavailableOtpProvider()
     provider_name = settings.otp_provider.lower()
     if provider_name == "unavailable":

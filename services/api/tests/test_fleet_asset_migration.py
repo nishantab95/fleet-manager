@@ -53,7 +53,7 @@ def test_database_is_at_the_single_model_complete_head(postgres_engine: Engine) 
     script = ScriptDirectory.from_config(config)
     with postgres_engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
-    assert script.get_heads() == ["0023_user_auth_identity"]
+    assert script.get_heads() == ["0024_company_pin_auth"]
     assert current == script.get_current_head()
     command.check(config)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
@@ -11,6 +11,12 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from fleet_api.auth.company_pin import (
+    ACTIVATION_PURPOSE,
+    generate_activation_code,
+    generate_salt,
+    hash_activation_code,
+)
 from fleet_api.auth.phone import normalize_phone
 from fleet_api.auth.service import AuthContext
 from fleet_api.db.models import (
@@ -18,8 +24,10 @@ from fleet_api.db.models import (
     Assignment,
     AuthSession,
     CompanyMembership,
+    CompanyPinCredential,
     DutySession,
     FleetAsset,
+    OtpChallenge,
     Site,
     SupervisorSiteAccess,
     User,
@@ -32,6 +40,7 @@ from fleet_api.domain.enums import (
     DutySessionStatus,
     MembershipRole,
     MembershipStatus,
+    OtpChallengeStatus,
     SiteStatus,
     UserStatus,
 )
@@ -57,6 +66,14 @@ class PersonView:
     current_site_name: str | None
     auth_state: Literal["READY", "PHONE_MISSING", "DUPLICATE_PHONE", "DISABLED"]
     phone_auth_linked: bool
+    device_activated: bool
+    activation_pending: bool
+
+
+@dataclass(frozen=True)
+class ActivationCodeView:
+    activation_code: str
+    expires_at: datetime
 
 
 @dataclass(frozen=True)
@@ -95,6 +112,8 @@ class OwnerPeopleSiteService:
         request_id: str | None = None,
         phone_default_region: str | None = None,
         auth_mode: str = "pilot",
+        activation_code_ttl_seconds: int = 86_400,
+        activation_code_max_attempts: int = 5,
     ) -> None:
         self.session = session
         self.company_id = context.company.id
@@ -102,6 +121,8 @@ class OwnerPeopleSiteService:
         self.request_id = request_id
         self.phone_default_region = phone_default_region
         self.auth_mode = auth_mode.lower()
+        self.activation_code_ttl_seconds = activation_code_ttl_seconds
+        self.activation_code_max_attempts = activation_code_max_attempts
 
     def _audit(
         self,
@@ -216,6 +237,37 @@ class OwnerPeopleSiteService:
             current_site_name,
             self._auth_state(membership, user),
             self._phone_auth_linked(user),
+            self._device_activated(membership.id),
+            self._activation_pending(membership.id, now),
+        )
+
+    def _device_activated(self, membership_id: UUID) -> bool:
+        return (
+            self.session.scalar(
+                select(CompanyPinCredential.id)
+                .where(
+                    CompanyPinCredential.membership_id == membership_id,
+                    CompanyPinCredential.activated_at.is_not(None),
+                    CompanyPinCredential.revoked_at.is_(None),
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    def _activation_pending(self, membership_id: UUID, now: datetime) -> bool:
+        return (
+            self.session.scalar(
+                select(OtpChallenge.id)
+                .where(
+                    OtpChallenge.membership_id == membership_id,
+                    OtpChallenge.purpose == ACTIVATION_PURPOSE,
+                    OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+                    OtpChallenge.expires_at > now,
+                )
+                .limit(1)
+            )
+            is not None
         )
 
     def _phone_auth_linked(self, user: User) -> bool:
@@ -339,7 +391,8 @@ class OwnerPeopleSiteService:
         )
         membership_status = (
             MembershipStatus.ACTIVE
-            if self.auth_mode == "firebase" or existing_company_membership is not None
+            if self.auth_mode in {"firebase", "company_pin"}
+            or existing_company_membership is not None
             else MembershipStatus.INVITED
         )
         membership = CompanyMembership(
@@ -455,6 +508,27 @@ class OwnerPeopleSiteService:
                             "session_count": len(sessions),
                         },
                     )
+                credentials = self.session.scalars(
+                    select(CompanyPinCredential).where(
+                        CompanyPinCredential.user_id == view.user.id,
+                        CompanyPinCredential.revoked_at.is_(None),
+                    )
+                ).all()
+                for credential in credentials:
+                    credential.revoked_at = now
+                    credential.revocation_reason = "phone_change_requested"
+                membership_ids = self.session.scalars(
+                    select(CompanyMembership.id).where(CompanyMembership.user_id == view.user.id)
+                ).all()
+                challenges = self.session.scalars(
+                    select(OtpChallenge).where(
+                        OtpChallenge.membership_id.in_(membership_ids),
+                        OtpChallenge.purpose == ACTIVATION_PURPOSE,
+                        OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+                    )
+                ).all()
+                for challenge in challenges:
+                    challenge.status = OtpChallengeStatus.CANCELLED
                 view.user.phone_number = normalized_phone
                 self._audit(
                     action="PHONE_CHANGE_REQUESTED",
@@ -505,6 +579,12 @@ class OwnerPeopleSiteService:
             raise ConflictError("remove active supervisor site access before deactivation")
         old_status = view.membership.status
         view.membership.status = MembershipStatus.INACTIVE
+        now = datetime.now(UTC)
+        self._revoke_membership_access(
+            view.membership,
+            now=now,
+            reason="membership_deactivated",
+        )
         self.session.flush()
         self._audit(
             action="OWNER_PERSON_DEACTIVATED",
@@ -514,6 +594,181 @@ class OwnerPeopleSiteService:
             new_values={"status": MembershipStatus.INACTIVE.value},
         )
         return self.get_person(view.membership.id)
+
+    def _revoke_membership_access(
+        self,
+        membership: CompanyMembership,
+        *,
+        now: datetime,
+        reason: str,
+    ) -> tuple[int, int]:
+        sessions = self.session.scalars(
+            select(AuthSession).where(
+                AuthSession.company_id == self.company_id,
+                AuthSession.membership_id == membership.id,
+                AuthSession.revoked_at.is_(None),
+            )
+        ).all()
+        for auth_session in sessions:
+            auth_session.revoked_at = now
+            auth_session.revocation_reason = reason
+        credentials = self.session.scalars(
+            select(CompanyPinCredential).where(
+                CompanyPinCredential.company_id == self.company_id,
+                CompanyPinCredential.membership_id == membership.id,
+                CompanyPinCredential.revoked_at.is_(None),
+            )
+        ).all()
+        for credential in credentials:
+            credential.revoked_at = now
+            credential.revocation_reason = reason
+        challenges = self.session.scalars(
+            select(OtpChallenge).where(
+                OtpChallenge.membership_id == membership.id,
+                OtpChallenge.purpose == ACTIVATION_PURPOSE,
+                OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+            )
+        ).all()
+        for challenge in challenges:
+            challenge.status = OtpChallengeStatus.CANCELLED
+        return len(sessions), len(credentials)
+
+    def _revoke_person_access(
+        self,
+        user_id: UUID,
+        *,
+        now: datetime,
+        reason: str,
+    ) -> tuple[int, int]:
+        memberships = self.session.scalars(
+            select(CompanyMembership.id).where(
+                CompanyMembership.company_id == self.company_id,
+                CompanyMembership.user_id == user_id,
+            )
+        ).all()
+        sessions = self.session.scalars(
+            select(AuthSession).where(
+                AuthSession.company_id == self.company_id,
+                AuthSession.user_id == user_id,
+                AuthSession.revoked_at.is_(None),
+            )
+        ).all()
+        for auth_session in sessions:
+            auth_session.revoked_at = now
+            auth_session.revocation_reason = reason
+        credentials = self.session.scalars(
+            select(CompanyPinCredential).where(
+                CompanyPinCredential.company_id == self.company_id,
+                CompanyPinCredential.user_id == user_id,
+                CompanyPinCredential.revoked_at.is_(None),
+            )
+        ).all()
+        for credential in credentials:
+            credential.revoked_at = now
+            credential.revocation_reason = reason
+        challenges = self.session.scalars(
+            select(OtpChallenge).where(
+                OtpChallenge.membership_id.in_(memberships),
+                OtpChallenge.purpose == ACTIVATION_PURPOSE,
+                OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+            )
+        ).all()
+        for challenge in challenges:
+            challenge.status = OtpChallengeStatus.CANCELLED
+        return len(sessions), len(credentials)
+
+    def generate_person_activation_code(
+        self,
+        membership_id: UUID,
+        *,
+        reset_device: bool = False,
+    ) -> ActivationCodeView:
+        if self.auth_mode != "company_pin":
+            raise DomainError("company activation is not enabled")
+        view = self.get_person(membership_id)
+        if view.auth_state != "READY":
+            raise ConflictError("person must have one active, valid mobile identity")
+        now = datetime.now(UTC)
+        active_credentials = self.session.scalars(
+            select(CompanyPinCredential)
+            .where(
+                CompanyPinCredential.company_id == self.company_id,
+                CompanyPinCredential.user_id == view.user.id,
+                CompanyPinCredential.revoked_at.is_(None),
+            )
+            .with_for_update()
+        ).all()
+        if not reset_device and any(
+            credential.activated_at is not None for credential in active_credentials
+        ):
+            raise ConflictError("device is already active; use Reset device/login")
+        revoked_sessions = 0
+        revoked_credentials = 0
+        if reset_device:
+            revoked_sessions, revoked_credentials = self._revoke_person_access(
+                view.user.id,
+                now=now,
+                reason="owner_device_reset",
+            )
+        else:
+            for credential in active_credentials:
+                credential.revoked_at = now
+                credential.revocation_reason = "activation_regenerated"
+                revoked_credentials += 1
+            membership_ids = self.session.scalars(
+                select(CompanyMembership.id).where(
+                    CompanyMembership.company_id == self.company_id,
+                    CompanyMembership.user_id == view.user.id,
+                )
+            ).all()
+            active_challenges = self.session.scalars(
+                select(OtpChallenge).where(
+                    OtpChallenge.membership_id.in_(membership_ids),
+                    OtpChallenge.purpose == ACTIVATION_PURPOSE,
+                    OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+                )
+            ).all()
+            for challenge in active_challenges:
+                challenge.status = OtpChallengeStatus.CANCELLED
+
+        code = generate_activation_code()
+        salt = generate_salt()
+        expires_at = now + timedelta(seconds=self.activation_code_ttl_seconds)
+        challenge = OtpChallenge(
+            phone_number=normalize_phone(
+                view.user.phone_number,
+                default_region=self.phone_default_region,
+            ),
+            membership_id=view.membership.id,
+            purpose=ACTIVATION_PURPOSE,
+            requested_role=view.membership.role,
+            otp_hash=hash_activation_code(code, salt),
+            otp_salt=salt,
+            status=OtpChallengeStatus.ACTIVE,
+            expires_at=expires_at,
+            attempt_count=0,
+            max_attempts=self.activation_code_max_attempts,
+            next_allowed_at=now,
+            provider_name="CompanyManagedActivation",
+        )
+        self.session.add(challenge)
+        self.session.flush()
+        self._audit(
+            action=(
+                "OWNER_DEVICE_RESET_AND_ACTIVATION_GENERATED"
+                if reset_device
+                else "OWNER_ACTIVATION_CODE_GENERATED"
+            ),
+            entity_type="OTP_CHALLENGE",
+            entity_id=challenge.id,
+            new_values={
+                "membership_id": str(membership_id),
+                "expires_at": expires_at.isoformat(),
+                "revoked_session_count": revoked_sessions,
+                "revoked_device_count": revoked_credentials,
+            },
+        )
+        return ActivationCodeView(activation_code=code, expires_at=expires_at)
 
     def reactivate_person(self, membership_id: UUID) -> PersonView:
         view = self.get_person(membership_id)

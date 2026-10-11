@@ -740,6 +740,7 @@ def test_server_environment_removes_test_database_override(
         "\n".join(
             (
                 "FLEET_ENVIRONMENT=pilot",
+                "FLEET_OTP_PROVIDER=pilot",
                 "FLEET_DATABASE_URL=postgresql+psycopg://server.invalid/fleet",
                 "FLEET_JWT_SIGNING_KEY=test-signing-key",
                 "FLEET_OBJECT_STORAGE_PROVIDER=filesystem",
@@ -856,6 +857,48 @@ def test_external_firebase_environment_rejects_repo_credential(
 
     with pytest.raises(server_manager.ServerError, match="outside the repository"):
         server_manager.load_server_environment()
+
+
+def test_company_pin_environment_does_not_require_firebase_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    env_file = root / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "FLEET_ENVIRONMENT=pilot",
+                "FLEET_OTP_PROVIDER=pilot",
+                "FLEET_DATABASE_URL=postgresql+psycopg://server.invalid/fleet",
+                "FLEET_JWT_SIGNING_KEY=company-pin-key",
+                "FLEET_OBJECT_STORAGE_PROVIDER=filesystem",
+                f"FLEET_FILESYSTEM_STORAGE_ROOT={tmp_path / 'evidence'}",
+                "POSTGRES_DB=fleet",
+                "POSTGRES_USER=fleet",
+                "POSTGRES_PASSWORD=test-password",
+            )
+        ),
+        encoding="utf-8",
+    )
+    external = tmp_path / "firebase-server.env"
+    external.write_text(
+        "FLEET_AUTH_MODE=company_pin\nFLEET_OTP_PROVIDER=unavailable\n"
+        "FLEET_ENABLE_DEVELOPMENT_OTP=false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_manager, "ROOT", root)
+    monkeypatch.setattr(server_manager, "ENV_FILE", env_file)
+    monkeypatch.setattr(server_manager, "SERVER_AUTH_ENV_FILE", external)
+    for name in server_manager.SERVER_AUTH_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+
+    environment = server_manager.load_server_environment()
+
+    assert environment["FLEET_AUTH_MODE"] == "company_pin"
+    assert environment["FLEET_OTP_PROVIDER"] == "unavailable"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in environment
+    assert "FLEET_FIREBASE_PROJECT_ID" not in environment
 
 
 def mock_current_git(monkeypatch: pytest.MonkeyPatch, current: str) -> None:

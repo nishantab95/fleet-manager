@@ -135,6 +135,12 @@ routes, and reusable tenant/RBAC dependencies. The default OTP provider is
 unavailable and fails closed; development OTP requires explicit development
 configuration.
 
+The current company deployment selects `company_pin`: an Owner-generated,
+one-time activation code enrolls one installation, the user creates a six-digit
+PIN, and subsequent mobile access uses the existing Fleet session boundary.
+Firebase authentication remains available as an optional mode and is not
+required by this deployment. See `docs/adr/0012-company-managed-activation-pin.md`.
+
 Phase 7 adds release-candidate hardening for a controlled one-tipper pilot:
 production-profile validation, API/web security headers, browser refresh
 cookies, durable mobile sync diagnostics, cold-restart/retry tests, evidence

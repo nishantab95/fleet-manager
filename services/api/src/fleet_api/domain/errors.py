@@ -84,6 +84,26 @@ class OtpRateLimitError(AuthenticationError):
     pass
 
 
+class ActivationCodeError(AuthenticationError):
+    pass
+
+
+class DeviceCredentialError(AuthenticationError):
+    pass
+
+
+class DeviceAlreadyActivatedError(DeviceCredentialError):
+    pass
+
+
+class PinAuthenticationError(AuthenticationError):
+    pass
+
+
+class PinLockedError(PinAuthenticationError):
+    pass
+
+
 class FirebaseTokenError(AuthenticationError):
     pass
 

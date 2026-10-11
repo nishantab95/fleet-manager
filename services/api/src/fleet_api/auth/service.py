@@ -12,6 +12,16 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from fleet_api.auth.company_pin import (
+    ACTIVATION_PURPOSE,
+    activation_code_matches,
+    generate_device_credential,
+    generate_salt,
+    hash_device_credential,
+    hash_installation_identifier,
+    hash_pin,
+    pin_matches,
+)
 from fleet_api.auth.firebase import PhoneIdentityAuthProvider
 from fleet_api.auth.phone import normalize_phone
 from fleet_api.auth.providers import OtpProvider
@@ -28,6 +38,7 @@ from fleet_api.db.models import (
     AuthSession,
     Company,
     CompanyMembership,
+    CompanyPinCredential,
     OtpChallenge,
     User,
     UserAuthIdentity,
@@ -43,9 +54,12 @@ from fleet_api.domain.enums import (
     UserStatus,
 )
 from fleet_api.domain.errors import (
+    ActivationCodeError,
     AmbiguousPhoneIdentityError,
     AuthConfigurationError,
     AuthenticationError,
+    DeviceAlreadyActivatedError,
+    DeviceCredentialError,
     FirebaseProviderUnavailableError,
     FirebaseTokenError,
     FleetIdentityAccessDeniedError,
@@ -55,6 +69,8 @@ from fleet_api.domain.errors import (
     MembershipSelectionError,
     OtpRateLimitError,
     PhoneNormalizationError,
+    PinAuthenticationError,
+    PinLockedError,
     RefreshTokenReuseError,
     RoleViolationError,
     TenantConsistencyError,
@@ -77,6 +93,12 @@ class SessionTokens:
     refresh_token: str
     expires_in: int
     context: AuthContext
+
+
+@dataclass(frozen=True)
+class CompanyActivation:
+    device_credential: str
+    expires_in: int
 
 
 def _hash_metadata(value: str | None) -> str | None:
@@ -452,6 +474,272 @@ class AuthService:
             now=utc_now(),
         )
         return pre_session, self.settings.pre_session_ttl_seconds
+
+    def begin_company_activation(
+        self,
+        *,
+        phone: str,
+        activation_code: str,
+        installation_identifier: str,
+    ) -> CompanyActivation:
+        if self.settings.auth_mode.lower() != "company_pin":
+            raise AuthConfigurationError("company PIN authentication is not enabled")
+        normalized_phone = normalize_phone(
+            phone,
+            default_region=self.settings.phone_default_region,
+        )
+        matched_users = self._matching_users_for_phone(normalized_phone)
+        if len(matched_users) != 1:
+            for matched_user in matched_users:
+                self._deny_known_user(matched_user, "AMBIGUOUS_NORMALIZED_PHONE")
+            raise ActivationCodeError("activation details are invalid")
+        user = matched_users[0]
+        if user.status != UserStatus.ACTIVE:
+            self._deny_known_user(user, "USER_INACTIVE")
+            raise ActivationCodeError("activation details are invalid")
+
+        now = utc_now()
+        challenges = list(
+            self.session.scalars(
+                select(OtpChallenge)
+                .where(
+                    OtpChallenge.phone_number == normalized_phone,
+                    OtpChallenge.purpose == ACTIVATION_PURPOSE,
+                    OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+                )
+                .order_by(OtpChallenge.created_at.desc())
+                .with_for_update()
+            ).all()
+        )
+        matched_challenge: OtpChallenge | None = None
+        active_challenges: list[OtpChallenge] = []
+        for challenge in challenges:
+            if challenge.expires_at <= now:
+                challenge.status = OtpChallengeStatus.EXPIRED
+                continue
+            if challenge.attempt_count >= challenge.max_attempts:
+                challenge.status = OtpChallengeStatus.EXHAUSTED
+                continue
+            active_challenges.append(challenge)
+            if activation_code_matches(
+                activation_code,
+                challenge.otp_salt,
+                challenge.otp_hash,
+            ):
+                matched_challenge = challenge
+                break
+
+        if matched_challenge is None:
+            for challenge in active_challenges:
+                challenge.attempt_count += 1
+                if challenge.attempt_count >= challenge.max_attempts:
+                    challenge.status = OtpChallengeStatus.EXHAUSTED
+            self.session.flush()
+            self._deny_known_user(user, "ACTIVATION_CODE_REJECTED")
+            raise ActivationCodeError("activation details are invalid")
+
+        if matched_challenge.membership_id is None:
+            raise ActivationCodeError("activation details are invalid")
+        membership = self.session.get(CompanyMembership, matched_challenge.membership_id)
+        if membership is None or membership.user_id != user.id:
+            raise ActivationCodeError("activation details are invalid")
+        context_row = _active_context_for_membership(
+            self.session,
+            user_id=user.id,
+            membership_id=membership.id,
+            company_id=membership.company_id,
+        )
+        if context_row is None:
+            self._deny_known_user(user, "USER_MEMBERSHIP_OR_COMPANY_INACTIVE")
+            raise ActivationCodeError("activation details are invalid")
+
+        existing = self.session.scalar(
+            select(CompanyPinCredential)
+            .where(
+                CompanyPinCredential.company_id == membership.company_id,
+                CompanyPinCredential.user_id == user.id,
+                CompanyPinCredential.revoked_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if existing is not None and existing.activated_at is not None:
+            raise DeviceAlreadyActivatedError(
+                "device access is already active; ask an Owner to reset device/login"
+            )
+        if existing is not None:
+            existing.revoked_at = now
+            existing.revocation_reason = "activation_restarted"
+
+        raw_credential = generate_device_credential()
+        credential = CompanyPinCredential(
+            user_id=user.id,
+            company_id=membership.company_id,
+            membership_id=membership.id,
+            credential_hash=hash_device_credential(raw_credential),
+            installation_id_hash=hash_installation_identifier(installation_identifier),
+            setup_expires_at=now + timedelta(seconds=self.settings.activation_setup_ttl_seconds),
+        )
+        self.session.add(credential)
+        matched_challenge.status = OtpChallengeStatus.CONSUMED
+        matched_challenge.consumed_at = now
+        for challenge in challenges:
+            if (
+                challenge.id != matched_challenge.id
+                and challenge.membership_id == membership.id
+                and challenge.status == OtpChallengeStatus.ACTIVE
+            ):
+                challenge.status = OtpChallengeStatus.CANCELLED
+        self.session.flush()
+        write_audit_log(
+            self.session,
+            company_id=membership.company_id,
+            actor_membership_id=None,
+            action="COMPANY_ACTIVATION_ACCEPTED",
+            entity_type="COMPANY_PIN_CREDENTIAL",
+            entity_id=credential.id,
+            new_values={"membership_id": str(membership.id)},
+            request_id=self.request_id,
+        )
+        return CompanyActivation(
+            device_credential=raw_credential,
+            expires_in=self.settings.activation_setup_ttl_seconds,
+        )
+
+    def complete_company_pin_activation(
+        self,
+        *,
+        activation_token: str,
+        installation_identifier: str,
+        pin: str,
+    ) -> tuple[SessionTokens, str]:
+        if self.settings.auth_mode.lower() != "company_pin":
+            raise AuthConfigurationError("company PIN authentication is not enabled")
+        credential = self.session.scalar(
+            select(CompanyPinCredential)
+            .where(CompanyPinCredential.credential_hash == hash_device_credential(activation_token))
+            .with_for_update()
+        )
+        now = utc_now()
+        if (
+            credential is None
+            or credential.revoked_at is not None
+            or credential.activated_at is not None
+            or credential.setup_expires_at <= now
+            or not compare_digest(
+                credential.installation_id_hash,
+                hash_installation_identifier(installation_identifier),
+            )
+        ):
+            raise DeviceCredentialError("activation context is invalid or expired")
+        context_row = _active_context_for_membership(
+            self.session,
+            user_id=credential.user_id,
+            membership_id=credential.membership_id,
+            company_id=credential.company_id,
+        )
+        if context_row is None:
+            raise DeviceCredentialError("activation context is invalid or expired")
+        _user, membership, _company = context_row
+        salt = generate_salt()
+        credential.pin_salt = salt
+        credential.pin_hash = hash_pin(pin, salt)
+        credential.activated_at = now
+        credential.last_authenticated_at = now
+        credential.failed_attempt_count = 0
+        self.session.flush()
+        write_audit_log(
+            self.session,
+            company_id=credential.company_id,
+            actor_membership_id=membership.id,
+            action="COMPANY_DEVICE_ACTIVATED",
+            entity_type="COMPANY_PIN_CREDENTIAL",
+            entity_id=credential.id,
+            new_values={"membership_id": str(membership.id)},
+            request_id=self.request_id,
+        )
+        tokens = self._create_membership_session(membership)
+        return tokens, activation_token
+
+    def login_company_pin(
+        self,
+        *,
+        device_credential: str,
+        installation_identifier: str,
+        pin: str,
+    ) -> SessionTokens:
+        if self.settings.auth_mode.lower() != "company_pin":
+            raise AuthConfigurationError("company PIN authentication is not enabled")
+        credential = self.session.scalar(
+            select(CompanyPinCredential)
+            .where(
+                CompanyPinCredential.credential_hash == hash_device_credential(device_credential)
+            )
+            .with_for_update()
+        )
+        now = utc_now()
+        if (
+            credential is None
+            or credential.revoked_at is not None
+            or credential.activated_at is None
+            or credential.pin_hash is None
+            or credential.pin_salt is None
+            or not compare_digest(
+                credential.installation_id_hash,
+                hash_installation_identifier(installation_identifier),
+            )
+        ):
+            raise DeviceCredentialError("device activation is invalid")
+        if credential.locked_until is not None and credential.locked_until > now:
+            raise PinLockedError("PIN login is temporarily locked")
+        if credential.locked_until is not None:
+            credential.failed_attempt_count = 0
+            credential.locked_until = None
+        if not pin_matches(pin, credential.pin_salt, credential.pin_hash):
+            credential.failed_attempt_count += 1
+            if credential.failed_attempt_count >= self.settings.pin_max_attempts:
+                credential.locked_until = now + timedelta(seconds=self.settings.pin_lock_seconds)
+                self.session.flush()
+                raise PinLockedError("PIN login is temporarily locked")
+            self.session.flush()
+            raise PinAuthenticationError("PIN is invalid")
+        membership = self.session.get(CompanyMembership, credential.membership_id)
+        if membership is None:
+            raise DeviceCredentialError("device activation is invalid")
+        context_row = _active_context_for_membership(
+            self.session,
+            user_id=credential.user_id,
+            membership_id=credential.membership_id,
+            company_id=credential.company_id,
+        )
+        if context_row is None:
+            raise DeviceCredentialError("device activation is invalid")
+        credential.failed_attempt_count = 0
+        credential.locked_until = None
+        credential.last_authenticated_at = now
+        prior_sessions = self.session.scalars(
+            select(AuthSession).where(
+                AuthSession.company_id == credential.company_id,
+                AuthSession.membership_id == credential.membership_id,
+                AuthSession.revoked_at.is_(None),
+            )
+        ).all()
+        for auth_session in prior_sessions:
+            auth_session.revoked_at = now
+            auth_session.revocation_reason = "pin_reauthentication"
+        self.session.flush()
+        return self._create_membership_session(membership)
+
+    def _create_membership_session(self, membership: CompanyMembership) -> SessionTokens:
+        pre_session = issue_pre_session(
+            self.settings,
+            user_id=membership.user_id,
+            requested_role=membership.role,
+            now=utc_now(),
+        )
+        return self.create_session(
+            pre_session_token=pre_session,
+            membership_id=membership.id,
+        )
 
     def list_memberships(
         self, *, pre_session_token: str

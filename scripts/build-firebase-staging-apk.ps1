@@ -2,6 +2,7 @@
 param(
     [switch]$ToolingOnly,
     [switch]$Company,
+    [switch]$CompanyPin,
     [string]$TargetPlatforms = "android-arm,android-arm64,android-x64"
 )
 
@@ -15,7 +16,10 @@ $gradleHome = Join-Path $env:USERPROFILE ".gradle"
 $signingConfig = Join-Path $gradleHome "gradle.properties"
 $keystore = Join-Path $env:USERPROFILE ".fleet-manager\signing\fleet-pilot-release.jks"
 $expectedPackage = "com.fleetmanager.fleet_manager_mobile.pilot"
-$buildProfile = if ($Company) { "firebase-company" } else { "firebase-staging" }
+if ($Company -and $CompanyPin) {
+    throw "Choose either Firebase Company or Company PIN, not both."
+}
+$buildProfile = if ($CompanyPin) { "company-pin" } elseif ($Company) { "firebase-company" } else { "firebase-staging" }
 
 function Get-RequiredProcessValue {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -118,14 +122,21 @@ if ($LASTEXITCODE -ne 0 -or $commit -notmatch "^[0-9a-f]{40}$") {
 }
 
 $authMode = Get-RequiredProcessValue "FLEET_AUTH_MODE"
-if ($authMode.ToLowerInvariant() -ne "firebase") {
-    throw "FLEET_AUTH_MODE must be firebase for this build."
+$expectedAuthMode = if ($CompanyPin) { "company_pin" } else { "firebase" }
+if ($authMode.ToLowerInvariant() -ne $expectedAuthMode) {
+    throw "FLEET_AUTH_MODE must be $expectedAuthMode for this build."
 }
 $apiBaseUrl = Get-RequiredProcessValue "FLEET_API_BASE_URL"
-$firebaseApiKey = Get-RequiredProcessValue "FIREBASE_ANDROID_API_KEY"
-$firebaseAppId = Get-RequiredProcessValue "FIREBASE_ANDROID_APP_ID"
-$firebaseSenderId = Get-RequiredProcessValue "FIREBASE_MESSAGING_SENDER_ID"
-$firebaseProjectId = Get-RequiredProcessValue "FIREBASE_PROJECT_ID"
+$firebaseApiKey = ""
+$firebaseAppId = ""
+$firebaseSenderId = ""
+$firebaseProjectId = ""
+if (-not $CompanyPin) {
+    $firebaseApiKey = Get-RequiredProcessValue "FIREBASE_ANDROID_API_KEY"
+    $firebaseAppId = Get-RequiredProcessValue "FIREBASE_ANDROID_APP_ID"
+    $firebaseSenderId = Get-RequiredProcessValue "FIREBASE_MESSAGING_SENDER_ID"
+    $firebaseProjectId = Get-RequiredProcessValue "FIREBASE_PROJECT_ID"
+}
 $parsedApiUrl = $null
 if (-not [Uri]::TryCreate($apiBaseUrl, [UriKind]::Absolute, [ref]$parsedApiUrl) -or
     $parsedApiUrl.Scheme -ne "https" -or
@@ -134,10 +145,10 @@ if (-not [Uri]::TryCreate($apiBaseUrl, [UriKind]::Absolute, [ref]$parsedApiUrl) 
     -not [string]::IsNullOrWhiteSpace($parsedApiUrl.Fragment)) {
     throw "FLEET_API_BASE_URL must be an absolute HTTPS URL without query or fragment."
 }
-if ($firebaseSenderId -notmatch "^[0-9]+$") {
+if (-not $CompanyPin -and $firebaseSenderId -notmatch "^[0-9]+$") {
     throw "FIREBASE_MESSAGING_SENDER_ID must contain digits only."
 }
-if ($firebaseProjectId -notmatch "^[a-z0-9][a-z0-9-]{4,28}[a-z0-9]$") {
+if (-not $CompanyPin -and $firebaseProjectId -notmatch "^[a-z0-9][a-z0-9-]{4,28}[a-z0-9]$") {
     throw "FIREBASE_PROJECT_ID does not have a valid Firebase project-id shape."
 }
 
@@ -167,21 +178,25 @@ $buildArguments = @(
     "--build-number=$versionCode",
     "--target-platform=$TargetPlatforms",
     "--dart-define=FLEET_PILOT=true",
-    "--dart-define=FLEET_AUTH_MODE=firebase",
+    "--dart-define=FLEET_AUTH_MODE=$expectedAuthMode",
     "--dart-define=FLEET_BUILD_PROFILE=$buildProfile",
-    "--dart-define=FLEET_API_BASE_URL=$apiBaseUrl",
-    "--dart-define=FIREBASE_ANDROID_API_KEY=$firebaseApiKey",
-    "--dart-define=FIREBASE_ANDROID_APP_ID=$firebaseAppId",
-    "--dart-define=FIREBASE_MESSAGING_SENDER_ID=$firebaseSenderId",
-    "--dart-define=FIREBASE_PROJECT_ID=$firebaseProjectId"
+    "--dart-define=FLEET_API_BASE_URL=$apiBaseUrl"
 )
+if (-not $CompanyPin) {
+    $buildArguments += @(
+        "--dart-define=FIREBASE_ANDROID_API_KEY=$firebaseApiKey",
+        "--dart-define=FIREBASE_ANDROID_APP_ID=$firebaseAppId",
+        "--dart-define=FIREBASE_MESSAGING_SENDER_ID=$firebaseSenderId",
+        "--dart-define=FIREBASE_PROJECT_ID=$firebaseProjectId"
+    )
+}
 
 $previousPreference = $ErrorActionPreference
 $previousCompanyBuild = [Environment]::GetEnvironmentVariable(
     "FLEET_MOBILE_COMPANY_BUILD",
     "Process"
 )
-if ($Company) {
+if ($Company -or $CompanyPin) {
     $env:FLEET_MOBILE_COMPANY_BUILD = "1"
 }
 else {
@@ -215,17 +230,23 @@ if (-not (Test-Path -LiteralPath $builtApk -PathType Leaf)) {
 }
 
 $verificationScript = Join-Path $PSScriptRoot "firebase_staging_apk.py"
-$verificationOutput = @(
-    & $python.Source $verificationScript $builtApk `
-        --version-name $versionName `
-        --version-code $versionCode `
-        --api-base-url $apiBaseUrl `
-        --api-key $firebaseApiKey `
-        --app-id $firebaseAppId `
-        --sender-id $firebaseSenderId `
-        --project-id $firebaseProjectId `
-        --build-profile $buildProfile 2>&1
+$verificationArguments = @(
+    $verificationScript,
+    $builtApk,
+    "--version-name", $versionName,
+    "--version-code", $versionCode,
+    "--api-base-url", $apiBaseUrl,
+    "--build-profile", $buildProfile
 )
+if (-not $CompanyPin) {
+    $verificationArguments += @(
+        "--api-key", $firebaseApiKey,
+        "--app-id", $firebaseAppId,
+        "--sender-id", $firebaseSenderId,
+        "--project-id", $firebaseProjectId
+    )
+}
+$verificationOutput = @(& $python.Source @verificationArguments 2>&1)
 if ($LASTEXITCODE -ne 0) {
     throw "APK Firebase verification failed: $($verificationOutput -join ' ')"
 }
@@ -233,7 +254,7 @@ $identity = ($verificationOutput -join "`n") | ConvertFrom-Json
 
 $releaseDirectory = Join-Path $mobileRoot "build\release"
 New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
-$artifactProfile = if ($Company) { "Company" } else { "Firebase-Staging" }
+$artifactProfile = if ($CompanyPin) { "Company-PIN" } elseif ($Company) { "Company" } else { "Firebase-Staging" }
 $namedApk = Join-Path $releaseDirectory "FleetAI-Systems-$artifactProfile-$versionName-pilot-$versionCode.apk"
 if (Test-Path -LiteralPath $namedApk) {
     throw "Refusing to overwrite an existing versioned Firebase APK."
@@ -252,7 +273,7 @@ $provenance = [ordered]@{
     sourceGitCommit = $commit
     sourceTreeClean = $true
     apiBaseUrl = $apiBaseUrl
-    firebaseProjectId = $firebaseProjectId
+    firebaseProjectId = $(if ($CompanyPin) { $null } else { $firebaseProjectId })
     builtAtUtc = [DateTime]::UtcNow.ToString("o")
 }
 $provenanceJson = ($provenance | ConvertTo-Json -Depth 4) + "`n"

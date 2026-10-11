@@ -52,6 +52,30 @@ controls.
 
 ## Phase 3 management controls
 
+## Company-managed activation and PIN controls
+
+- `company_pin` is an explicit authentication mode. It does not initialize or
+  require Firebase Admin credentials, and it refuses Pilot OTP material.
+- Owner-generated six-digit activation codes use the existing challenge table,
+  a random salt, PBKDF2-HMAC-SHA256, a 24-hour expiry, bounded attempts, and
+  one-time consumption. Regeneration cancels every earlier pending code for the
+  person in that company.
+- The six-digit PIN is stored only as a separately salted 600,000-iteration
+  PBKDF2-HMAC-SHA256 hash. Failed PIN checks are counted under a row lock and
+  temporarily lock the credential after the configured limit.
+- The server stores only hashes of the high-entropy device credential and
+  installation identifier. The Flutter client stores the credential, session
+  tokens, and installation identifier only in platform secure storage and
+  disables Android backup; reinstall or a new phone therefore requires a new
+  activation.
+- Owner reset revokes all active sessions, device credentials, and pending
+  activation codes for that person in the authenticated company before it
+  returns one replacement code. Codes, PINs, token material, and credential
+  hashes are excluded from audit metadata and logs.
+- Activation selects a server-owned membership and never accepts a role or
+  company from the client. Every login revalidates the User, membership, and
+  company lifecycle state before issuing the existing Fleet session.
+
 - All management routes require the backend `OWNER_ADMIN` dependency. Hiding
   a web tab is only convenience; supervisor and driver sessions receive a
   backend `403`.
@@ -248,7 +272,8 @@ Phase 2 dependencies are not a substitute for endpoint-specific validation.
   the existing controlled OTP activation path. In Firebase mode, Owner-created
   memberships are active only after the Owner-authorized People mutation
   succeeds; a verified Firebase phone still cannot create or activate business
-  data by itself.
+  data by itself. In company PIN mode, Owner-created memberships are active but
+  cannot authenticate until the Owner generates a one-time activation code.
 - Inactive Sites and memberships cannot receive new operational access.
   Dependency checks prevent lifecycle transitions that would orphan a live
   assignment or duty. All accepted mutations write tenant-scoped audit rows.
@@ -258,8 +283,10 @@ Phase 2 dependencies are not a substitute for endpoint-specific validation.
 
 ## Firebase phone authentication controls
 
-- Staging and production profiles require explicit Firebase mode. Pilot OTP endpoints and
-  codes are unavailable in Firebase mode, preventing a fallback downgrade.
+- Firebase-specific profiles require explicit Firebase mode. Pilot OTP
+  endpoints and codes are unavailable in Firebase mode, preventing a fallback
+  downgrade. Protected deployments may instead explicitly select company PIN
+  mode as documented in ADR 0012.
 - Firebase ID tokens are verified server-side for signature, project
   audience/issuer, expiry, optional revocation, and phone sign-in provider.
   Client-supplied phone, role, company, or membership values are not proof.

@@ -12,6 +12,8 @@ class SecureSessionStore {
   static const _sessionKey = 'fleet_manager_driver_session';
   static const _installationKey = 'fleet_manager_installation_id';
   static const _pilotBaseUrlKey = 'fleet_manager_pilot_base_url';
+  static const _companyDeviceCredentialKey =
+      'fleet_manager_company_device_credential';
   final FlutterSecureStorage _storage;
 
   Future<void> save(SessionTokens tokens) {
@@ -32,6 +34,15 @@ class SecureSessionStore {
   }
 
   Future<void> clear() => _storage.delete(key: _sessionKey);
+
+  Future<String?> readCompanyDeviceCredential() =>
+      _storage.read(key: _companyDeviceCredentialKey);
+
+  Future<void> saveCompanyDeviceCredential(String value) =>
+      _storage.write(key: _companyDeviceCredentialKey, value: value);
+
+  Future<void> clearCompanyDeviceCredential() =>
+      _storage.delete(key: _companyDeviceCredentialKey);
 
   Future<String?> readPilotBaseUrl() => _storage.read(key: _pilotBaseUrlKey);
 

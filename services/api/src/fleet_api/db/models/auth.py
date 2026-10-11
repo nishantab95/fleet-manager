@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     UniqueConstraint,
     text,
@@ -58,6 +59,12 @@ class OtpChallenge(UpdatedTimestampModel):
     __tablename__ = "otp_challenges"
 
     phone_number: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    membership_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("company_memberships.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    purpose: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="LOGIN_OTP", server_default="LOGIN_OTP"
+    )
     requested_role: Mapped[MembershipRole | None] = mapped_column(
         SAEnum(MembershipRole, name="membership_role_enum"), nullable=True
     )
@@ -83,6 +90,60 @@ class OtpChallenge(UpdatedTimestampModel):
             "phone_number",
             "status",
             "created_at",
+        ),
+    )
+
+
+class CompanyPinCredential(UpdatedTimestampModel):
+    """Membership-bound device activation with no recoverable PIN or device secret."""
+
+    __tablename__ = "company_pin_credentials"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    company_id: Mapped[UUID] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    membership_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    credential_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    installation_id_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    pin_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    pin_salt: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    setup_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_authenticated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revocation_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["company_id", "membership_id"],
+            ["company_memberships.company_id", "company_memberships.id"],
+            name="fk_company_pin_credentials_company_membership",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "uq_company_pin_credentials_active_membership",
+            "membership_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index(
+            "uq_company_pin_credentials_active_company_user",
+            "company_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index(
+            "ix_company_pin_credentials_company_membership",
+            "company_id",
+            "membership_id",
         ),
     )
 

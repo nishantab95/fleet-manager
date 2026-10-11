@@ -100,6 +100,87 @@ class _OwnerPeopleScreenState extends State<OwnerPeopleScreen> {
     }
   }
 
+  Future<void> _personAction(OwnerPerson person, String action) async {
+    if (action == 'edit') {
+      await _form(person);
+      return;
+    }
+    if (action == 'toggle') {
+      await _toggle(person);
+      return;
+    }
+    if (action == 'reset') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Reset device/login?'),
+          content: Text(
+            'This revokes ${person.displayName}\'s current sessions and device access. A new activation code will be generated.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('CANCEL'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('RESET'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    try {
+      final activation = action == 'reset'
+          ? await widget.api.resetOwnerDevice(person.membershipId)
+          : await widget.api.generateOwnerActivationCode(person.membershipId);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Activation code'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Give this one-time code to the user outside Fleet AI Systems. It will not be shown again.',
+              ),
+              const SizedBox(height: 16),
+              Center(
+                child: SelectableText(
+                  activation.code,
+                  key: const Key('generated-activation-code'),
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 6,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text('Expires in 24 hours (${activation.expiresAt.toLocal()}).'),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('DONE'),
+            ),
+          ],
+        ),
+      );
+      await _load();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final active = _people.where((person) => person.isActive).length;
@@ -194,16 +275,30 @@ class _OwnerPeopleScreenState extends State<OwnerPeopleScreen> {
                 title: Text(person.displayName),
                 subtitle: Text(
                   '${person.role == 'DRIVER' ? 'Operator' : 'Supervisor'} · ${person.phone}\n'
-                  '${person.status} · Phone login: ${person.authState}${person.sites.isEmpty ? '' : ' · ${person.sites.map((site) => site.name).join(', ')}'}'
+                  '${person.status} · Login: ${person.deviceActivated
+                      ? 'Device active'
+                      : person.activationPending
+                      ? 'Activation pending'
+                      : person.authState}${person.sites.isEmpty ? '' : ' · ${person.sites.map((site) => site.name).join(', ')}'}'
                   '${person.currentAssetCode == null ? '' : '\nCurrent: ${person.currentAssetCode} · ${person.currentSiteName ?? 'Site'}'}',
                 ),
                 isThreeLine: true,
                 onTap: () => _form(person),
                 trailing: PopupMenuButton<String>(
-                  onSelected: (action) =>
-                      action == 'edit' ? _form(person) : _toggle(person),
+                  onSelected: (action) => _personAction(person, action),
                   itemBuilder: (_) => [
                     const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    if (person.isActive)
+                      PopupMenuItem(
+                        value: person.deviceActivated ? 'reset' : 'activation',
+                        child: Text(
+                          person.deviceActivated
+                              ? 'Reset device / login'
+                              : person.activationPending
+                              ? 'Regenerate activation code'
+                              : 'Generate activation code',
+                        ),
+                      ),
                     PopupMenuItem(
                       value: 'toggle',
                       child: Text(

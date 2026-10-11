@@ -109,6 +109,8 @@ abstract class OwnerPeopleSiteApi {
     OwnerPersonInput input,
   );
   Future<OwnerPerson> setOwnerPersonActive(String membershipId, bool active);
+  Future<OwnerActivationCode> generateOwnerActivationCode(String membershipId);
+  Future<OwnerActivationCode> resetOwnerDevice(String membershipId);
   Future<List<OwnerManagedSite>> ownerSites();
   Future<OwnerManagedSite> createOwnerSite(OwnerSiteInput input);
   Future<OwnerManagedSite> updateOwnerSite(String siteId, OwnerSiteInput input);
@@ -265,6 +267,53 @@ class ApiClient
       'id_token': idToken,
     });
     return body['pre_session_token'] as String;
+  }
+
+  Future<String> beginCompanyActivation({
+    required String phone,
+    required String activationCode,
+    required String installationIdentifier,
+  }) async {
+    final body = await _post('/api/v1/auth/company/activate', {
+      'phone': phone,
+      'activation_code': activationCode,
+      'installation_identifier': installationIdentifier,
+    });
+    return body['activation_token'] as String;
+  }
+
+  Future<({SessionTokens tokens, String deviceCredential})>
+  completeCompanyActivation({
+    required String activationToken,
+    required String installationIdentifier,
+    required String pin,
+  }) async {
+    final body = await _post('/api/v1/auth/company/set-pin', {
+      'activation_token': activationToken,
+      'installation_identifier': installationIdentifier,
+      'pin': pin,
+    });
+    final tokens = SessionTokens.fromJson(body);
+    setSession(tokens);
+    return (
+      tokens: tokens,
+      deviceCredential: body['device_credential'] as String,
+    );
+  }
+
+  Future<SessionTokens> loginCompanyPin({
+    required String deviceCredential,
+    required String installationIdentifier,
+    required String pin,
+  }) async {
+    final body = await _post('/api/v1/auth/company/pin-login', {
+      'device_credential': deviceCredential,
+      'installation_identifier': installationIdentifier,
+      'pin': pin,
+    });
+    final tokens = SessionTokens.fromJson(body);
+    setSession(tokens);
+    return tokens;
   }
 
   Future<List<MembershipOption>> memberships(String preSessionToken) async {
@@ -764,6 +813,28 @@ class ApiClient
       authenticated: true,
     );
     return OwnerPerson.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerActivationCode> generateOwnerActivationCode(
+    String membershipId,
+  ) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/people/$membershipId/activation-code',
+      authenticated: true,
+    );
+    return OwnerActivationCode.fromJson(_json(response));
+  }
+
+  @override
+  Future<OwnerActivationCode> resetOwnerDevice(String membershipId) async {
+    final response = await _request(
+      'POST',
+      '/api/v1/owner/people/$membershipId/reset-device',
+      authenticated: true,
+    );
+    return OwnerActivationCode.fromJson(_json(response));
   }
 
   @override

@@ -57,6 +57,23 @@ def test_staging_configuration_rejects_insecure_web_url() -> None:
         )
 
 
+def test_company_pin_mode_accepts_protected_profile_without_firebase_and_rejects_pilot_codes() -> (
+    None
+):
+    settings = _settings(
+        environment="staging",
+        auth_mode="company_pin",
+        jwt_signing_key="staging-signing-key-that-is-longer-than-32-characters",
+        web_public_base_url="https://owner.staging.example",
+        cors_allowed_origins="https://owner.staging.example",
+        allowed_hosts="api.staging.example",
+    )
+    assert settings.firebase_project_id is None
+
+    with pytest.raises(ValueError, match="forbidden in company PIN auth mode"):
+        _settings(auth_mode="company_pin", pilot_otp="123456")
+
+
 def test_allowed_hosts_are_parsed_and_secure_cookies_follow_profile() -> None:
     settings = _settings(allowed_hosts="pilot.example, api.pilot.example", environment="pilot")
 

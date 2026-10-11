@@ -101,7 +101,7 @@ Authentication settings use the `FLEET_` prefix. The important Phase 2
 settings are:
 
 ```text
-FLEET_AUTH_MODE=pilot               # pilot or firebase; production requires firebase
+FLEET_AUTH_MODE=pilot               # pilot, firebase, or company_pin
 FLEET_PHONE_DEFAULT_REGION=IN       # optional; only for non-E.164 input
 FLEET_OTP_PROVIDER=unavailable      # production must use a real provider
 FLEET_ENABLE_DEVELOPMENT_OTP=false
@@ -110,6 +110,10 @@ FLEET_FIREBASE_CHECK_REVOKED_TOKENS=true
 FLEET_OTP_TTL_SECONDS=300
 FLEET_OTP_MAX_ATTEMPTS=5
 FLEET_OTP_RESEND_COOLDOWN_SECONDS=60
+FLEET_ACTIVATION_CODE_TTL_SECONDS=86400
+FLEET_ACTIVATION_SETUP_TTL_SECONDS=900
+FLEET_PIN_MAX_ATTEMPTS=5
+FLEET_PIN_LOCK_SECONDS=900
 FLEET_JWT_SIGNING_KEY=<secret of at least 32 characters>
 FLEET_JWT_ISSUER=fleet-manager-api
 FLEET_JWT_AUDIENCE=fleet-manager-client

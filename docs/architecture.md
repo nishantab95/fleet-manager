@@ -110,12 +110,13 @@ is selectable through production configuration.
 
 ### Firebase phone authentication boundary
 
-Authentication has two explicit modes. `pilot` retains the controlled local
-OTP workflow, while `firebase` accepts only a Firebase Phone Authentication ID
-token. Production profiles require Firebase mode; there is no pilot-code
-fallback. The API verifies the Firebase token and exchanges it for the existing
-Fleet pre-session and membership-scoped session. Firebase is proof of phone
-control, not the business identity or authorization store.
+Authentication has three explicit modes. `pilot` retains the controlled local
+OTP workflow, `firebase` accepts only a Firebase Phone Authentication ID token,
+and `company_pin` uses an Owner-issued one-time activation code followed by a
+device-bound PIN. Protected profiles permit Firebase or company PIN mode; there
+is no pilot-code fallback. Both production-capable modes issue the existing
+membership-scoped Fleet sessions, and PostgreSQL remains the authorization
+authority. See [ADR 0012](adr/0012-company-managed-activation-pin.md).
 
 PostgreSQL remains authoritative for Users, People, companies, memberships,
 roles, and lifecycle state. `user_auth_identities` stores the durable
@@ -166,8 +167,10 @@ one access-token `401` starts one single-flight refresh, persists rotated tokens
 to secure storage, and retries the original request once. A failed refresh or a
 second `401` clears local authentication and returns the nested UI to login;
 requests never loop. Secure storage holds mobile session tokens and the
-installation identifier; event payloads do not contain company IDs supplied by
-the user.
+installation identifier. In `company_pin` mode it also holds the opaque device
+credential; a cold launch requires the local PIN and an install without that
+credential requires Owner reactivation. Event payloads do not contain company
+IDs supplied by the user.
 
 The backend derives the assignment from the authenticated driver and event
 timestamp. It registers an installation-scoped device, enforces the
@@ -493,12 +496,13 @@ Owner/Admin session and derive tenant scope exclusively from that session. A
 People record reuses the canonical `User` identity and adds a company-scoped
 Driver or Supervisor membership; the mobile label for Driver is Operator.
 
-Invitations start as `INVITED`. The existing OTP flow includes invited
-memberships in membership selection and changes only the selected membership to
-`ACTIVE` when a valid session is created. No password or alternate OTP path is
-introduced. Sites keep their UUID and may store an optional description and
-coordinates. Supervisor access remains the existing many-to-many
-`SupervisorSiteAccess` relationship.
+Pilot invitations start as `INVITED`; the controlled OTP flow activates only
+the selected membership. Firebase and company PIN modes create the
+Owner-authorized membership as active, but neither authentication method may
+create business identity or elevate a role. Company PIN activation remains
+Owner-generated and device-bound as described in ADR 0012. Sites keep their
+UUID and may store an optional description and coordinates. Supervisor access
+remains the existing many-to-many `SupervisorSiteAccess` relationship.
 
 All edits and lifecycle actions are audited. Deactivation changes status and
 never deletes identity, assignment, duty, access, event, or reporting history.

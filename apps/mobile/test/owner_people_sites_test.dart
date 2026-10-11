@@ -60,6 +60,27 @@ void main() {
     expect(find.text('Test Site B'), findsOneWidget);
   });
 
+  testWidgets('Owner generates a one-time activation code for a person', (
+    tester,
+  ) async {
+    final api = _FakePeopleSitesApi(people: [_person(1)]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: OwnerPeopleScreen(api: api)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Generate activation code'));
+    await tester.pumpAndSettle();
+
+    expect(api.generatedFor, 'membership-1');
+    expect(find.byKey(const Key('generated-activation-code')), findsOneWidget);
+    expect(find.text('123456'), findsOneWidget);
+  });
+
   testWidgets('sites list renders 50 records and opens supervisor detail', (
     tester,
   ) async {
@@ -231,6 +252,7 @@ class _FakePeopleSitesApi implements OwnerPeopleSiteApi, OwnerAssetApi {
   List<OwnerAsset> assets;
   List<SiteDeployedAsset> siteAssets;
   (String, String)? lastDeployment;
+  String? generatedFor;
 
   @override
   Future<List<OwnerPerson>> ownerPeople() async => people;
@@ -253,6 +275,24 @@ class _FakePeopleSitesApi implements OwnerPeopleSiteApi, OwnerAssetApi {
     String membershipId,
     bool active,
   ) async => _person(999, status: active ? 'ACTIVE' : 'INACTIVE');
+
+  @override
+  Future<OwnerActivationCode> generateOwnerActivationCode(
+    String membershipId,
+  ) async {
+    generatedFor = membershipId;
+    return OwnerActivationCode(
+      code: '123456',
+      expiresAt: DateTime.utc(2026, 10, 12),
+    );
+  }
+
+  @override
+  Future<OwnerActivationCode> resetOwnerDevice(String membershipId) async =>
+      OwnerActivationCode(
+        code: '654321',
+        expiresAt: DateTime.utc(2026, 10, 12),
+      );
 
   @override
   Future<OwnerManagedSite> createOwnerSite(OwnerSiteInput input) async =>

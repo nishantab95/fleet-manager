@@ -17,6 +17,7 @@ Future<void> main() async {
   final api = ApiClient(persistSession: sessionStore.save);
   final authMode = fleetAuthMode;
   final firebaseCompanyBuild = isFirebaseCompanyBuild;
+  final companyPinBuild = isCompanyPinBuild;
   final pilotRuntimeEnabled = pilotRuntimeFeaturesEnabled(
     pilotBuild: isPilotBuild,
     authMode: authMode,
@@ -29,6 +30,8 @@ Future<void> main() async {
     } on Object {
       loginAuthProvider = const UnavailableFirebaseAuthProvider();
     }
+  } else if (authMode == FleetAuthMode.companyPin) {
+    loginAuthProvider = const CompanyPinAuthProvider();
   } else {
     loginAuthProvider = PilotOtpAuthProvider(api);
   }
@@ -42,7 +45,10 @@ Future<void> main() async {
       }
     }
   }
-  final tokens = await sessionStore.read();
+  final tokens = authMode == FleetAuthMode.companyPin
+      ? null
+      : await sessionStore.read();
+  if (authMode == FleetAuthMode.companyPin) await sessionStore.clear();
   if (tokens != null) api.setSession(tokens);
   final installationIdentifier = await sessionStore.installationIdentifier();
   final database = await openLocalDatabase();
@@ -56,6 +62,7 @@ Future<void> main() async {
         pilotBuild: isPilotBuild,
         authMode: authMode,
         firebaseCompanyBuild: firebaseCompanyBuild,
+        companyPinBuild: companyPinBuild,
       )
       ? PilotUpdateController(
           service: PilotUpdateService(

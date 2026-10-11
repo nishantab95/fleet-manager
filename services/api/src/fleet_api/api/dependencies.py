@@ -204,6 +204,8 @@ def get_owner_people_site_service(
         request_id=request.headers.get("x-request-id"),
         phone_default_region=settings.phone_default_region,
         auth_mode=settings.auth_mode,
+        activation_code_ttl_seconds=settings.activation_code_ttl_seconds,
+        activation_code_max_attempts=settings.otp_max_attempts,
     )
 
 
