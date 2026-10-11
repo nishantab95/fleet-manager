@@ -10,9 +10,10 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $config = Get-CloudflareWebsiteConfig -DeployRoot $DeployRoot
 $sourceRoot = [IO.Path]::GetFullPath([string]$config.sourceRoot)
-$branch = (& git -C $sourceRoot branch --show-current).Trim()
+$gitExe = (Get-Command git.exe -ErrorAction Stop).Source
+$branch = (& $gitExe -C $sourceRoot branch --show-current).Trim()
 if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { throw 'Website updates are allowed only from the existing main branch.' }
-$dirty = @(& git -C $sourceRoot status --porcelain)
+$dirty = @(& $gitExe -C $sourceRoot status --porcelain)
 if ($LASTEXITCODE -ne 0 -or $dirty.Count -gt 0) { throw 'Review and commit or discard repository changes before creating a production website release.' }
 
 $marketingRoot = Join-Path $sourceRoot 'apps\marketing'
@@ -38,9 +39,9 @@ try {
     Pop-Location
 }
 
-$dirtyAfterBuild = @(& git -C $sourceRoot status --porcelain)
+$dirtyAfterBuild = @(& $gitExe -C $sourceRoot status --porcelain)
 if ($LASTEXITCODE -ne 0 -or $dirtyAfterBuild.Count -gt 0) { throw 'The build changed tracked or untracked repository files; review before release creation.' }
-$gitCommit = (& git -C $sourceRoot rev-parse HEAD).Trim()
+$gitCommit = (& $gitExe -C $sourceRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $gitCommit -notmatch '^[0-9a-f]{40}$') { throw 'Unable to resolve the full production source commit.' }
 $releaseId = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$gitCommit"
 $releasesRoot = Join-Path $config.deployRoot 'releases'
