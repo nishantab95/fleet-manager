@@ -215,13 +215,11 @@ else {
 $ErrorActionPreference = "Continue"
 Push-Location $mobileRoot
 try {
-    # Windows PowerShell can fail to invoke a .bat file directly on locked-down
-    # hosts. Route the checked Flutter wrapper through cmd.exe explicitly.
-    & $env:ComSpec /d /c $flutter pub get
+    & $flutter pub get
     if ($LASTEXITCODE -ne 0) {
         throw "Flutter dependency setup failed with exit code $LASTEXITCODE."
     }
-    & $env:ComSpec /d /c $flutter @buildArguments
+    & $flutter @buildArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Flutter Firebase APK build failed with exit code $LASTEXITCODE."
     }
