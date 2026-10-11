@@ -1,12 +1,110 @@
-# Fleet AI Systems public website: Windows self-hosting runbook
+# Fleet AI Systems public website: Windows deployment runbook
 
-## Deployment status and scope
+## Recommended production topology: Cloudflare Tunnel
 
-This repository is **prepared, not deployed**. No DNS, router, CGNAT, Windows
-Firewall, Caddy service, certificate, production directory, or scheduled task
-was changed while preparing this phase.
+The recommended public path is:
 
-Only `apps/marketing` is approved for public exposure. The intended boundary is:
+```text
+Internet
+  -> Cloudflare HTTPS edge
+  -> outbound remotely managed cloudflared tunnel
+  -> http://127.0.0.1:3001
+  -> apps/marketing standalone Next.js server
+```
+
+The Cloudflare path exposes only `apps/marketing`. It does not require router
+port forwarding or public inbound Windows Firewall rules. Keep the origin bound
+to `127.0.0.1`; do not point a public hostname at another Fleet service.
+
+The older Caddy/public-port procedure below remains an alternative and is not
+the recommended production path. Do not enable it alongside Cloudflare Tunnel
+unless that change is reviewed separately.
+
+## Cloudflare website install and operation
+
+Run the one-time installer from an elevated PowerShell window in a clean,
+reviewed checkout on `main`:
+
+```powershell
+.\scripts\install-public-website-cloudflare.ps1
+```
+
+The installer creates immutable releases under
+`C:\FleetAISystems\Website\releases`, Cloudflare runtime state under
+`C:\FleetAISystems\Website\runtime\cloudflare`, and stdout/stderr logs under
+`C:\FleetAISystems\Website\logs\cloudflare`. The website process runs as
+`SYSTEM` from the active release with `node server.js`, `NODE_ENV=production`,
+`HOSTNAME=127.0.0.1`, and `PORT=3001`. Its environment is limited to the values
+the marketing app needs, including
+`FLEET_MARKETING_LEAD_DIR=C:\ProgramData\FleetAISystems\MarketingLeads`.
+Firebase/API credentials are not passed to the marketing process.
+
+Run the start, stop, update, rollback, and check helpers from an elevated
+PowerShell window. The start helper triggers the task so the Node process always
+runs as `SYSTEM`. The task `Fleet AI Systems Website (Cloudflare)` starts the website at Windows
+startup and retries a failed start. Website runtime state tracks PID, process
+start time, release, and port. Stop/update/rollback helpers verify the process
+identity and recorded start time before stopping it.
+
+```powershell
+.\scripts\start-public-website-cloudflare.ps1
+.\scripts\stop-public-website-cloudflare.ps1
+.\scripts\check-public-website-cloudflare.ps1
+.\scripts\update-public-website-cloudflare.ps1
+.\scripts\rollback-public-website-cloudflare.ps1
+```
+
+For a future update, review or pull source on `main`, commit the reviewed
+changes, then run the update helper from an elevated PowerShell window. It
+requires a clean working tree and runs `npm ci`, the production-only audit,
+lint, typecheck, unit tests, and production build before creating a new release.
+It health-checks the new release, switches the startup task to it, and keeps the
+previous release available for rollback. It restarts only the marketing Node
+process; it does not restart Fleet API, Owner, Supervisor, PostgreSQL, MinIO, or
+mobile distribution services.
+
+Check the website task and tunnel service with:
+
+```powershell
+Get-ScheduledTask -TaskName 'Fleet AI Systems Website (Cloudflare)'
+Get-Service cloudflared
+```
+
+The Cloudflare dashboard owns the remotely managed tunnel and public hostname
+routes: `fleetaisystems.com` and `www.fleetaisystems.com` should point only to
+`http://127.0.0.1:3001`. Never put a tunnel token in this repository, a checked
+in environment file, or documentation. Use the official Cloudflare Windows
+connector/service flow for any token installation.
+
+Recovery: inspect the website stderr log in `C:\FleetAISystems\Website\logs\cloudflare`,
+then run the start helper or `Start-ScheduledTask -TaskName 'Fleet AI Systems Website (Cloudflare)'`.
+If the current release is unhealthy, run the rollback helper from an elevated
+PowerShell window. Do not manually kill a PID; the helpers verify the recorded
+process identity and start time.
+
+The lead directory stays outside Git and website releases at
+`C:\ProgramData\FleetAISystems\MarketingLeads`, with access restricted to
+`SYSTEM` and local Administrators. Treat lead files as contact PII and follow
+the retention and encrypted backup rules below.
+
+## Public/private security boundary
+
+Only the public marketing pages, `/health`, and `POST /public/leads` are
+available through the public hostname. The hostname must not route to `apps/web`,
+Owner, Supervisor, FastAPI, PostgreSQL, MinIO, Docker, RDP, SMB, SSH, or any
+private/admin route. In particular, `/api/v1/*`, `/owner`, `/supervisor`, `/lab`,
+`/docs`, `/redoc`, `/openapi.json`, `/evidence/private`, `/internal`, and
+`/admin` must remain unavailable from the marketing app. Do not configure router
+port forwarding or create inbound firewall rules for ports 80, 443, 3001, 3100,
+3101, 8000, 5432, 19000, or 19001.
+
+## Legacy alternative: public Caddy ports
+
+The Caddy steps below describe a separate alternative using public ports 80/443.
+They are not the recommended Cloudflare production path. Do not run these steps
+for a Cloudflare-only deployment.
+
+### Alternative deployment scope
 
 ```text
 Internet :80/:443
