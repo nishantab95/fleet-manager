@@ -13,8 +13,8 @@ $sourceRoot = [IO.Path]::GetFullPath([string]$config.sourceRoot)
 $gitExe = (Get-Command git.exe -ErrorAction Stop).Source
 $branch = (& $gitExe -C $sourceRoot branch --show-current).Trim()
 if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { throw 'Website updates are allowed only from the existing main branch.' }
-$dirty = @(& $gitExe -C $sourceRoot status --porcelain)
-if ($LASTEXITCODE -ne 0 -or $dirty.Count -gt 0) { throw 'Review and commit or discard repository changes before creating a production website release.' }
+$dirty = (& $gitExe -C $sourceRoot status --porcelain) -join "`n"
+if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($dirty)) { throw "Review and commit or discard repository changes before creating a production website release: $dirty" }
 
 $marketingRoot = Join-Path $sourceRoot 'apps\marketing'
 $nodeDirectory = [IO.Path]::GetDirectoryName([string]$config.nodePath)
@@ -39,8 +39,10 @@ try {
     Pop-Location
 }
 
-$dirtyAfterBuild = @(& $gitExe -C $sourceRoot status --porcelain)
-if ($LASTEXITCODE -ne 0 -or $dirtyAfterBuild.Count -gt 0) { throw 'The build changed tracked or untracked repository files; review before release creation.' }
+$dirtyAfterBuild = (& $gitExe -C $sourceRoot status --porcelain) -join "`n"
+if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($dirtyAfterBuild)) {
+    throw "The build changed tracked or untracked repository files; review before release creation: $dirtyAfterBuild"
+}
 $gitCommit = (& $gitExe -C $sourceRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $gitCommit -notmatch '^[0-9a-f]{40}$') { throw 'Unable to resolve the full production source commit.' }
 $releaseId = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$gitCommit"
