@@ -447,11 +447,10 @@ export function PeoplePanel({ people, assets = [], apiRequest, reload, setError,
   const beginEditing = (group: PersonGroup) => { setEditing(group); setEditingName(group.displayName); setEditingPhone(group.phone); };
   const issueActivation = async (resetDevice: boolean) => {
     if (!editing) return;
-    const membership = editing.memberships.find((item) => item.status === "ACTIVE") ?? editing.memberships[0];
     if (resetDevice && !window.confirm("Reset this device login? Existing sessions and device access will be revoked before a new activation code is issued.")) return;
     let result: OwnerActivationCode | null = null;
     const ok = await mutation.run(resetDevice ? "Device login reset." : "Activation code generated.", async () => {
-      result = await apiRequest<OwnerActivationCode>(`/api/v1/owner/people/${membership.membership_id}/${resetDevice ? "reset-device" : "activation-code"}`, { method: "POST" });
+      result = await apiRequest<OwnerActivationCode>(`/api/v1/owner/people/user/${editing.userId}/${resetDevice ? "reset-device" : "activation-code"}`, { method: "POST" });
     });
     if (ok && result) {
       setEditing(null);

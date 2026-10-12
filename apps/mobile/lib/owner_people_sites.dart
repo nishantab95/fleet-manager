@@ -133,8 +133,8 @@ class _OwnerPeopleScreenState extends State<OwnerPeopleScreen> {
     }
     try {
       final activation = action == 'reset'
-          ? await widget.api.resetOwnerDevice(person.membershipId)
-          : await widget.api.generateOwnerActivationCode(person.membershipId);
+          ? await widget.api.resetOwnerDevice(person.userId)
+          : await widget.api.generateOwnerActivationCode(person.userId);
       if (!mounted) return;
       await showDialog<void>(
         context: context,

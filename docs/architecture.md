@@ -113,7 +113,9 @@ is selectable through production configuration.
 Authentication has three explicit modes. `pilot` retains the controlled local
 OTP workflow, `firebase` accepts only a Firebase Phone Authentication ID token,
 and `company_pin` uses an Owner-issued one-time activation code followed by a
-device-bound PIN. Protected profiles permit Firebase or company PIN mode; there
+device-bound credential. Android unlock is delegated to the operating-system
+authentication prompt, with the Fleet six-digit PIN retained only when system
+authentication is unavailable. Protected profiles permit Firebase or company PIN mode; there
 is no pilot-code fallback. Both production-capable modes issue the existing
 membership-scoped Fleet sessions, and PostgreSQL remains the authorization
 authority. See [ADR 0012](adr/0012-company-managed-activation-pin.md).
@@ -168,9 +170,13 @@ to secure storage, and retries the original request once. A failed refresh or a
 second `401` clears local authentication and returns the nested UI to login;
 requests never loop. Secure storage holds mobile session tokens and the
 installation identifier. In `company_pin` mode it also holds the opaque device
-credential; a cold launch requires the local PIN and an install without that
-credential requires Owner reactivation. Event payloads do not contain company
-IDs supplied by the user.
+credential. A cold launch uses Android biometric/device-credential
+authentication and then retrieves the person's current active memberships;
+the server creates a session only for the chosen workspace. Multiple roles
+always show a chooser, and an authenticated session can switch to another
+server-returned active membership in the same company. An install without the
+Fleet credential requires Owner reactivation. Event payloads do not contain
+company IDs supplied by the user. See [ADR 0013](adr/0013-device-auth-and-workspaces.md).
 
 The backend derives the assignment from the authenticated driver and event
 timestamp. It registers an installation-scoped device, enforces the

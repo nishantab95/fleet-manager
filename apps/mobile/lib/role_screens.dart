@@ -15,15 +15,18 @@ import 'owner_fleet.dart';
 import 'owner_people_sites.dart';
 
 typedef SignOut = Future<void> Function();
+typedef SwitchWorkspace = Future<void> Function();
 
 class SupervisorHomeScreen extends StatefulWidget {
   const SupervisorHomeScreen({
     required this.api,
+    this.onSwitchWorkspace,
     required this.onSignOut,
     super.key,
   });
 
   final ApiClient api;
+  final SwitchWorkspace? onSwitchWorkspace;
   final SignOut onSignOut;
 
   @override
@@ -161,6 +164,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> {
       title: _supervisorName,
       subtitle: siteLabel,
       onRefresh: _load,
+      onSwitchWorkspace: widget.onSwitchWorkspace,
       onSignOut: widget.onSignOut,
       offline: _offline,
       body: RefreshIndicator(
@@ -1223,11 +1227,13 @@ class _ReviewEventCard extends StatelessWidget {
 class OwnerHomeScreen extends StatefulWidget {
   const OwnerHomeScreen({
     required this.api,
+    this.onSwitchWorkspace,
     required this.onSignOut,
     super.key,
   });
 
   final ApiClient api;
+  final SwitchWorkspace? onSwitchWorkspace;
   final SignOut onSignOut;
 
   @override
@@ -1333,6 +1339,7 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
       title: titles[_tab],
       subtitle: 'TODAY · ${_date.toIso8601String().substring(0, 10)}',
       onRefresh: _load,
+      onSwitchWorkspace: widget.onSwitchWorkspace,
       onSignOut: widget.onSignOut,
       offline: _offline,
       body: IndexedStack(
@@ -2226,6 +2233,7 @@ class _RoleScaffold extends StatelessWidget {
     required this.subtitle,
     required this.body,
     required this.onRefresh,
+    this.onSwitchWorkspace,
     required this.onSignOut,
     this.offline = false,
     this.bottomNavigationBar,
@@ -2234,6 +2242,7 @@ class _RoleScaffold extends StatelessWidget {
   final String subtitle;
   final Widget body;
   final Future<void> Function() onRefresh;
+  final SwitchWorkspace? onSwitchWorkspace;
   final SignOut onSignOut;
   final bool offline;
   final Widget? bottomNavigationBar;
@@ -2259,6 +2268,12 @@ class _RoleScaffold extends StatelessWidget {
           tooltip: 'Refresh',
           icon: const Icon(Icons.refresh),
         ),
+        if (onSwitchWorkspace != null)
+          IconButton(
+            onPressed: onSwitchWorkspace,
+            tooltip: 'Switch workspace',
+            icon: const Icon(Icons.switch_account_outlined),
+          ),
         IconButton(
           onPressed: onSignOut,
           tooltip: 'Sign out',

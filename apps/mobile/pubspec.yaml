@@ -1,7 +1,7 @@
 name: fleet_manager_mobile
 description: Android-first offline-capable driver client shell for Fleet Manager.
 publish_to: "none"
-version: 1.0.23+28
+version: 1.0.24+29
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
@@ -17,6 +17,7 @@ dependencies:
   http: 1.5.0
   http_parser: 4.1.2
   image_picker: 1.2.0
+  local_auth: 3.0.2
   path: 1.9.1
   path_provider: 2.1.5
   share_plus: 10.1.4

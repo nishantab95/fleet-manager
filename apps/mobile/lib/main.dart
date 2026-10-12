@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'app.dart';
+import 'auth/device_authenticator.dart';
 import 'auth/firebase_options.dart';
 import 'auth/login_auth_provider.dart';
 import 'data/api_client.dart';
@@ -78,6 +79,7 @@ Future<void> main() async {
         sessionStore: sessionStore,
         sync: sync,
         installationIdentifier: installationIdentifier,
+        deviceAuthenticator: SystemDeviceAuthenticator(),
         loginAuthProvider: loginAuthProvider,
         pilotUpdater: pilotUpdater,
       ),

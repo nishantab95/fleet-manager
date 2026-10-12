@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted and selected for the current company deployment.
+Accepted for Build 28. The role-selection and local-unlock portions are
+superseded by ADR 0013; the activation, device binding, fallback PIN, reset,
+and backward-compatibility decisions remain in force.
 
 ## Context
 

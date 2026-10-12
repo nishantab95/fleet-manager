@@ -433,7 +433,7 @@ describe("Owner management panels", () => {
     fireEvent.click(screen.getByRole("button", { name: "Generate activation code" }));
 
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
-      `/api/v1/owner/people/${activeDriver.membership_id}/activation-code`,
+      `/api/v1/owner/people/user/${activeDriver.user_id}/activation-code`,
       { method: "POST" },
     ));
     expect(await screen.findByLabelText("Activation code")).toHaveTextContent("614209");

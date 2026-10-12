@@ -74,6 +74,15 @@ class CompanyPinLoginRequest(BaseModel):
     pin: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
 
 
+class CompanyDeviceLoginRequest(BaseModel):
+    device_credential: str = Field(min_length=32, max_length=256)
+    installation_identifier: str = Field(min_length=1, max_length=200)
+
+
+class CompanyDeviceAuthResponse(OtpVerifyResponse):
+    device_credential: str
+
+
 class MembershipOption(BaseModel):
     membership_id: UUID
     company_id: UUID
@@ -91,6 +100,10 @@ class MembershipOptionsRequest(BaseModel):
 
 class SessionRequest(BaseModel):
     pre_session_token: str = Field(min_length=1)
+    membership_id: UUID
+
+
+class WorkspaceSwitchRequest(BaseModel):
     membership_id: UUID
 
 

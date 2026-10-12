@@ -237,16 +237,17 @@ class OwnerPeopleSiteService:
             current_site_name,
             self._auth_state(membership, user),
             self._phone_auth_linked(user),
-            self._device_activated(membership.id),
-            self._activation_pending(membership.id, now),
+            self._device_activated(user.id),
+            self._activation_pending(user.id, now),
         )
 
-    def _device_activated(self, membership_id: UUID) -> bool:
+    def _device_activated(self, user_id: UUID) -> bool:
         return (
             self.session.scalar(
                 select(CompanyPinCredential.id)
                 .where(
-                    CompanyPinCredential.membership_id == membership_id,
+                    CompanyPinCredential.company_id == self.company_id,
+                    CompanyPinCredential.user_id == user_id,
                     CompanyPinCredential.activated_at.is_not(None),
                     CompanyPinCredential.revoked_at.is_(None),
                 )
@@ -255,12 +256,17 @@ class OwnerPeopleSiteService:
             is not None
         )
 
-    def _activation_pending(self, membership_id: UUID, now: datetime) -> bool:
+    def _activation_pending(self, user_id: UUID, now: datetime) -> bool:
         return (
             self.session.scalar(
                 select(OtpChallenge.id)
+                .join(
+                    CompanyMembership,
+                    CompanyMembership.id == OtpChallenge.membership_id,
+                )
                 .where(
-                    OtpChallenge.membership_id == membership_id,
+                    CompanyMembership.company_id == self.company_id,
+                    CompanyMembership.user_id == user_id,
                     OtpChallenge.purpose == ACTIVATION_PURPOSE,
                     OtpChallenge.status == OtpChallengeStatus.ACTIVE,
                     OtpChallenge.expires_at > now,
@@ -612,25 +618,44 @@ class OwnerPeopleSiteService:
         for auth_session in sessions:
             auth_session.revoked_at = now
             auth_session.revocation_reason = reason
-        credentials = self.session.scalars(
-            select(CompanyPinCredential).where(
-                CompanyPinCredential.company_id == self.company_id,
-                CompanyPinCredential.membership_id == membership.id,
-                CompanyPinCredential.revoked_at.is_(None),
+        credentials: list[CompanyPinCredential] = []
+        remaining_active = self.session.scalar(
+            select(CompanyMembership.id)
+            .where(
+                CompanyMembership.company_id == self.company_id,
+                CompanyMembership.user_id == membership.user_id,
+                CompanyMembership.status == MembershipStatus.ACTIVE,
             )
-        ).all()
-        for credential in credentials:
-            credential.revoked_at = now
-            credential.revocation_reason = reason
-        challenges = self.session.scalars(
-            select(OtpChallenge).where(
-                OtpChallenge.membership_id == membership.id,
-                OtpChallenge.purpose == ACTIVATION_PURPOSE,
-                OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+            .limit(1)
+        )
+        if remaining_active is None:
+            credentials = list(
+                self.session.scalars(
+                    select(CompanyPinCredential).where(
+                        CompanyPinCredential.company_id == self.company_id,
+                        CompanyPinCredential.user_id == membership.user_id,
+                        CompanyPinCredential.revoked_at.is_(None),
+                    )
+                ).all()
             )
-        ).all()
-        for challenge in challenges:
-            challenge.status = OtpChallengeStatus.CANCELLED
+            for credential in credentials:
+                credential.revoked_at = now
+                credential.revocation_reason = reason
+            membership_ids = self.session.scalars(
+                select(CompanyMembership.id).where(
+                    CompanyMembership.company_id == self.company_id,
+                    CompanyMembership.user_id == membership.user_id,
+                )
+            ).all()
+            challenges = self.session.scalars(
+                select(OtpChallenge).where(
+                    OtpChallenge.membership_id.in_(membership_ids),
+                    OtpChallenge.purpose == ACTIVATION_PURPOSE,
+                    OtpChallenge.status == OtpChallengeStatus.ACTIVE,
+                )
+            ).all()
+            for challenge in challenges:
+                challenge.status = OtpChallengeStatus.CANCELLED
         return len(sessions), len(credentials)
 
     def _revoke_person_access(
@@ -683,9 +708,37 @@ class OwnerPeopleSiteService:
         *,
         reset_device: bool = False,
     ) -> ActivationCodeView:
+        membership = self._membership(membership_id)
+        return self.generate_person_activation_code_for_user(
+            membership.user_id,
+            reset_device=reset_device,
+            provenance_membership_id=membership.id,
+        )
+
+    def generate_person_activation_code_for_user(
+        self,
+        user_id: UUID,
+        *,
+        reset_device: bool = False,
+        provenance_membership_id: UUID | None = None,
+    ) -> ActivationCodeView:
         if self.auth_mode != "company_pin":
             raise DomainError("company activation is not enabled")
-        view = self.get_person(membership_id)
+        statement = select(CompanyMembership).where(
+            CompanyMembership.company_id == self.company_id,
+            CompanyMembership.user_id == user_id,
+            CompanyMembership.status == MembershipStatus.ACTIVE,
+        )
+        if provenance_membership_id is not None:
+            statement = statement.where(
+                CompanyMembership.id == provenance_membership_id,
+            )
+        activation_membership = self.session.scalar(
+            statement.order_by(CompanyMembership.id).limit(1)
+        )
+        if activation_membership is None:
+            raise NotFoundError("active person was not found")
+        view = self.get_person(activation_membership.id)
         if view.auth_state != "READY":
             raise ConflictError("person must have one active, valid mobile identity")
         now = datetime.now(UTC)
@@ -739,9 +792,12 @@ class OwnerPeopleSiteService:
                 view.user.phone_number,
                 default_region=self.phone_default_region,
             ),
-            membership_id=view.membership.id,
+            # Kept as database provenance for Build 28 compatibility. Build 29
+            # treats this challenge as person/company scoped and does not use
+            # the membership to authorize a role.
+            membership_id=activation_membership.id,
             purpose=ACTIVATION_PURPOSE,
-            requested_role=view.membership.role,
+            requested_role=None,
             otp_hash=hash_activation_code(code, salt),
             otp_salt=salt,
             status=OtpChallengeStatus.ACTIVE,
@@ -762,7 +818,8 @@ class OwnerPeopleSiteService:
             entity_type="OTP_CHALLENGE",
             entity_id=challenge.id,
             new_values={
-                "membership_id": str(membership_id),
+                "user_id": str(view.user.id),
+                "activation_context_membership_id": str(activation_membership.id),
                 "expires_at": expires_at.isoformat(),
                 "revoked_session_count": revoked_sessions,
                 "revoked_device_count": revoked_credentials,

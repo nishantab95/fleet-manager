@@ -18,6 +18,7 @@ from fleet_api.domain.errors import AuthConfigurationError, InvalidTokenError
 class PreSessionClaims:
     user_id: UUID | None
     requested_role: MembershipRole | None = None
+    company_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ def issue_pre_session(
     *,
     user_id: UUID | None,
     requested_role: MembershipRole | None = None,
+    company_id: UUID | None = None,
     now: datetime,
 ) -> str:
     subject = str(user_id or uuid4())
@@ -71,6 +73,8 @@ def issue_pre_session(
         payload["uid"] = str(user_id)
     if requested_role is not None:
         payload["requested_role"] = requested_role.value
+    if company_id is not None:
+        payload["cid"] = str(company_id)
     return jwt.encode(payload, _signing_key(settings), algorithm="HS256")
 
 
@@ -80,16 +84,31 @@ def decode_pre_session(token: str, settings: Settings) -> PreSessionClaims:
         raise InvalidTokenError("token is not a membership-selection context")
     raw_user_id = payload.get("uid")
     raw_requested_role = payload.get("requested_role")
+    raw_company_id = payload.get("cid")
     requested_role: MembershipRole | None = None
     if raw_requested_role is not None:
         try:
             requested_role = MembershipRole(str(raw_requested_role))
         except ValueError as exc:
             raise InvalidTokenError("token role context is invalid") from exc
+    company_id: UUID | None = None
+    if raw_company_id is not None:
+        try:
+            company_id = UUID(str(raw_company_id))
+        except ValueError as exc:
+            raise InvalidTokenError("token company context is invalid") from exc
     if raw_user_id is None:
-        return PreSessionClaims(user_id=None, requested_role=requested_role)
+        return PreSessionClaims(
+            user_id=None,
+            requested_role=requested_role,
+            company_id=company_id,
+        )
     try:
-        return PreSessionClaims(user_id=UUID(str(raw_user_id)), requested_role=requested_role)
+        return PreSessionClaims(
+            user_id=UUID(str(raw_user_id)),
+            requested_role=requested_role,
+            company_id=company_id,
+        )
     except ValueError as exc:
         raise InvalidTokenError("token identity is invalid") from exc
 

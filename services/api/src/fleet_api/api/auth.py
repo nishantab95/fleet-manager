@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,8 @@ from fleet_api.api.dependencies import get_auth_service, get_current_session
 from fleet_api.api.schemas import (
     CompanyActivationRequest,
     CompanyActivationResponse,
+    CompanyDeviceAuthResponse,
+    CompanyDeviceLoginRequest,
     CompanyPinLoginRequest,
     CompanyPinSessionResponse,
     CompanyPinSetupRequest,
@@ -23,9 +27,11 @@ from fleet_api.api.schemas import (
     SessionRequest,
     TokenResponse,
     WebTokenResponse,
+    WorkspaceSwitchRequest,
 )
 from fleet_api.auth.service import AuthContext, AuthService, SessionTokens
 from fleet_api.db.session import get_db
+from fleet_api.domain.enums import MembershipRole
 from fleet_api.domain.errors import (
     ActivationCodeError,
     AmbiguousPhoneIdentityError,
@@ -78,6 +84,22 @@ def _web_token_response(tokens: SessionTokens) -> WebTokenResponse:
         membership_id=tokens.context.membership.id,
         company_id=tokens.context.company.id,
         role=tokens.context.membership.role,
+    )
+
+
+def _membership_options_response(
+    memberships: list[tuple[UUID, UUID, str, MembershipRole]],
+) -> MembershipOptionsResponse:
+    return MembershipOptionsResponse(
+        memberships=[
+            MembershipOption(
+                membership_id=membership_id,
+                company_id=company_id,
+                company_name=company_name,
+                role=role,
+            )
+            for membership_id, company_id, company_name, role in memberships
+        ]
     )
 
 
@@ -306,6 +328,122 @@ def set_company_pin(
         ) from exc
 
 
+@router.post("/company/complete-activation", response_model=CompanyDeviceAuthResponse)
+def complete_company_device_activation(
+    payload: CompanyPinSetupRequest,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> CompanyDeviceAuthResponse:
+    """Build 29 role-neutral activation; Build 28 /set-pin remains supported."""
+    try:
+        pre_session, expires_in, device_credential = service.complete_company_device_activation(
+            activation_token=payload.activation_token,
+            installation_identifier=payload.installation_identifier,
+            pin=payload.pin,
+        )
+        db.commit()
+        return CompanyDeviceAuthResponse(
+            pre_session_token=pre_session,
+            expires_in=expires_in,
+            device_credential=device_credential,
+        )
+    except DeviceCredentialError as exc:
+        db.rollback()
+        raise _error(
+            "ACTIVATION_EXPIRED",
+            "Activation has expired. Ask an Owner for a new activation code.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except AuthConfigurationError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_NOT_CONFIGURED",
+            "company device authentication is unavailable",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
+@router.post("/company/device-auth", response_model=OtpVerifyResponse)
+def authenticate_company_device(
+    payload: CompanyDeviceLoginRequest,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> OtpVerifyResponse:
+    """Accept only the Fleet device credential; Android secrets stay local to Android."""
+    try:
+        pre_session, expires_in = service.authenticate_company_device(
+            device_credential=payload.device_credential,
+            installation_identifier=payload.installation_identifier,
+        )
+        db.commit()
+        return OtpVerifyResponse(
+            pre_session_token=pre_session,
+            expires_in=expires_in,
+        )
+    except DeviceCredentialError as exc:
+        db.rollback()
+        raise _error(
+            "DEVICE_REACTIVATION_REQUIRED",
+            "This device must be activated again.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except AuthConfigurationError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_NOT_CONFIGURED",
+            "company device authentication is unavailable",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
+@router.post("/company/pin-auth", response_model=OtpVerifyResponse)
+def authenticate_company_pin(
+    payload: CompanyPinLoginRequest,
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> OtpVerifyResponse:
+    """Build 29 fallback PIN authentication without selecting a workspace."""
+    try:
+        pre_session, expires_in = service.authenticate_company_pin(
+            device_credential=payload.device_credential,
+            installation_identifier=payload.installation_identifier,
+            pin=payload.pin,
+        )
+        db.commit()
+        return OtpVerifyResponse(
+            pre_session_token=pre_session,
+            expires_in=expires_in,
+        )
+    except PinLockedError as exc:
+        db.commit()
+        raise _error(
+            "PIN_LOCKED",
+            "Too many incorrect PIN attempts. Try again later.",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        ) from exc
+    except PinAuthenticationError as exc:
+        db.commit()
+        raise _error(
+            "AUTHENTICATION_FAILED",
+            "PIN is incorrect.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except DeviceCredentialError as exc:
+        db.rollback()
+        raise _error(
+            "DEVICE_REACTIVATION_REQUIRED",
+            "This device must be activated again.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+    except AuthConfigurationError as exc:
+        db.rollback()
+        raise _error(
+            "AUTH_NOT_CONFIGURED",
+            "company PIN authentication is unavailable",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
 @router.post("/company/pin-login", response_model=TokenResponse)
 def login_with_company_pin(
     payload: CompanyPinLoginRequest,
@@ -363,17 +501,38 @@ def list_memberships(
             "membership selection context is invalid",
             status.HTTP_401_UNAUTHORIZED,
         ) from exc
-    return MembershipOptionsResponse(
-        memberships=[
-            MembershipOption(
-                membership_id=membership_id,
-                company_id=company_id,
-                company_name=company_name,
-                role=role,
-            )
-            for membership_id, company_id, company_name, role in memberships
-        ]
-    )
+    return _membership_options_response(memberships)
+
+
+@router.get("/workspaces", response_model=MembershipOptionsResponse)
+def list_current_workspaces(
+    context: AuthContext = Depends(get_current_session),
+    service: AuthService = Depends(get_auth_service),
+) -> MembershipOptionsResponse:
+    return _membership_options_response(service.list_session_memberships(context))
+
+
+@router.post("/workspace", response_model=TokenResponse)
+def switch_workspace(
+    payload: WorkspaceSwitchRequest,
+    context: AuthContext = Depends(get_current_session),
+    service: AuthService = Depends(get_auth_service),
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    try:
+        tokens = service.switch_workspace(
+            context,
+            membership_id=payload.membership_id,
+        )
+        db.commit()
+        return _token_response(tokens)
+    except MembershipSelectionError as exc:
+        db.rollback()
+        raise _error(
+            "FORBIDDEN",
+            "workspace selection is not permitted",
+            status.HTTP_403_FORBIDDEN,
+        ) from exc
 
 
 @router.post("/session", response_model=TokenResponse)

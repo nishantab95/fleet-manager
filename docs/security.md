@@ -62,7 +62,12 @@ controls.
   person in that company.
 - The six-digit PIN is stored only as a separately salted 600,000-iteration
   PBKDF2-HMAC-SHA256 hash. Failed PIN checks are counted under a row lock and
-  temporarily lock the credential after the configured limit.
+  temporarily lock the credential after the configured limit. Build 29 uses
+  this only as a fallback when Android system authentication is unavailable.
+- Android fingerprint, supported face, PIN, pattern, and password checks run
+  exclusively inside the operating-system authentication prompt. Fleet
+  receives only a success/cancel result and never receives, stores, or logs
+  lock-screen secrets or biometric data.
 - The server stores only hashes of the high-entropy device credential and
   installation identifier. The Flutter client stores the credential, session
   tokens, and installation identifier only in platform secure storage and
@@ -72,9 +77,16 @@ controls.
   activation codes for that person in the authenticated company before it
   returns one replacement code. Codes, PINs, token material, and credential
   hashes are excluded from audit metadata and logs.
-- Activation selects a server-owned membership and never accepts a role or
-  company from the client. Every login revalidates the User, membership, and
-  company lifecycle state before issuing the existing Fleet session.
+- Activation enrolls the existing User/device identity for one server-owned
+  company and does not permanently select the membership used as activation
+  provenance. Authentication returns only that person's current active
+  memberships in that company. Session creation and workspace switching accept
+  only an exact membership from this server-derived set and revalidate the
+  User, membership, company, tenant, and role before issuing a Fleet session.
+- Build 28 `/company/set-pin` and `/company/pin-login` remain available while
+  Build 29 is adopted. Build 29 exchanges the same stored random credential for
+  a company-scoped membership-selection context, so safe existing credentials
+  do not require reactivation.
 
 - All management routes require the backend `OWNER_ADMIN` dependency. Hiding
   a web tab is only convenience; supervisor and driver sessions receive a

@@ -76,7 +76,7 @@ void main() {
     await tester.tap(find.text('Generate activation code'));
     await tester.pumpAndSettle();
 
-    expect(api.generatedFor, 'membership-1');
+    expect(api.generatedFor, 'user-1');
     expect(find.byKey(const Key('generated-activation-code')), findsOneWidget);
     expect(find.text('123456'), findsOneWidget);
   });
@@ -277,10 +277,8 @@ class _FakePeopleSitesApi implements OwnerPeopleSiteApi, OwnerAssetApi {
   ) async => _person(999, status: active ? 'ACTIVE' : 'INACTIVE');
 
   @override
-  Future<OwnerActivationCode> generateOwnerActivationCode(
-    String membershipId,
-  ) async {
-    generatedFor = membershipId;
+  Future<OwnerActivationCode> generateOwnerActivationCode(String userId) async {
+    generatedFor = userId;
     return OwnerActivationCode(
       code: '123456',
       expiresAt: DateTime.utc(2026, 10, 12),
@@ -288,7 +286,7 @@ class _FakePeopleSitesApi implements OwnerPeopleSiteApi, OwnerAssetApi {
   }
 
   @override
-  Future<OwnerActivationCode> resetOwnerDevice(String membershipId) async =>
+  Future<OwnerActivationCode> resetOwnerDevice(String userId) async =>
       OwnerActivationCode(
         code: '654321',
         expiresAt: DateTime.utc(2026, 10, 12),

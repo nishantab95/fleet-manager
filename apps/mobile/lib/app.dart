@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'auth/device_authenticator.dart';
 import 'auth/login_auth_provider.dart';
 import 'data/api_client.dart';
 import 'data/secure_session_store.dart';
@@ -32,12 +33,27 @@ const deviceHandoverBlockedMessage =
     'This phone still has an active duty or unsynced records for another '
     'driver. Finish and sync that work before changing driver.';
 
+String _workspaceRoleLabel(String role) => switch (role) {
+  'DRIVER' => 'Driver / Operator',
+  'SUPERVISOR' => 'Supervisor',
+  'OWNER_ADMIN' => 'Owner',
+  _ => role,
+};
+
+IconData _workspaceRoleIcon(String role) => switch (role) {
+  'DRIVER' => Icons.drive_eta,
+  'SUPERVISOR' => Icons.fact_check_outlined,
+  'OWNER_ADMIN' => Icons.dashboard_outlined,
+  _ => Icons.work_outline,
+};
+
 class DriverAppDependencies {
   const DriverAppDependencies({
     required this.api,
     required this.sessionStore,
     required this.sync,
     required this.installationIdentifier,
+    this.deviceAuthenticator,
     this.loginAuthProvider,
     this.pilotUpdater,
   });
@@ -46,11 +62,15 @@ class DriverAppDependencies {
   final SecureSessionStore sessionStore;
   final SyncEngine sync;
   final String installationIdentifier;
+  final DeviceAuthenticator? deviceAuthenticator;
   final FleetLoginAuthProvider? loginAuthProvider;
   final PilotUpdateController? pilotUpdater;
 
   FleetLoginAuthProvider get authentication =>
       loginAuthProvider ?? PilotOtpAuthProvider(api);
+
+  DeviceAuthenticator get deviceAuthentication =>
+      deviceAuthenticator ?? SystemDeviceAuthenticator();
 
   Future<void> registerDriverAccount(
     SessionTokens tokens, {
@@ -321,6 +341,57 @@ class _DriverSessionScreenState extends State<DriverSessionScreen>
     }
   }
 
+  Future<void> _switchWorkspace() async {
+    try {
+      final workspaces = await widget.dependencies.api.currentWorkspaces();
+      if (!mounted) return;
+      final selected = await showDialog<MembershipOption>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: const Text('Workspaces'),
+          children: [
+            for (final workspace in workspaces)
+              SimpleDialogOption(
+                key: Key('workspace-${workspace.role}'),
+                onPressed: () => Navigator.of(dialogContext).pop(workspace),
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(_workspaceRoleIcon(workspace.role)),
+                  title: Text(_workspaceRoleLabel(workspace.role)),
+                  subtitle: Text(workspace.companyName),
+                  trailing:
+                      workspace.membershipId ==
+                          widget.dependencies.api.session?.membershipId
+                      ? const Icon(Icons.check)
+                      : null,
+                ),
+              ),
+          ],
+        ),
+      );
+      if (selected == null ||
+          selected.membershipId ==
+              widget.dependencies.api.session?.membershipId) {
+        return;
+      }
+      final tokens = await widget.dependencies.api.switchWorkspace(
+        selected.membershipId,
+      );
+      if (tokens.role == 'DRIVER') {
+        await widget.dependencies.registerDriverAccount(tokens);
+      } else {
+        widget.dependencies.sync.deactivateAccount();
+      }
+      await widget.dependencies.sessionStore.save(tokens);
+      await _signedIn(tokens);
+    } on ApiException catch (error) {
+      if (!mounted || error.isUnauthorized) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -336,10 +407,12 @@ class _DriverSessionScreenState extends State<DriverSessionScreen>
     return switch (_role ?? widget.dependencies.api.session?.role) {
       'SUPERVISOR' => SupervisorHomeScreen(
         api: widget.dependencies.api,
+        onSwitchWorkspace: _switchWorkspace,
         onSignOut: _signOut,
       ),
       'OWNER_ADMIN' => OwnerHomeScreen(
         api: widget.dependencies.api,
+        onSwitchWorkspace: _switchWorkspace,
         onSignOut: _signOut,
       ),
       _ => DriverHomeScreen(
@@ -347,6 +420,7 @@ class _DriverSessionScreenState extends State<DriverSessionScreen>
         assignment: _assignment,
         duty: _duty,
         onRefreshState: _refreshDriverState,
+        onSwitchWorkspace: _switchWorkspace,
         onSignOut: _signOut,
       ),
     };
@@ -384,6 +458,7 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
   bool _busy = false;
   bool _credentialLoaded = false;
+  bool _useFleetPinFallback = false;
 
   bool get _isFirebase =>
       widget.dependencies.authentication.mode == FleetAuthMode.firebase;
@@ -405,6 +480,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _deviceCredential = credential;
       _credentialLoaded = true;
     });
+    if (credential != null) unawaited(_authenticateWithDevice());
   }
 
   @override
@@ -463,16 +539,49 @@ class _LoginScreenState extends State<LoginScreen> {
           code: 'PIN_MISMATCH',
         );
       }
-      final result = await widget.dependencies.api.completeCompanyActivation(
-        activationToken: activationToken,
-        installationIdentifier: widget.dependencies.installationIdentifier,
-        pin: pin,
-      );
+      final result = await widget.dependencies.api
+          .completeCompanyDeviceActivation(
+            activationToken: activationToken,
+            installationIdentifier: widget.dependencies.installationIdentifier,
+            pin: pin,
+          );
       await widget.dependencies.sessionStore.saveCompanyDeviceCredential(
         result.deviceCredential,
       );
       _deviceCredential = result.deviceCredential;
-      await _completeSignedIn(result.tokens);
+      _activationToken = null;
+      await _loadCompanyWorkspaces(result.preSessionToken);
+    });
+  }
+
+  Future<void> _authenticateWithDevice() async {
+    final deviceCredential = _deviceCredential;
+    if (deviceCredential == null) return;
+    await _run(() async {
+      final result = await widget.dependencies.deviceAuthentication
+          .authenticate();
+      if (result == DeviceAuthenticationResult.unavailable) {
+        if (mounted) setState(() => _useFleetPinFallback = true);
+        return;
+      }
+      if (result == DeviceAuthenticationResult.cancelled) {
+        throw const LoginAuthException(
+          'Device authentication was cancelled. Fleet remains locked.',
+          code: 'DEVICE_AUTH_CANCELLED',
+        );
+      }
+      try {
+        final preSession = await widget.dependencies.api
+            .authenticateCompanyDevice(
+              deviceCredential: deviceCredential,
+              installationIdentifier:
+                  widget.dependencies.installationIdentifier,
+            );
+        await _loadCompanyWorkspaces(preSession);
+      } on ApiException catch (error) {
+        await _handleDeviceCredentialError(error);
+        rethrow;
+      }
     });
   }
 
@@ -488,22 +597,41 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
       try {
-        final tokens = await widget.dependencies.api.loginCompanyPin(
+        final preSession = await widget.dependencies.api.authenticateCompanyPin(
           deviceCredential: deviceCredential,
           installationIdentifier: widget.dependencies.installationIdentifier,
           pin: pin,
         );
-        await _completeSignedIn(tokens);
+        await _loadCompanyWorkspaces(preSession);
       } on ApiException catch (error) {
-        if (error.code == 'DEVICE_REACTIVATION_REQUIRED') {
-          await widget.dependencies.sessionStore.clearCompanyDeviceCredential();
-          _deviceCredential = null;
-          _pinController.clear();
-          if (mounted) setState(() {});
-        }
+        await _handleDeviceCredentialError(error);
         rethrow;
       }
     });
+  }
+
+  Future<void> _handleDeviceCredentialError(ApiException error) async {
+    if (error.code != 'DEVICE_REACTIVATION_REQUIRED') return;
+    await widget.dependencies.sessionStore.clearCompanyDeviceCredential();
+    _deviceCredential = null;
+    _pinController.clear();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadCompanyWorkspaces(String preSessionToken) async {
+    _preSessionToken = preSessionToken;
+    _memberships = await widget.dependencies.api.memberships(preSessionToken);
+    if (_memberships.isEmpty) {
+      throw const LoginAuthException(
+        'No active workspace is assigned to this account. Contact your Owner.',
+        code: 'ACCESS_DENIED',
+      );
+    }
+    if (_memberships.length == 1) {
+      await _selectMembership(_memberships.single);
+      return;
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _useAnotherAccount() async {
@@ -513,6 +641,9 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _deviceCredential = null;
       _activationToken = null;
+      _preSessionToken = null;
+      _memberships = const [];
+      _useFleetPinFallback = false;
       _pinController.clear();
       _confirmPinController.clear();
       _error = null;
@@ -810,6 +941,44 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     final returning = _deviceCredential != null;
     final creatingPin = _activationToken != null;
+    if (_memberships.length > 1) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Fleet AI Systems')),
+        body: ListView(
+          key: const Key('workspace-chooser'),
+          padding: const EdgeInsets.all(24),
+          children: [
+            Text(
+              'Choose workspace',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 6),
+            const Text('Continue with one of your active company roles.'),
+            const SizedBox(height: 20),
+            for (final membership in _memberships)
+              Card(
+                child: ListTile(
+                  key: Key('choose-${membership.role}'),
+                  leading: Icon(_workspaceRoleIcon(membership.role)),
+                  title: Text(_workspaceRoleLabel(membership.role)),
+                  subtitle: Text(membership.companyName),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _busy
+                      ? null
+                      : () => _run(() => _selectMembership(membership)),
+                ),
+              ),
+            if (_error != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('Fleet AI Systems')),
       body: ListView(
@@ -817,18 +986,22 @@ class _LoginScreenState extends State<LoginScreen> {
         children: [
           Text(
             returning
-                ? 'Enter PIN'
+                ? _useFleetPinFallback
+                      ? 'Enter Fleet PIN'
+                      : 'Unlock Fleet'
                 : creatingPin
-                ? 'Create PIN'
+                ? 'Create backup PIN'
                 : 'Activate this device',
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const SizedBox(height: 6),
           Text(
             returning
-                ? 'Use the 6-digit PIN created for this device.'
+                ? _useFleetPinFallback
+                      ? 'System authentication is unavailable. Use the exactly 6-digit Fleet PIN for this device.'
+                      : 'Use your Android screen lock: fingerprint, supported face, PIN, pattern, or password.'
                 : creatingPin
-                ? 'Create a 6-digit PIN for future access on this device.'
+                ? 'Create an exactly 6-digit Fleet PIN for fallback when Android authentication is unavailable.'
                 : 'Use your registered mobile number and the one-time code from your Owner.',
           ),
           const SizedBox(height: 20),
@@ -866,7 +1039,7 @@ class _LoginScreenState extends State<LoginScreen> {
               onPressed: _busy ? null : _activateCompanyDevice,
               child: Text(_busy ? 'ACTIVATING…' : 'ACTIVATE'),
             ),
-          ] else ...[
+          ] else if (creatingPin || _useFleetPinFallback) ...[
             TextField(
               key: const Key('company-pin'),
               controller: _pinController,
@@ -878,7 +1051,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ],
               maxLength: 6,
               decoration: InputDecoration(
-                labelText: returning ? 'PIN' : 'Create PIN',
+                labelText: returning ? 'Fleet PIN' : 'Create backup PIN',
               ),
             ),
             if (creatingPin) ...[
@@ -908,16 +1081,23 @@ class _LoginScreenState extends State<LoginScreen> {
                     ? 'PLEASE WAIT…'
                     : returning
                     ? 'SIGN IN'
-                    : 'CREATE PIN',
+                    : 'CREATE BACKUP PIN',
               ),
             ),
-            if (returning)
-              TextButton(
-                key: const Key('use-another-account'),
-                onPressed: _busy ? null : _useAnotherAccount,
-                child: const Text('Use another account'),
-              ),
+          ] else if (returning) ...[
+            FilledButton.icon(
+              key: const Key('device-auth'),
+              onPressed: _busy ? null : _authenticateWithDevice,
+              icon: const Icon(Icons.lock_open),
+              label: Text(_busy ? 'UNLOCKING…' : 'UNLOCK'),
+            ),
           ],
+          if (returning)
+            TextButton(
+              key: const Key('use-another-account'),
+              onPressed: _busy ? null : _useAnotherAccount,
+              child: const Text('Use another account'),
+            ),
           if (_error != null) ...[
             const SizedBox(height: 16),
             Text(
@@ -1037,6 +1217,7 @@ class DriverHomeScreen extends StatefulWidget {
     this.duty = const DriverDutyState.none(),
     this.onRefreshState,
     this.pickImage,
+    this.onSwitchWorkspace,
     required this.onSignOut,
     super.key,
   });
@@ -1046,6 +1227,7 @@ class DriverHomeScreen extends StatefulWidget {
   final DriverDutyState duty;
   final Future<String?> Function()? onRefreshState;
   final Future<XFile?> Function(ImageSource source)? pickImage;
+  final Future<void> Function()? onSwitchWorkspace;
   final Future<void> Function() onSignOut;
 
   @override
@@ -1696,6 +1878,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             ),
             icon: const Icon(Icons.info_outline),
           ),
+          if (widget.onSwitchWorkspace != null)
+            IconButton(
+              tooltip: 'Switch workspace',
+              onPressed: widget.onSwitchWorkspace,
+              icon: const Icon(Icons.switch_account_outlined),
+            ),
           IconButton(
             tooltip: 'Sign out',
             onPressed: widget.onSignOut,

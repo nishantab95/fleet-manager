@@ -201,6 +201,26 @@ def generate_person_activation_code(
 
 
 @router.post(
+    "/people/user/{user_id}/activation-code",
+    response_model=OwnerActivationCodeResponse,
+)
+def generate_person_activation_code_by_user(
+    user_id: UUID,
+    service: OwnerPeopleSiteService = Depends(get_owner_people_site_service),
+    db: Session = Depends(get_db),
+) -> OwnerActivationCodeResponse:
+    try:
+        result = service.generate_person_activation_code_for_user(user_id)
+        db.commit()
+        return OwnerActivationCodeResponse(
+            activation_code=result.activation_code,
+            expires_at=result.expires_at,
+        )
+    except DomainError as exc:
+        _fail(db, exc)
+
+
+@router.post(
     "/people/{membership_id}/reset-device",
     response_model=OwnerActivationCodeResponse,
 )
@@ -212,6 +232,29 @@ def reset_person_device(
     try:
         result = service.generate_person_activation_code(
             membership_id,
+            reset_device=True,
+        )
+        db.commit()
+        return OwnerActivationCodeResponse(
+            activation_code=result.activation_code,
+            expires_at=result.expires_at,
+        )
+    except DomainError as exc:
+        _fail(db, exc)
+
+
+@router.post(
+    "/people/user/{user_id}/reset-device",
+    response_model=OwnerActivationCodeResponse,
+)
+def reset_person_device_by_user(
+    user_id: UUID,
+    service: OwnerPeopleSiteService = Depends(get_owner_people_site_service),
+    db: Session = Depends(get_db),
+) -> OwnerActivationCodeResponse:
+    try:
+        result = service.generate_person_activation_code_for_user(
+            user_id,
             reset_device=True,
         )
         db.commit()

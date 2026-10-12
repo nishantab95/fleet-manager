@@ -26,6 +26,7 @@ from fleet_api.domain.errors import (
     ActivationCodeError,
     DeviceCredentialError,
     InvalidTokenError,
+    MembershipSelectionError,
     PinAuthenticationError,
     PinLockedError,
 )
@@ -378,3 +379,257 @@ def test_logout_and_owner_reset_revoke_sessions_device_and_preserve_domain_data(
     )
     assert replacement_tokens.context.membership.id == membership.id
     assert db_session.scalar(select(func.count(Assignment.id))) == assignment_count
+
+
+def _add_role(
+    db: Session,
+    membership: CompanyMembership,
+    user: User,
+    role: MembershipRole,
+) -> CompanyMembership:
+    added = CompanyMembership(
+        company_id=membership.company_id,
+        user_id=user.id,
+        role=role,
+        display_name=user.display_name,
+        status=MembershipStatus.ACTIVE,
+    )
+    db.add(added)
+    db.flush()
+    return added
+
+
+def activate_role_neutral(
+    db: Session,
+    records: dict[str, object],
+    *,
+    installation: str = "build-29-installation",
+) -> tuple[CompanyMembership, User, str, str, AuthService]:
+    membership, user = prepare_driver(db, records)
+    code = (
+        owner_service(db, records).generate_person_activation_code_for_user(user.id).activation_code
+    )
+    auth = auth_service(db)
+    activation = auth.begin_company_activation(
+        phone=user.phone_number,
+        activation_code=code,
+        installation_identifier=installation,
+    )
+    pre_session, _expires_in, credential = auth.complete_company_device_activation(
+        activation_token=activation.device_credential,
+        installation_identifier=installation,
+        pin="246810",
+    )
+    return membership, user, credential, pre_session, auth
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_role"),
+    [
+        (MembershipRole.DRIVER, MembershipRole.DRIVER),
+        (MembershipRole.SUPERVISOR, MembershipRole.SUPERVISOR),
+        (MembershipRole.OWNER_ADMIN, MembershipRole.OWNER_ADMIN),
+    ],
+)
+def test_single_role_device_auth_creates_only_the_authorized_session(
+    db_session: Session,
+    tenant_records: dict[str, object],
+    role: MembershipRole,
+    expected_role: MembershipRole,
+) -> None:
+    membership, user = prepare_driver(db_session, tenant_records)
+    membership.role = role
+    db_session.flush()
+    code = (
+        owner_service(db_session, tenant_records)
+        .generate_person_activation_code_for_user(user.id)
+        .activation_code
+    )
+    auth = auth_service(db_session)
+    activation = auth.begin_company_activation(
+        phone=user.phone_number,
+        activation_code=code,
+        installation_identifier=f"single-{role.value}",
+    )
+    pre_session, _expires_in, credential = auth.complete_company_device_activation(
+        activation_token=activation.device_credential,
+        installation_identifier=f"single-{role.value}",
+        pin="246810",
+    )
+    assert [item[3] for item in auth.list_memberships(pre_session_token=pre_session)] == [
+        expected_role
+    ]
+    authenticated, _ = auth.authenticate_company_device(
+        device_credential=credential,
+        installation_identifier=f"single-{role.value}",
+    )
+    tokens = auth.create_session(
+        pre_session_token=authenticated,
+        membership_id=membership.id,
+    )
+    assert tokens.context.membership.role == expected_role
+
+
+def test_multi_role_authentication_lists_all_active_roles_and_selects_exact_membership(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    driver, user = prepare_driver(db_session, tenant_records)
+    supervisor = _add_role(
+        db_session,
+        driver,
+        user,
+        MembershipRole.SUPERVISOR,
+    )
+    owner = _add_role(
+        db_session,
+        driver,
+        user,
+        MembershipRole.OWNER_ADMIN,
+    )
+    _membership, _user, credential, _activation_context, auth = activate_role_neutral(
+        db_session,
+        tenant_records,
+    )
+
+    pre_session, _ = auth.authenticate_company_device(
+        device_credential=credential,
+        installation_identifier="build-29-installation",
+    )
+    options = auth.list_memberships(pre_session_token=pre_session)
+    assert {option[3] for option in options} == {
+        MembershipRole.DRIVER,
+        MembershipRole.SUPERVISOR,
+        MembershipRole.OWNER_ADMIN,
+    }
+    for selected in (driver, supervisor, owner):
+        tokens = auth.create_session(
+            pre_session_token=pre_session,
+            membership_id=selected.id,
+        )
+        assert tokens.context.membership.id == selected.id
+        assert tokens.context.membership.role == selected.role
+
+    foreign_membership = value(tenant_records, "driver_b", CompanyMembership)
+    with pytest.raises(MembershipSelectionError):
+        auth.create_session(
+            pre_session_token=pre_session,
+            membership_id=foreign_membership.id,
+        )
+
+
+def test_workspace_switch_is_company_scoped_and_removed_role_disappears(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    driver, user = prepare_driver(db_session, tenant_records)
+    supervisor = _add_role(
+        db_session,
+        driver,
+        user,
+        MembershipRole.SUPERVISOR,
+    )
+    _membership, _user, credential, pre_session, auth = activate_role_neutral(
+        db_session,
+        tenant_records,
+    )
+    driver_tokens = auth.create_session(
+        pre_session_token=pre_session,
+        membership_id=driver.id,
+    )
+    supervisor_tokens = auth.switch_workspace(
+        driver_tokens.context,
+        membership_id=supervisor.id,
+    )
+    assert supervisor_tokens.context.membership.role == MembershipRole.SUPERVISOR
+    with pytest.raises(InvalidTokenError):
+        auth.authenticate_access_token(access_token=driver_tokens.access_token)
+    with pytest.raises(MembershipSelectionError):
+        auth.switch_workspace(
+            supervisor_tokens.context,
+            membership_id=value(
+                tenant_records,
+                "driver_b",
+                CompanyMembership,
+            ).id,
+        )
+
+    supervisor.status = MembershipStatus.INACTIVE
+    db_session.flush()
+    refreshed_context, _ = auth.authenticate_company_device(
+        device_credential=credential,
+        installation_identifier="build-29-installation",
+    )
+    assert [item[3] for item in auth.list_memberships(pre_session_token=refreshed_context)] == [
+        MembershipRole.DRIVER
+    ]
+
+
+def test_build_28_credential_is_reused_by_device_auth_and_pin_fallback(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    membership, _user, credential, auth = activate_and_set_pin(
+        db_session,
+        tenant_records,
+    )
+    device_context, _ = auth.authenticate_company_device(
+        device_credential=credential,
+        installation_identifier="installation-one",
+    )
+    fallback_context, _ = auth.authenticate_company_pin(
+        device_credential=credential,
+        installation_identifier="installation-one",
+        pin="246810",
+    )
+    assert (
+        auth.create_session(
+            pre_session_token=device_context,
+            membership_id=membership.id,
+        ).context.membership.role
+        == MembershipRole.DRIVER
+    )
+    assert (
+        auth.create_session(
+            pre_session_token=fallback_context,
+            membership_id=membership.id,
+        ).context.membership.role
+        == MembershipRole.DRIVER
+    )
+
+
+def test_role_deactivation_preserves_person_device_until_last_role_and_reset_revokes_it(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    driver, user = prepare_driver(db_session, tenant_records)
+    supervisor = _add_role(
+        db_session,
+        driver,
+        user,
+        MembershipRole.SUPERVISOR,
+    )
+    _membership, _user, credential, _pre_session, auth = activate_role_neutral(
+        db_session,
+        tenant_records,
+    )
+    owner = owner_service(db_session, tenant_records)
+    owner.deactivate_person(supervisor.id)
+    still_valid, _ = auth.authenticate_company_device(
+        device_credential=credential,
+        installation_identifier="build-29-installation",
+    )
+    assert [item[3] for item in auth.list_memberships(pre_session_token=still_valid)] == [
+        MembershipRole.DRIVER
+    ]
+
+    replacement = owner.generate_person_activation_code_for_user(
+        user.id,
+        reset_device=True,
+    )
+    assert replacement.activation_code
+    with pytest.raises(DeviceCredentialError):
+        auth.authenticate_company_device(
+            device_credential=credential,
+            installation_identifier="build-29-installation",
+        )
