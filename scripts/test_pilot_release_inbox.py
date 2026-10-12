@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -75,7 +74,9 @@ def test_complete_pair_is_validated_published_and_archived(
     item = identity(apk)
     manifest_path.write_text(json.dumps(manifest_for(apk, item)), encoding="utf-8")
     monkeypatch.setattr(inbox.common, "inspect_apk", lambda _: item)
-    monkeypatch.setattr(inbox, "_publish_transaction", lambda *_: "PUBLISHED")
+    monkeypatch.setattr(
+        inbox, "_publish_transaction", lambda *_args, **_kwargs: "PUBLISHED"
+    )
 
     assert inbox.process_manifest(manifest_path, stability_delay=0) == "PUBLISHED"
     archive = root / "archive" / f"19-{item.apk_sha256[:16]}"
@@ -86,6 +87,54 @@ def test_complete_pair_is_validated_published_and_archived(
     )
     assert not apk.exists()
     assert not manifest_path.exists()
+
+
+def test_oversized_taildrop_candidate_is_rejected_before_publication(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = configure_paths(monkeypatch, tmp_path)
+    apk = root / "FleetManager-Pilot-upload-19-large.apk"
+    manifest_path = apk.with_suffix(".json")
+    apk.write_bytes(b"too-large")
+    item = identity(apk)
+    manifest_path.write_text(json.dumps(manifest_for(apk, item)), encoding="utf-8")
+    monkeypatch.setattr(inbox, "MAX_APK_BYTES", 2)
+    monkeypatch.setattr(
+        inbox,
+        "_publish_transaction",
+        lambda *_args, **_kwargs: pytest.fail("oversized candidate must not publish"),
+    )
+
+    assert inbox.process_manifest(manifest_path, stability_delay=0) == "REJECTED"
+    assert not apk.exists()
+    assert not manifest_path.exists()
+
+
+def test_https_pair_is_staged_and_processed_under_shared_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = configure_paths(monkeypatch, tmp_path)
+    staged = root / "staging" / "candidate.partial"
+    staged.write_bytes(b"candidate")
+    manifest = {
+        "releaseId": "https-safe",
+        "apkFile": "FleetManager-Pilot-upload-https-safe.apk",
+    }
+    observed: dict[str, Path] = {}
+
+    def process(path: Path, *, stability_delay: float) -> str:
+        observed["manifest"] = path
+        observed["apk"] = path.with_suffix(".apk")
+        assert stability_delay == 0
+        assert path.is_file()
+        assert path.with_suffix(".apk").read_bytes() == b"candidate"
+        return "PUBLISHED"
+
+    monkeypatch.setattr(inbox, "process_manifest", process)
+
+    assert inbox.publish_uploaded_pair(staged, manifest) == "PUBLISHED"
+    assert not staged.exists()
+    assert observed["manifest"].parent == root
 
 
 @pytest.mark.parametrize(
@@ -119,8 +168,26 @@ def test_company_manifest_requires_company_marker(
         inbox, "scan_apk_strings", lambda *_args, **_kwargs: (set(), set())
     )
 
-    with pytest.raises(inbox.InboxError, match="company build marker"):
+    with pytest.raises(inbox.InboxError, match="company build markers"):
         inbox._validate_optional_company_profile(manifest, apk)
+
+
+def test_company_pin_manifest_requires_auth_and_profile_markers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    apk = tmp_path / "candidate.apk"
+    apk.write_bytes(b"candidate")
+    manifest = {"authMode": "company_pin", "buildProfile": "company-pin"}
+    monkeypatch.setattr(
+        inbox,
+        "scan_apk_strings",
+        lambda *_args, **_kwargs: (
+            {"Company PIN auth mode", "Company PIN build profile"},
+            set(),
+        ),
+    )
+
+    inbox._validate_optional_company_profile(manifest, apk)
 
 
 def test_company_manifest_rejects_service_account_marker(
@@ -173,10 +240,14 @@ def test_downgrade_is_refused_before_publish(
     )
 
     with pytest.raises(inbox.InboxError, match="Downgrade refused"):
-        inbox._publish_transaction(identity(candidate, code=19), candidate)
+        inbox._publish_transaction(
+            identity(candidate, code=19),
+            candidate,
+            source_commit="a" * 40,
+        )
 
 
-def test_same_version_and_hash_is_idempotent(
+def test_same_version_is_refused_even_when_hash_matches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     release = tmp_path / "pilot"
@@ -187,10 +258,15 @@ def test_same_version_and_hash_is_idempotent(
     current_identity = identity(current, code=19)
     monkeypatch.setattr(inbox.common, "inspect_apk", lambda _: current_identity)
 
-    assert inbox._publish_transaction(current_identity, current) == "ALREADY PUBLISHED"
+    with pytest.raises(inbox.InboxError, match="Same versionCode"):
+        inbox._publish_transaction(
+            current_identity,
+            current,
+            source_commit="a" * 40,
+        )
 
 
-def test_remote_failure_restores_previous_latest(
+def test_publication_failure_leaves_existing_release_for_shared_transaction(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     release = tmp_path / "pilot"
@@ -199,8 +275,14 @@ def test_remote_failure_restores_previous_latest(
         inbox.server_manager.PILOT_APK_NAME,
         inbox.server_manager.PILOT_SHA256_NAME,
         inbox.server_manager.PILOT_VERSION_NAME,
+        inbox.server_manager.PILOT_RELEASE_MANIFEST_NAME,
     )
-    old = {names[0]: b"old-apk", names[1]: b"old-sha", names[2]: b"old-version"}
+    old = {
+        names[0]: b"old-apk",
+        names[1]: b"old-sha",
+        names[2]: b"old-version",
+        names[3]: b'{"version_code": 18}\n',
+    }
     for name, content in old.items():
         (release / name).write_bytes(content)
     candidate = tmp_path / "candidate.apk"
@@ -210,28 +292,21 @@ def test_remote_failure_restores_previous_latest(
     monkeypatch.setattr(inbox.server_manager, "PILOT_RELEASE_DIR", release)
     monkeypatch.setattr(inbox.common, "inspect_apk", lambda _: old_identity)
 
-    def publish(source: Path, version_file: Path) -> int:
-        shutil.copy2(source, release / names[0])
-        (release / names[1]).write_text("new-sha", encoding="utf-8")
-        shutil.copy2(version_file, release / names[2])
-        return 0
+    def publish(*_args: object, **_kwargs: object) -> int:
+        raise inbox.server_manager.ServerError("simulated atomic publication failure")
 
     monkeypatch.setattr(inbox.server_manager, "publish_pilot_apk", publish)
-    monkeypatch.setattr(
-        inbox.server_manager,
-        "remote_access_status",
-        lambda: {"remote_url": "https://fleet.test", "serve_pilot": "OK"},
-    )
-    monkeypatch.setattr(inbox, "_remote_sha256", lambda _: "0" * 64)
-
-    with pytest.raises(inbox.InboxError, match="download hash"):
-        inbox._publish_transaction(new_identity, candidate)
+    with pytest.raises(inbox.server_manager.ServerError, match="publication failure"):
+        inbox._publish_transaction(
+            new_identity,
+            candidate,
+            source_commit="a" * 40,
+        )
 
     assert {name: (release / name).read_bytes() for name in names} == old
-    assert not list(release.glob("FleetManager-Pilot-1.0.18-pilot-code19.apk"))
 
 
-def test_successful_publish_preserves_versioned_apk(
+def test_successful_publish_delegates_source_commit_to_shared_publisher(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     release = tmp_path / "pilot"
@@ -240,26 +315,16 @@ def test_successful_publish_preserves_versioned_apk(
     item = identity(candidate, code=19)
     monkeypatch.setattr(inbox.server_manager, "PILOT_RELEASE_DIR", release)
 
-    def publish(source: Path, version_file: Path) -> int:
-        release.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, release / inbox.server_manager.PILOT_APK_NAME)
-        shutil.copy2(version_file, release / inbox.server_manager.PILOT_VERSION_NAME)
-        (release / inbox.server_manager.PILOT_SHA256_NAME).write_text(
-            item.apk_sha256, encoding="utf-8"
-        )
+    observed: dict[str, object] = {}
+
+    def publish(source: Path, **kwargs: object) -> int:
+        observed.update(source=source, **kwargs)
         return 0
 
     monkeypatch.setattr(inbox.server_manager, "publish_pilot_apk", publish)
-    monkeypatch.setattr(
-        inbox.server_manager,
-        "remote_access_status",
-        lambda: {"remote_url": "https://fleet.test", "serve_pilot": "OK"},
-    )
-    monkeypatch.setattr(inbox, "_remote_sha256", lambda _: item.apk_sha256)
 
-    assert inbox._publish_transaction(item, candidate) == "PUBLISHED"
-    versioned = release / "FleetManager-Pilot-1.0.18-pilot-code19.apk"
-    assert versioned.read_bytes() == candidate.read_bytes()
     assert (
-        release / inbox.server_manager.PILOT_APK_NAME
-    ).read_bytes() == candidate.read_bytes()
+        inbox._publish_transaction(item, candidate, source_commit="b" * 40)
+        == "PUBLISHED"
+    )
+    assert observed == {"source": candidate, "source_commit": "b" * 40}

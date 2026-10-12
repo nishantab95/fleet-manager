@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     pre_session_ttl_seconds: int = 300
     refresh_token_ttl_seconds: int = 2_592_000
     pilot_driver_phone: str | None = Field(default=None, repr=False)
+    pilot_publisher_token_file: Path | None = Field(default=None, repr=False)
+    pilot_release_upload_max_bytes: int = 150_000_000
     intercompany_rentals_enabled: bool = False
 
     @model_validator(mode="after")
@@ -86,6 +88,8 @@ class Settings(BaseSettings):
             raise ValueError("evidence_max_bytes must be positive")
         if self.event_future_skew_seconds < 0:
             raise ValueError("event_future_skew_seconds cannot be negative")
+        if not 1_000_000 <= self.pilot_release_upload_max_bytes <= 1_000_000_000:
+            raise ValueError("pilot_release_upload_max_bytes must be between 1 MB and 1 GB")
         if (
             not self.max_odometer_km.is_finite()
             or self.max_odometer_km <= 0

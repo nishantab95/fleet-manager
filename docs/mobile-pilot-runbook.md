@@ -6,7 +6,38 @@ Fleet Manager Pilot updates are private sideloaded APKs. They are not Play
 Store releases, are never installed silently, and must never be exposed with
 Tailscale Funnel or another public download URL.
 
-Publish a signed, already-built Pilot APK on the server PC with:
+The normal company-PIN release command on the development laptop is:
+
+`Build & Publish Fleet AI Systems Mobile.bat`
+
+It builds and validates the APK, attempts the authenticated private HTTPS
+upload first, waits for the existing server publisher, then verifies
+`release.json` and the downloaded APK hash. Taildrop remains an automatic
+fallback when the HTTPS upload route is unavailable. A DERP-relayed Tailscale
+connection is sufficient; publication no longer requires a direct peer path.
+
+The laptop credential defaults to
+`%USERPROFILE%\.fleetaisystems\pilot-publisher.token`. Generate it without
+printing its value by running
+`scripts\new-pilot-publisher-token.ps1`, then securely install the same file on
+the server as `C:\ProgramData\FleetAISystems\pilot-publisher.token`. Never put
+this file in Git, logs, release metadata, or mobile configuration.
+
+### One-time HTTPS publisher enablement
+
+1. Generate the credential once on the development laptop with
+   `pwsh -NoProfile -File scripts\new-pilot-publisher-token.ps1`.
+2. Securely copy that same file (do not copy its text through chat or logs) to
+   `C:\ProgramData\FleetAISystems\pilot-publisher.token` on the server and
+   restrict it to the Fleet server account and `SYSTEM`.
+3. On the server, run `Update Fleet Manager Server.bat` once after the HTTPS
+   transport commit reaches `main`. This installs the endpoint and restarts the
+   API; no database migration or authentication-mode change is required.
+4. Keep `Process Fleet Manager Pilot Inbox.bat` and its scheduled task as
+   recovery tooling. They are not required for normal HTTPS releases.
+
+Manual recovery can still publish a signed, already-built Pilot APK on the
+server PC with:
 
 `Publish Pilot APK.bat <path-to-pilot.apk>`
 
@@ -120,5 +151,7 @@ It does not publish or install the APK. Keep the keystore outside Git and make
 an encrypted backup before relying on version 22 for future updates.
 
 The release sender requires the build provenance sidecar, a clean source tree,
-the pinned signing certificate, and a versionCode higher than the currently
-published release before transferring a candidate.
+the pinned signing certificate, an approved company build profile, and a
+versionCode higher than the currently published release before transferring a
+candidate. The server repeats package, signer, version, checksum, source commit,
+and profile validation before the existing atomic release transaction.

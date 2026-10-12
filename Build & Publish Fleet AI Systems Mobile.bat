@@ -10,7 +10,7 @@ if errorlevel 1 set "POWERSHELL_EXE=powershell.exe"
 pushd "%REPO_ROOT%" >nul 2>&1
 if errorlevel 1 goto :missing
 
-"%POWERSHELL_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\build-publish-company-mobile.ps1" %*
+"%POWERSHELL_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\build-publish-company-pin-mobile.ps1" %*
 set "FLEET_EXIT_CODE=%ERRORLEVEL%"
 popd
 goto :done

@@ -1,5 +1,22 @@
 # Security Baseline
 
+## Private mobile release publisher
+
+The Pilot release upload route is reachable only through the existing private
+Fleet API/Tailscale origin and requires a dedicated bearer credential. The
+server reads that credential from an external file (default:
+`C:\ProgramData\FleetAISystems\pilot-publisher.token`); it is separate from JWT
+signing, Firebase, user passwords, activation codes, and PINs. The credential is
+never embedded in the APK, repository, request logs, or release metadata.
+
+Uploads are size bounded, streamed to server-generated staging names under the
+existing incoming area, and rejected unless the declared digest matches. The
+existing inbox validator then verifies package, permanent signer, version,
+source commit, and company authentication profile. Only
+`server_manager.publish_pilot_apk()` activates files, and its rollback-capable
+transaction verifies the private versioned and latest APK download hashes
+before committing.
+
 ## Phase 1 protections
 
 - No secrets, passwords, hardcoded production users, or hardcoded tenant IDs

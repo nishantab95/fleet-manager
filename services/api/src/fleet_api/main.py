@@ -19,6 +19,12 @@ from fleet_api.api.owner_maintenance import router as owner_maintenance_router
 from fleet_api.api.owner_operations import router as owner_operations_router
 from fleet_api.api.owner_people_sites import router as owner_people_sites_router
 from fleet_api.api.owner_report_templates import router as owner_report_templates_router
+from fleet_api.api.pilot_releases import (
+    guard_pilot_release_upload,
+)
+from fleet_api.api.pilot_releases import (
+    router as pilot_releases_router,
+)
 from fleet_api.api.reports import router as reports_router
 from fleet_api.api.supervisor import router as supervisor_router
 from fleet_api.core.config import Settings, get_settings
@@ -59,9 +65,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(owner_operations_router)
     app.include_router(owner_maintenance_router)
     app.include_router(owner_report_templates_router)
+    app.include_router(pilot_releases_router)
     app.include_router(supervisor_router)
     app.include_router(reports_router)
     app.add_middleware(RequestIdMiddleware)
+
+    @app.middleware("http")
+    async def pilot_release_upload_guard(request: Request, call_next: Any) -> Any:
+        rejection = guard_pilot_release_upload(request, runtime_settings)
+        return rejection if rejection is not None else await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=runtime_settings.cors_origins,

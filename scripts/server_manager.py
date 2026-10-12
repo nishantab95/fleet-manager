@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +49,7 @@ from launch import (  # noqa: E402
     port_is_open,
 )
 from scripts.pilot_release_common import (  # noqa: E402
+    COMMIT_RE,
     ApkIdentity,
     ReleaseValidationError,
     inspect_apk,
@@ -84,6 +87,8 @@ SERVER_AUTH_ENV_KEYS = frozenset(
         "FLEET_FIREBASE_PROJECT_ID",
         "FLEET_FIREBASE_CHECK_REVOKED_TOKENS",
         "FLEET_JWT_SIGNING_KEY",
+        "FLEET_PILOT_PUBLISHER_TOKEN_FILE",
+        "FLEET_PILOT_RELEASE_UPLOAD_MAX_BYTES",
         "GOOGLE_APPLICATION_CREDENTIALS",
     }
 )
@@ -414,8 +419,7 @@ def ensure_infrastructure(docker: str, env: Mapping[str, str]) -> None:
         time.sleep(2)
     status = compose_health(docker, env)
     raise ServerError(
-        "Infrastructure did not become healthy: "
-        f"PostgreSQL={status.get('postgres', 'missing')}"
+        f"Infrastructure did not become healthy: PostgreSQL={status.get('postgres', 'missing')}"
     )
 
 
@@ -1278,6 +1282,7 @@ def _pilot_release_manifest(
     apk_url: str,
     *,
     mandatory: bool,
+    source_commit: str | None = None,
 ) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "version_name": identity.version_name,
@@ -1287,13 +1292,34 @@ def _pilot_release_manifest(
         "mandatory": mandatory,
         "published_at": datetime.now(UTC).isoformat(),
     }
-    try:
-        source_commit = git_output("rev-parse", "HEAD")
-        if len(source_commit) == 40:
-            manifest["source_commit"] = source_commit
-    except ServerError:
-        pass
+    if source_commit is not None:
+        normalized_commit = source_commit.casefold()
+        if not COMMIT_RE.fullmatch(normalized_commit):
+            raise ServerError("Pilot source commit must be a full Git commit SHA.")
+        manifest["source_commit"] = normalized_commit
+    else:
+        try:
+            repository_commit = git_output("rev-parse", "HEAD")
+            if COMMIT_RE.fullmatch(repository_commit.casefold()):
+                manifest["source_commit"] = repository_commit.casefold()
+        except ServerError:
+            pass
     return manifest
+
+
+def _remote_sha256(url: str) -> str:
+    digest = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            if response.status != 200:
+                raise ServerError(
+                    f"Pilot private download returned HTTP {response.status}."
+                )
+            for chunk in iter(lambda: response.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise ServerError("Pilot private download could not be verified.") from error
+    return digest.hexdigest()
 
 
 def publish_pilot_apk(
@@ -1301,6 +1327,7 @@ def publish_pilot_apk(
     version_file: Path | None = None,
     *,
     mandatory: bool = False,
+    source_commit: str | None = None,
 ) -> int:
     if not source.is_file():
         raise ServerError(f"Pilot APK source was not found: {source}")
@@ -1338,7 +1365,12 @@ def publish_pilot_apk(
         )
     download_url = f"{remote_url}{TAILSCALE_PILOT_PATH}/{versioned.name}"
     latest_url = f"{remote_url}{TAILSCALE_PILOT_PATH}/{PILOT_APK_NAME}"
-    manifest = _pilot_release_manifest(identity, download_url, mandatory=mandatory)
+    manifest = _pilot_release_manifest(
+        identity,
+        download_url,
+        mandatory=mandatory,
+        source_commit=source_commit,
+    )
     staged: dict[Path, Path] = {}
     try:
         staged[versioned] = _stage_pilot_copy(versioned, source)
@@ -1390,6 +1422,14 @@ def publish_pilot_apk(
         if manifest_probe is None or manifest_probe.status != 200:
             raise ServerError(
                 "Pilot release manifest URL is unreachable; previous release restored."
+            )
+        if _remote_sha256(download_url) != identity.apk_sha256:
+            raise ServerError(
+                "Pilot versioned download hash is invalid; previous release restored."
+            )
+        if _remote_sha256(latest_url) != identity.apk_sha256:
+            raise ServerError(
+                "Pilot latest download hash is invalid; previous release restored."
             )
 
     _publish_pilot_transaction(staged, verify_publication)

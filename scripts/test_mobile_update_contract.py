@@ -59,13 +59,15 @@ def test_company_button_has_safe_config_and_private_publish_preflights() -> None
     wrapper = (ROOT / "Build & Publish Fleet AI Systems Mobile.bat").read_text(
         encoding="utf-8"
     )
-    workflow = (ROOT / "scripts" / "build-publish-company-mobile.ps1").read_text(
+    workflow = (ROOT / "scripts" / "build-publish-company-pin-mobile.ps1").read_text(
         encoding="utf-8"
     )
+    sender = (ROOT / "scripts" / "send_pilot_release.py").read_text(encoding="utf-8")
 
-    assert "build-publish-company-mobile.ps1" in wrapper
+    assert "build-publish-company-pin-mobile.ps1" in wrapper
     assert ".fleetaisystems\\firebase-mobile.ps1" in workflow
-    assert "Read-SafeMobileConfig" in workflow
-    assert "android_signer_fingerprints.py" in workflow
-    assert "--require-firebase-company" in workflow
-    assert "Nothing new was published." in workflow
+    assert "build-company-pin-apk.ps1" in workflow
+    assert "--require-company-pin" in workflow
+    assert "HTTPS_UPLOAD_PATH" in sender
+    assert "TAILDROP FALLBACK" in sender
+    assert '"ping"' not in sender

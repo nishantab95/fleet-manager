@@ -8,9 +8,7 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
-import urllib.request
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,6 +35,7 @@ LOG_FILE = Path(r"D:\FleetManagerData\logs\pilot-publisher.log")
 DOWNLOADS_DIR = Path.home() / "Downloads"
 TAILSCALE_EXE = server_manager.TAILSCALE_EXE
 MAX_MANIFEST_BYTES = 32 * 1024
+MAX_APK_BYTES = 150_000_000
 PAIR_RE = re.compile(r"^FleetManager-Pilot-upload-[A-Za-z0-9._-]{1,100}$")
 
 
@@ -229,46 +228,36 @@ def _validate_optional_company_profile(
     build_profile = manifest.get("buildProfile")
     if auth_mode is None and build_profile is None:
         return
-    if auth_mode != "firebase" or build_profile != "firebase-company":
-        raise InboxError("Manifest Firebase company profile is invalid.")
+    if (auth_mode, build_profile) == ("firebase", "firebase-company"):
+        required = {"Firebase company build profile": b"firebase-company"}
+    elif (auth_mode, build_profile) == ("company_pin", "company-pin"):
+        required = {
+            "Company PIN auth mode": b"company_pin",
+            "Company PIN build profile": b"company-pin",
+        }
+    else:
+        raise InboxError("Manifest company authentication profile is invalid.")
     found, forbidden = scan_apk_strings(
         apk_path,
-        required={"Firebase company build profile": b"firebase-company"},
+        required=required,
     )
-    if "Firebase company build profile" not in found:
-        raise InboxError("APK is missing its Firebase company build marker.")
+    missing = sorted(set(required) - found)
+    if missing:
+        raise InboxError(
+            "APK is missing expected company build markers: " + ", ".join(missing)
+        )
     if forbidden:
         raise InboxError(
             "APK contains forbidden credential markers: " + ", ".join(sorted(forbidden))
         )
 
 
-def _remote_sha256(url: str) -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    with urllib.request.urlopen(url, timeout=30) as response:
-        if response.status != 200:
-            raise InboxError(f"Private APK download returned HTTP {response.status}.")
-        for chunk in iter(lambda: response.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _restore_publication(backup: Path, existed: Mapping[str, bool]) -> None:
-    for name in (
-        server_manager.PILOT_APK_NAME,
-        server_manager.PILOT_SHA256_NAME,
-        server_manager.PILOT_VERSION_NAME,
-    ):
-        destination = server_manager.PILOT_RELEASE_DIR / name
-        if existed[name]:
-            _atomic_copy(backup / name, destination)
-        else:
-            destination.unlink(missing_ok=True)
-
-
-def _publish_transaction(identity: common.ApkIdentity, staged_apk: Path) -> str:
+def _publish_transaction(
+    identity: common.ApkIdentity,
+    staged_apk: Path,
+    *,
+    source_commit: str,
+) -> str:
     release_dir = server_manager.PILOT_RELEASE_DIR
     release_dir.mkdir(parents=True, exist_ok=True)
     current_apk = release_dir / server_manager.PILOT_APK_NAME
@@ -280,57 +269,11 @@ def _publish_transaction(identity: common.ApkIdentity, staged_apk: Path) -> str:
                 f"Downgrade refused: current versionCode is {current.version_code}."
             )
         if identity.version_code == current.version_code:
-            if identity.apk_sha256 == current.apk_sha256:
-                return "ALREADY PUBLISHED"
             raise InboxError(
-                "Same versionCode has a different APK hash; publication refused."
+                f"Same versionCode {current.version_code} is already published."
             )
 
-    safe_version = re.sub(r"[^A-Za-z0-9._-]+", "_", identity.version_name)
-    versioned = release_dir / (
-        f"FleetManager-Pilot-{safe_version}-code{identity.version_code}.apk"
-    )
-    versioned_existed = versioned.exists()
-    if versioned_existed and common.sha256_file(versioned) != identity.apk_sha256:
-        raise InboxError("Versioned APK path already exists with a different hash.")
-
-    names = (
-        server_manager.PILOT_APK_NAME,
-        server_manager.PILOT_SHA256_NAME,
-        server_manager.PILOT_VERSION_NAME,
-    )
-    with tempfile.TemporaryDirectory(prefix=".pilot-rollback-", dir=release_dir) as raw:
-        rollback = Path(raw)
-        existed = {name: (release_dir / name).is_file() for name in names}
-        for name, present in existed.items():
-            if present:
-                shutil.copy2(release_dir / name, rollback / name)
-        version_file = rollback / "candidate-version.txt"
-        version_file.write_text(
-            common.version_text(identity, server_manager.PILOT_APK_NAME),
-            encoding="utf-8",
-        )
-        try:
-            server_manager.publish_pilot_apk(staged_apk, version_file)
-            remote = server_manager.remote_access_status()
-            apk_url = remote.get("remote_url", "")
-            if not apk_url or remote.get("serve_pilot") != "OK":
-                raise InboxError("Private pilot download route is not ready.")
-            download_url = (
-                f"{apk_url}{server_manager.TAILSCALE_PILOT_PATH}/"
-                f"{server_manager.PILOT_APK_NAME}"
-            )
-            if _remote_sha256(download_url) != identity.apk_sha256:
-                raise InboxError(
-                    "Private download hash does not match the candidate APK."
-                )
-            if not versioned_existed:
-                _atomic_copy(staged_apk, versioned)
-        except Exception:
-            if not versioned_existed:
-                versioned.unlink(missing_ok=True)
-            _restore_publication(rollback, existed)
-            raise
+    server_manager.publish_pilot_apk(staged_apk, source_commit=source_commit)
     return "PUBLISHED"
 
 
@@ -397,11 +340,17 @@ def process_manifest(manifest_path: Path, *, stability_delay: float = 1.0) -> st
         manifest = load_manifest(manifest_path)
         release_id = str(manifest.get("releaseId", ""))
         write_status("PROCESSING", f"Validating {manifest_path.name}", release_id)
+        if apk_path.stat().st_size > MAX_APK_BYTES:
+            raise InboxError("APK exceeds the private release upload limit.")
         _atomic_copy(apk_path, staged_apk)
         identity = common.inspect_apk(staged_apk)
         release_id = _validate_manifest(manifest, identity, apk_path.name)
         _validate_optional_company_profile(manifest, staged_apk)
-        outcome = _publish_transaction(identity, staged_apk)
+        outcome = _publish_transaction(
+            identity,
+            staged_apk,
+            source_commit=str(manifest["sourceGitCommit"]).casefold(),
+        )
         _archive_success(manifest_path, apk_path, manifest, outcome)
         write_status(
             "READY",
@@ -420,6 +369,39 @@ def process_manifest(manifest_path: Path, *, stability_delay: float = 1.0) -> st
         return "REJECTED"
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+
+
+def publish_uploaded_pair(
+    staged_apk: Path,
+    manifest: Mapping[str, object],
+) -> str:
+    """Serialize an HTTPS upload through the same inbox validator as Taildrop."""
+
+    for directory in (INBOX_ROOT, ARCHIVE_DIR, REJECTED_DIR, STAGING_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
+    apk_name = manifest.get("apkFile")
+    if (
+        not isinstance(apk_name, str)
+        or Path(apk_name).name != apk_name
+        or not apk_name.startswith(common.APK_PREFIX)
+        or not apk_name.endswith(common.APK_SUFFIX)
+    ):
+        raise InboxError("HTTPS upload generated an invalid staging name.")
+    apk_path = INBOX_ROOT / apk_name
+    manifest_path = apk_path.with_suffix(common.MANIFEST_SUFFIX)
+    with single_instance() as acquired:
+        if not acquired:
+            raise InboxError("Pilot publisher is busy; retry the upload.")
+        if apk_path.exists() or manifest_path.exists():
+            raise InboxError("Pilot upload staging collision detected.")
+        try:
+            os.replace(staged_apk, apk_path)
+            server_manager.atomic_write_json(manifest_path, manifest)
+        except Exception:
+            apk_path.unlink(missing_ok=True)
+            manifest_path.unlink(missing_ok=True)
+            raise
+        return process_manifest(manifest_path, stability_delay=0)
 
 
 def process_inbox(*, receive: bool = True, stability_delay: float = 1.0) -> int:

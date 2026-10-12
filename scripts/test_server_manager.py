@@ -465,8 +465,9 @@ def test_publish_pilot_apk_uses_verified_atomic_destination(
         "default_http_probe",
         lambda *_args, **_kwargs: SimpleNamespace(status=200, body=""),
     )
+    monkeypatch.setattr(server_manager, "_remote_sha256", lambda _: identity.apk_sha256)
 
-    assert server_manager.publish_pilot_apk(source) == 0
+    assert server_manager.publish_pilot_apk(source, source_commit="a" * 40) == 0
 
     published = release / server_manager.PILOT_APK_NAME
     assert published.read_bytes() == source.read_bytes()
@@ -484,6 +485,7 @@ def test_publish_pilot_apk_uses_verified_atomic_destination(
     )
     assert manifest["sha256"] == identity.apk_sha256
     assert manifest["mandatory"] is False
+    assert manifest["source_commit"] == "a" * 40
     assert set(manifest) <= {
         "version_name",
         "version_code",
@@ -493,6 +495,56 @@ def test_publish_pilot_apk_uses_verified_atomic_destination(
         "published_at",
         "source_commit",
     }
+    assert not list(release.glob("*.staged"))
+    assert not list(release.glob("*.backup"))
+
+
+def test_publish_rolls_back_when_download_hash_verification_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "new.apk"
+    source.write_bytes(b"new signed pilot")
+    release = tmp_path / "pilot"
+    release.mkdir()
+    old_files = {
+        server_manager.PILOT_APK_NAME: b"old apk",
+        server_manager.PILOT_SHA256_NAME: b"old checksum\n",
+        server_manager.PILOT_VERSION_NAME: b"old version\n",
+        server_manager.PILOT_RELEASE_MANIFEST_NAME: b'{"version_code": 28}\n',
+    }
+    for name, content in old_files.items():
+        (release / name).write_bytes(content)
+    monkeypatch.setattr(server_manager, "PILOT_RELEASE_DIR", release)
+    identity = server_manager.ApkIdentity(
+        package="com.fleetmanager.fleet_manager_mobile.pilot",
+        version_name="1.0.24-pilot",
+        version_code=29,
+        signer_sha256=EXPECTED_SIGNER_SHA256,
+        apk_sha256=server_manager.sha256(source),
+    )
+    monkeypatch.setattr(server_manager, "inspect_apk", lambda _: identity)
+    monkeypatch.setattr(
+        server_manager,
+        "remote_access_status",
+        lambda **_: {
+            "remote": "ONLINE",
+            "remote_url": "https://fleet.example.ts.net",
+            "serve_pilot": "OK",
+        },
+    )
+    monkeypatch.setattr(
+        server_manager,
+        "default_http_probe",
+        lambda *_args, **_kwargs: SimpleNamespace(status=200, body=""),
+    )
+    monkeypatch.setattr(server_manager, "_remote_sha256", lambda _: "0" * 64)
+
+    with pytest.raises(server_manager.ServerError, match="download hash"):
+        server_manager.publish_pilot_apk(source, source_commit="a" * 40)
+
+    for name, content in old_files.items():
+        assert (release / name).read_bytes() == content
+    assert not (release / "FleetManager-Pilot-1.0.24-pilot-29.apk").exists()
     assert not list(release.glob("*.staged"))
     assert not list(release.glob("*.backup"))
 
@@ -1439,3 +1491,18 @@ def test_publish_batch_wrapper_only_delegates_verified_apk_publish() -> None:
     assert "flutter" not in wrapper.casefold()
     assert "sign" not in wrapper.casefold()
     assert "--mandatory" in wrapper
+
+
+def test_company_pin_one_command_builds_then_uses_private_sender() -> None:
+    wrapper = (
+        server_manager.ROOT / "Build & Publish Fleet AI Systems Mobile.bat"
+    ).read_text(encoding="utf-8")
+    workflow = (
+        server_manager.ROOT / "scripts" / "build-publish-company-pin-mobile.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "build-publish-company-pin-mobile.ps1" in wrapper
+    assert "build-company-pin-apk.ps1" in workflow
+    assert "send_pilot_release.py" in workflow
+    assert "--require-company-pin" in workflow
+    assert "firebase app distribution" not in workflow.casefold()
