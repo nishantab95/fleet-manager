@@ -55,7 +55,7 @@ Add Flutter's `bin` directory to the user PATH, run `flutter doctor`, and accept
 From the repository root (the path contains a space, so keep it quoted when scripting):
 
 ```powershell
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 .\scripts\bootstrap.ps1
 ```
 
@@ -108,7 +108,7 @@ Authentication settings use the `FLEET_` prefix. The important Phase 2
 settings are:
 
 ```text
-FLEET_AUTH_MODE=pilot               # pilot, firebase, or company_pin
+FLEET_AUTH_MODE=company_pin         # production-aligned; pilot/firebase are optional compatibility
 FLEET_PHONE_DEFAULT_REGION=IN       # optional; only for non-E.164 input
 FLEET_OTP_PROVIDER=unavailable      # production company_pin keeps this unavailable
 FLEET_ENABLE_DEVELOPMENT_OTP=false
@@ -146,34 +146,46 @@ The end-to-end staging configuration, protected APK build command, physical
 device matrix, and explicit Pilot rollback are in
 [Firebase staging and real-device OTP runbook](firebase-staging-runbook.md).
 
-The web shell proxies through `FLEET_API_UPSTREAM_URL` when set and otherwise
+For production-aligned local testing, use the existing owner-issued activation
+and PIN/device flow with `company_pin`; create test memberships through the
+supported setup/admin path. Never use reusable activation codes or weaken
+lockouts to make a demo work. Firebase initialization is not required in this
+mode. See [company activation ADR](adr/0012-company-managed-activation-pin.md)
+and [device authentication ADR](adr/0013-device-auth-and-workspaces.md).
+
+The web client proxies through `FLEET_API_UPSTREAM_URL` when set and otherwise
 uses `http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3
 owner shell and Phase 5 supervisor verification shell keep access tokens in
 memory only; an HttpOnly refresh cookie restores the browser session after a
-page reload. A development OTP provider and signing key must be configured in
-the API environment for a manual end-to-end login. Supervisor accounts must
+page reload. A development OTP provider applies only to explicitly selected
+legacy `pilot` authentication, not company-PIN login. Every mode needs a suitable
+Fleet signing key. Supervisor accounts must
 also have an admin-created `SupervisorSiteAccess` grant before site data is
 visible.
 
 ## Migration workflow
 
-Run from `services/api` after PostgreSQL is available:
+Run from `services/api` after explicitly selecting the intended local database.
+Read [migration/rollback](production-migration-and-rollback.md) before any
+production migration. Never run downgrade/reset commands against Pilot or live data.
 
 ```powershell
-\.venv\Scripts\python.exe -m alembic upgrade head
-\.venv\Scripts\python.exe -m alembic upgrade head --sql
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic upgrade head --sql
 ```
 
 Phase 1 adds `0002_core_domain`, which creates the domain tables, tenant
 foreign keys, enums, checks, indexes, event idempotency constraint, and
 assignment overlap constraints. Phase 2 adds `0003_authentication`, which
 creates OTP challenge state and server-side authentication sessions. Run the online round trip against the test
-database with:
+disposable test database only, after checking its name and ensuring it contains
+no useful data. This is destructive test maintenance, not a normal startup step:
 
 ```powershell
-\.venv\Scripts\python.exe -m alembic upgrade head
-\.venv\Scripts\python.exe -m alembic downgrade base
-\.venv\Scripts\python.exe -m alembic upgrade head
+$env:FLEET_TEST_DATABASE_URL="postgresql+psycopg://fleet:fleet@127.0.0.1:5432/fleet_test"
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic downgrade base
+.\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
 Alembic uses the checked-in local URL by default and honors
@@ -197,10 +209,10 @@ the full round trip and schema check:
 
 ```powershell
 $env:FLEET_TEST_DATABASE_URL="postgresql+psycopg://fleet:fleet@127.0.0.1:5432/fleet_test"
-\.venv\Scripts\python.exe -m alembic upgrade head
-\.venv\Scripts\python.exe -m alembic check
-\.venv\Scripts\python.exe -m alembic downgrade base
-\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic check
+.\.venv\Scripts\python.exe -m alembic downgrade base
+.\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
 Phase 1B.2B adds `0013_asset_site_deployments`. It creates the effective-dated
@@ -254,10 +266,12 @@ service as the JSON endpoints; it is not a second calculation path.
 
 ## Phase 7 pilot hardening
 
-The `pilot` and `production` profiles fail closed for missing JWT signing
-material, development/unavailable OTP, wildcard CORS/hosts, local object-store
-credentials, and non-private object storage. Development may continue to use
-the unavailable provider and local Compose defaults explicitly.
+Protected profiles fail closed for missing JWT signing material, unsafe
+authentication configuration, wildcard CORS/hosts, local object-store credentials
+and non-private object storage. Production company-PIN deliberately keeps the
+unused OTP provider `unavailable`; that is not a failed OTP service requirement.
+Development may use local Compose defaults explicitly. Configuration validation
+in `services/api/src/fleet_api/core/config.py` and its tests are authoritative.
 
 Browser sessions use an HttpOnly, SameSite refresh cookie through the
 `/api/v1/auth/web-session` and `/api/v1/auth/web-refresh` endpoints. Mobile
@@ -271,3 +285,37 @@ before pilot onboarding.
 Backups use `scripts/backup-postgres.ps1`; restore tests must target a separate
 database accepted by `scripts/restore-postgres.ps1`. PostgreSQL backups do not
 include evidence objects; use `scripts/backup-object-storage.ps1` separately.
+
+## Dependency changes
+
+1. Inspect the installed toolchain, package manifest, lockfile and affected code
+   first. Review the dependency's official release/security notes. Do not upgrade
+   unrelated packages or machine-wide tools during a feature fix.
+2. Change one compatible dependency group at a time. For Python use uv in
+   `services/api` and retain `uv.lock`; use npm in the relevant Next.js application
+   and retain its `package-lock.json`; use Flutter/Dart tooling in `apps/mobile`
+   and retain `pubspec.lock`. Never hand-edit resolved lock entries.
+3. Review the manifest/lock diff, transitive packages, license/security impact and
+   install scripts. Keep development dependencies out of production runtimes where
+   possible. Run the affected lint, type, unit/integration and production-build
+   checks; Android/native changes also need signer/package and device verification.
+4. Run dependency vulnerability checks, investigate findings rather than blindly
+   applying breaking automatic fixes, and record unresolved risk. Build/test on
+   `main` does not authorize deployment or a Play upload.
+
+## Database change discipline
+
+The schema source of truth is `services/api/src/fleet_api/db/models` together with
+the complete append-only chain in `services/api/migrations/versions`, not one
+historical migration mentioned above. Check `alembic heads`, review generated SQL,
+and test upgrades from the prior schema on a disposable database with representative
+tenant, assignment, event, evidence and authentication records. Review every
+autogenerated migration manually; never edit applied history, reset Pilot data or
+rewrite UUIDs to simplify an upgrade. Additive, backward-compatible changes allow
+old/new clients and previous application images to coexist. A destructive contract
+change needs a separately approved migration and restore plan.
+
+For a production bug, reproduce it in an isolated test first, preserve evidence
+without secrets/PII, add the smallest regression and fix, then use the existing
+approved release process. Do not debug by mutating the live database or by copying
+production credentials/data into this checkout.

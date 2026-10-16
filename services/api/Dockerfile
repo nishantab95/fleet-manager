@@ -1,4 +1,8 @@
 # syntax=docker/dockerfile:1.7
+# Optional local verification target: native Docker-filtered context, not runtime.
+FROM scratch AS context-audit
+COPY . /
+
 FROM ghcr.io/astral-sh/uv:0.8.13 AS uv
 
 FROM python:3.12.11-slim-bookworm AS runtime

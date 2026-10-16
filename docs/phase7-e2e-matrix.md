@@ -1,5 +1,11 @@
 # Phase 7 End-to-End and Failure Matrix
 
+This records the original one-tipper Phase 7 acceptance scope, including its
+legacy OTP path. Current company-PIN activation and Play/device release gates
+are tracked in [the production readiness report](production-readiness-report.md)
+and [the Play release guide](google-play-release.md); passing this historical
+matrix alone does not establish cloud or Play readiness.
+
 Phase 7 hardens the completed owned-tipper workflow while preserving its event
 and offline guarantees. The Driver surface is duty-state aware: START/END duty
 own normal meter capture, Emergency is always reachable, and on-duty work

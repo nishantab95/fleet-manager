@@ -23,6 +23,7 @@ LOCK_FILE="$STATE_DIR/deploy.lock"
 die() { printf '[FAILED] %s\n' "$*" >&2; exit 1; }
 require_command() { :; }
 require_production_files() { :; }
+acquire_deploy_lock() { :; }
 flock() { :; }
 install() { mkdir -p "${@: -1}"; }
 state_value() { printf '%s' "$FAKE_CURRENT_TAG"; }

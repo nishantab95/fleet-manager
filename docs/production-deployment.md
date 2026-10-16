@@ -41,7 +41,9 @@ roughly 1.25 GiB for Ubuntu, Docker, page cache, and short-lived deployment tool
 API uses one process, a five-connection database pool with two overflow
 connections, and bounded public/auth request rates. CI builds images off-server.
 
-This is a measured starting point, not a high-availability claim. Keep at least
+This is a conditional starting point, not a high-availability or disk-fit claim.
+See [packaging and capacity](operations/cloud-packaging.md) for actual image/context
+sizes, evidence growth, full backup copies and restore-memory assumptions. Keep at least
 10 GB and 20% disk free. Alert at 70% sustained memory, 75% disk, load average
 above 1.5 for 15 minutes, API p95 above one second, repeated container restarts,
 or a backup exceeding two hours. Scale vertically before these limits are
@@ -50,7 +52,8 @@ sustained. See `docs/production-operations.md` for scaling and provider moves.
 Required host software:
 
 - Docker Engine from Docker's Ubuntu repository and the Compose plugin;
-- Git, curl, ca-certificates, and OpenSSH;
+- Bash, GNU coreutils (`timeout`, `df`), tar, awk, util-linux (`flock`), curl,
+  ca-certificates, and OpenSSH;
 - Restic from the Ubuntu repository or its verified official package;
 - an unprivileged `fleetdeploy` user in the Docker group;
 - time synchronization and automatic security updates;
@@ -68,15 +71,27 @@ server. They are not executed by this repository.
 
 ```bash
 sudo install -d -m 0750 -o fleetdeploy -g fleetdeploy /opt/fleet-ai
+sudo install -d -m 0750 -o fleetdeploy -g fleetdeploy /opt/fleet-ai/releases
+sudo install -d -m 0700 -o fleetdeploy -g fleetdeploy /opt/fleet-ai/incoming
 sudo install -d -m 0700 -o fleetdeploy -g fleetdeploy /var/lib/fleet-ai/deploy
 sudo install -d -m 0700 -o 10001 -g 10001 /var/lib/fleet-ai/leads
 sudo install -d -m 0700 -o fleetdeploy -g fleetdeploy /var/backups/fleet-ai
 sudo install -d -m 0750 -o root -g fleetdeploy /etc/fleet-ai
-sudo -u fleetdeploy git clone <repository-SSH-URL> /opt/fleet-ai/repository
 sudo install -m 0600 -o fleetdeploy -g fleetdeploy \
-  /opt/fleet-ai/repository/infra/production/production.env.example \
+  /secure/operator-staging/production.env \
   /etc/fleet-ai/production.env
 ```
+
+Prepare that private `production.env` from the reviewed revision's
+`infra/production/production.env.example` outside the deployment bundle. Do not
+upload the checkout or clone Git on the VPS. Leave `/opt/fleet-ai/repository`
+absent: the first successful approved deployment creates a symlink to
+`/opt/fleet-ai/releases/<full-SHA>`. These paths must be physical directories,
+not symlinked ancestors. An existing real `repository` checkout or an unmanaged
+symlink is refused, never replaced automatically. For an older prepared layout,
+first obtain a separate operator-reviewed transition plan that preserves that
+checkout and persistent state, establishes the release layout, and verifies the
+unchanged Compose project/data-service hashes; do not delete it to bypass refusal.
 
 Edit `/etc/fleet-ai/production.env`; replace every placeholder with an
 independently generated value. Keep
@@ -98,11 +113,12 @@ initialise or prune the remote repository.
 
 The `fleetdeploy` user needs read access to the environment and Restic files,
 write access to the state/backup directories, access to the Docker socket, and
-read access to the production repository. It should not own `/etc/fleet-ai`.
+read/write access to the releases/incoming directories. It should not own `/etc/fleet-ai`.
 Log the VPS Docker client into the repository's GHCR namespace with a token that
 has package-read access only.
 
-Validate without starting services:
+Once an approved bundle exists, validate it without starting services (the first
+workflow deployment also performs this validation before Docker mutations):
 
 ```bash
 cd /opt/fleet-ai/repository
@@ -136,8 +152,8 @@ repository plan permits. Add these environment secrets:
 - `OVH_SSH_KNOWN_HOSTS` (the independently verified host-key line; never use a
   runtime `ssh-keyscan` result as trust-on-first-use)
 
-The server repository also needs read access to `origin/main`. The production
-workflow has no `push` trigger. A normal push runs CI only.
+The VPS needs no Git repository credential. The production workflow has no
+`push` trigger. A normal push runs CI only.
 
 ## Approved one-command deployment request
 
@@ -157,18 +173,40 @@ gh workflow run production-deploy.yml --ref main `
 The command requests a deployment; the protected GitHub `production`
 environment still requires reviewer approval. The workflow rechecks the full
 SHA, `main` ancestry, and the successful push CI run. It builds and publishes
-immutable `fleet-api`, `fleet-web`, and `fleet-marketing` images tagged with the
-full commit, then runs one VPS command:
+`fleet-api`, `fleet-web`, and `fleet-marketing` images tagged with the full commit
+and refuses existing tags. It creates a deterministic operations-only archive
+from an explicit allowlist of approved Git blobs, with file hashes and a release
+marker. No application source, Git history, environment file or signing material
+is in that archive. See [the exact package inventory](operations/cloud-packaging.md).
+
+Pinned-host SSH prepares a unique incoming run directory; SCP transfers the
+archive, whose SHA-256 is checked on the server before extraction into a new
+`/opt/fleet-ai/releases/<full-SHA>` directory. Existing release paths are refused.
+The approved receiver then runs, from that bundle:
 
 ```bash
 bash scripts/production/deploy.sh --image-tag <40-character-commit>
 ```
 
+Only after its health/state gates pass does the receiver atomically switch the
+`repository` symlink. It holds the same deployment lock as manual deploy/rollback
+through activation, preventing concurrent rollback from racing the pointer.
+The fixed Compose project name preserves named volumes across release paths.
+Application configuration binds (notably Caddy) may reconcile to the new path;
+established PostgreSQL/MinIO must still have unchanged service hashes.
+
 If image publication succeeds but a later SSH/deployment step fails, redispatch
 intentionally refuses the already-published SHA tags. Do not delete or retag
 those artifacts to bypass the check. Confirm the approved revision, registry
 digests and current deployment/backup state, obtain renewed owner approval, then
-use the direct VPS command above as a reviewed recovery action. A partial first
+use the direct VPS command above from the retained, hash-verified release bundle
+as a reviewed recovery action. Verify and reconcile the `repository` symlink only
+after successful health/state checks; direct `deploy.sh` does not switch it.
+Incoming archives, failed/partial release directories and older bundles are
+preserved for review, never automatically overwritten or deleted. If deployment
+succeeds but pointer activation fails, reconcile actual container/state/bundle
+identity manually; do not claim the old pointer proves old images are running.
+A partial first
 bootstrap may additionally require the preserved-data recovery procedure below;
 automatic same-SHA workflow retry is not implemented.
 
@@ -179,8 +217,9 @@ it never recreates those services. It creates a database/evidence backup
 generation labelled with the running release's image tag, restores the
 database into a disposable PostgreSQL container, verifies evidence hashes,
 copies the verified generation to the independently encrypted Restic
-repository, and only then prunes VPS-local verified generations to the newest
-two. It runs `alembic upgrade head`, starts the application containers, and
+repository, and preserves local generations. Retention is a separate approved
+operator task, never automatic release cleanup. It runs `alembic upgrade head`,
+starts the application containers, and
 checks health plus private-route refusal. If an application health gate fails
 and a previous image tag exists, it restarts the previous application images.
 It never runs `alembic downgrade`. The state directory records every deploy or
@@ -198,9 +237,11 @@ before any mutation; ordinary application deploy/rollback uses `--no-deps`.
 
 ## Scheduled health, backup, and logging
 
-Review and install the systemd units from `infra/production/systemd`:
+After the first successful bundle activation, review and install the systemd
+units from its stable compatibility path (timers use that same symlink):
 
 ```bash
+cd /opt/fleet-ai/repository
 sudo cp infra/production/systemd/fleet-ai-* /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now fleet-ai-backup.timer fleet-ai-health.timer
@@ -210,8 +251,12 @@ systemctl list-timers 'fleet-ai-*'
 The daily job creates separate `postgres.dump` and `evidence/` artifacts,
 checks their SHA-256 manifests, performs a real database restore, uploads the
 generation with client-side Restic encryption, checks repository readability,
-and retains the newest two successfully offsite-backed local generations.
-Remote retention is intentionally a separate owner-reviewed operation. Before
+and preserves completed and incomplete local generations. Keep at least two
+verified offsite-backed local recovery points; use the report-only retention
+helper and obtain explicit approval before retiring any older generation.
+Local and remote retention are separate owner-reviewed operations. Follow
+[manual maintenance](operations/local-maintenance.md), and monitor growth rather
+than assuming an automatic two-generation cap. Before
 go-live, restore an offsite snapshot into a new empty path and verify it:
 
 ```bash
@@ -232,6 +277,12 @@ docker compose --env-file /etc/fleet-ai/production.env \
 
 Do not log environment files, Restic credentials, JWT keys, database URLs, MinIO
 credentials, access/refresh tokens, or evidence bytes.
+
+Normal Linux health checks also measure root, Docker and backup filesystem
+capacity, available memory and 15-minute load. See the exact thresholds and
+alert-delivery limitation in [production operations](production-operations.md).
+`--internal-only` explicitly skips host-resource and external checks; it cannot
+certify VPS capacity or public TLS.
 
 ## Deployment health and exposure checks
 

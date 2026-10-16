@@ -1,5 +1,14 @@
 # PC Role Lab
 
+Historical local QA reference: the OTP fixtures, original four-button Driver
+QA interface, reset procedure and mobile follow-up below describe that
+acceptance stage. They are not the current Android duty-screen contract or
+production onboarding instructions. Current company/Play authentication uses
+owner-issued activation and PIN/device authentication, with no SMS requirement;
+see [the Play release guide](google-play-release.md) and
+[current architecture](architecture.md). Do not reset or reconfigure the
+working Pilot to reproduce this historical lab.
+
 This is the controlled local acceptance workflow for the owned-tipper system.
 It uses one Next.js web application with four routes:
 
@@ -241,9 +250,9 @@ The reset never runs automatically. If object storage is unavailable, its
 metadata is removed and the local unavailable provider has no object to delete;
 use MinIO for a complete evidence-object reset.
 
-## Known mobile follow-up
+## Historical mobile follow-up
 
-The Android UI can currently report `Sync complete` while failed events remain
+At this acceptance stage, the Android UI could report `Sync complete` while failed events remained
 waiting. The local pending query intentionally includes `pending`, `syncing`,
 and `syncFailed`; successfully synced events leave that pending count. This is
 documented follow-up work and is outside the PC Role Lab. Do not redesign the

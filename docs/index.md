@@ -6,10 +6,26 @@ Windows/Tailscale Pilot and earlier acceptance reports. The cloud release uses
 followed by the existing PIN/device authentication. Google Play distribution
 does not require SMS or Firebase Phone Authentication.
 
+## Browse by responsibility
+
+| Section | Start here |
+| --- | --- |
+| [Architecture](architecture/index.md) | Component boundaries, domain invariants, and decision records |
+| [Development](development/index.md) | Windows setup, local testing, and engineering review |
+| [Operations](operations/index.md) | VPS preparation, backup/restore, incidents, and local disk maintenance |
+| [Security](security/index.md) | Authentication, authorization, evidence privacy, and signing controls |
+| [Releases](releases/index.md) | Approved server releases, Google Play, and the separate private Pilot channel |
+| [ADR inventory](adr/README.md) | Canonical decision IDs, dates, and historical aliases |
+
+The sections link to the existing authoritative guides; they do not replace or
+duplicate those guides. [Historical reports](archive/README.md) stay at their
+original paths and are not current release approvals.
+
 ## Current production and release guides
 
 | Guide | Purpose |
 | --- | --- |
+| [Repository readiness report](operations/repository-readiness-report.md) | Latest sequential audit, measured cleanup, agent guidance, packaging, final checks and remaining gates |
 | [Production readiness report](production-readiness-report.md) | Actual checks, results, and remaining release blockers |
 | [Ubuntu VPS deployment](production-deployment.md) | Docker services, domains, private routing, approval process, and deployment command |
 | [Migration, backups, and rollback](production-migration-and-rollback.md) | Preserve existing records and evidence; recover through reviewed restore procedures |
@@ -19,7 +35,8 @@ does not require SMS or Firebase Phone Authentication.
 
 These are preparation instructions. They do not establish that a VPS, DNS,
 GitHub protected environment, offsite repository, or Play release exists. The
-readiness report is authoritative for what has actually been verified.
+reports distinguish their dated verification scope; the repository readiness
+report adds the latest audit without replacing the earlier production evidence.
 
 ## Engineering and local development
 
@@ -29,6 +46,10 @@ readiness report is authoritative for what has actually been verified.
   and role workflows.
 - [Domain model](domain-model.md): records, relationships, and business invariants.
 - [Development](development.md): laptop setup, local databases, tools, and tests.
+- [Safe change workflows](development/change-workflows.md): source entry points,
+  feature/fix checks, release impact, and documentation maintenance.
+- [Local disk audit](operations/local-disk-audit.md): measured checkout/Docker
+  usage, protected data, and verified one-time cleanup results.
 - [Security](security.md): tenant, role, session, evidence, and deployment controls.
 - [Production engineering audit](production-engineering-audit.md): scoped source
   findings, corrections, coverage limits and incremental maintenance sequence.

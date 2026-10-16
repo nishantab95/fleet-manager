@@ -52,10 +52,19 @@ health checks. Docker JSON logs are size-bounded. Send timer failures and disk,
 memory, container restart, TLS, and external health alarms to an owner-approved
 channel before go-live; alert delivery is not configured by this repository.
 
+Normal `healthcheck.sh` also checks the filesystems containing `/`, Docker's
+reported `DockerRootDir`, and the configured backup directory: each must have
+at least 10 GB available and be below 75% used. `/proc/meminfo` must report
+instantaneous `MemAvailable` above 30% of total memory, and 15-minute load must
+not exceed 1.5. Unreadable/unparseable resource data fails closed. These are
+local script output/journal gates, not configured external alert delivery or
+a sustained-memory measurement. `--internal-only` explicitly skips host and
+external checks; its success is not proof that a VPS is production-ready.
+
 Review at least weekly:
 
 - backup timer success, offsite snapshot age, and a sample Restic check;
-- disk use by Docker, PostgreSQL, MinIO, logs, and the two local backups;
+- disk use by Docker, PostgreSQL, MinIO, logs, and every retained local backup;
 - memory pressure/OOM events, CPU/load, container restarts, API p50/p95/p99,
   HTTP 429/5xx rates, and database pool waits;
 - certificate expiry, firewall exposure, dependency/security findings, and
@@ -71,6 +80,48 @@ bash scripts/production/verify-offsite-backup.sh <snapshot-id> /var/tmp/fleet-re
 The target must be new and empty. The script restores into that isolated path,
 checks evidence hashes, restores PostgreSQL into a disposable container, and
 never targets live data.
+
+## Backup retention and disk pressure
+
+Backups are protected data. Daily backup/verification, application deployment
+and rollback never delete a backup generation. Failed dumps remain as private
+`postgres.dump.partial` files in their incomplete generation for investigation;
+they must not be mistaken for completed recovery points. There is no automatic
+local rotation, Restic forget/prune, volume prune or database/evidence cleanup.
+
+The historically named command below is a read-only inventory, not a prune:
+
+```bash
+bash scripts/production/prune-local-backups.sh --keep 2
+```
+
+It reports exact recognized generation paths and logical bytes, marks the newest
+N offsite-completion markers for retention (`N >= 2`), and lists older completed
+generations only as review candidates. Unknown/incomplete directories, extra
+partial content, links/hardlinks, nonregular files and cross-filesystem mounts
+are preserved. Same-filesystem bind mounts require independent operator inspection
+before any removal approval; this metadata report is not a mount audit.
+No Apply/delete option exists. Completion markers record the earlier verification
+and offsite check; they do not prove a fresh independent restore or authorize
+removal. Do not run the report concurrently with backup/restore maintenance when
+using its measurements to plan a retirement.
+
+Owner-approved retention must preserve at least two verified local generations
+and two independently verified offsite generations, the agreed recovery window,
+and every incident/legal hold. Before approving any retired generation's removal,
+restore an independent offsite snapshot into a new isolated path and verify both
+database restoration and evidence hashes. Retain the report, exact approved paths,
+generation IDs and current/previous release references. Revalidate them before a
+separately authorized operation; this repository supplies no backup deletion tool.
+
+Full copies accumulate with each daily run and deployment/rollback. Monitor all
+retained generations, partial failures and restore drills; the two-generation
+capacity estimate is a minimum planning floor, not an enforced storage limit.
+Escalate disk-pressure alerts early, expand storage or obtain a reviewed retention
+decision before the backup fails. Never solve space pressure by deleting live
+volumes, evidence, signing material, recovery points or logs needed for incidents.
+See [manual local maintenance](operations/local-maintenance.md) for the distinct
+Windows generated-cache helper and exact-image-ID review boundaries.
 
 ## Incident response
 

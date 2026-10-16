@@ -1,7 +1,10 @@
 # Environment and secrets
 .env
 .env.*
+*.env
 !.env.example
+.aws/
+.ssh/
 
 # Python
 __pycache__/
@@ -15,7 +18,9 @@ pytest-cache-files-*/
 .ruff_cache/
 htmlcov/
 .coverage
+.coverage.*
 coverage.xml
+coverage/
 
 # Node / web
 node_modules/
@@ -48,6 +53,9 @@ build/
 **/*.jks
 **/*.keystore
 **/*.p12
+**/*.pfx
+**/*.pem
+**/*.key
 **/key.properties
 /apps/mobile/android/local.properties
 **/google-services.json
@@ -61,6 +69,16 @@ build/
 *.iml
 .DS_Store
 Thumbs.db
+
+# Personal agent configuration/session state, not shared project instructions
+CLAUDE.local.md
+.claude/settings.local.json
+.codex/auth.json
+.codex/sessions/
+
+# Local Android build caches (source and dependency locks remain tracked)
+.gradle/
+.kotlin/
 
 # Local infrastructure data
 infra/data/

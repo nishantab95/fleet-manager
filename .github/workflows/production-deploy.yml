@@ -61,6 +61,13 @@ jobs:
             exit 1
           }
 
+      - name: Build the allowlisted operations bundle from approved Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_deploy_bundle.py --commit "$DEPLOY_SHA" \
+            --output "$RUNNER_TEMP/fleet-operations-$DEPLOY_SHA.tar.gz"
+
       - name: Log in to GitHub Container Registry
         shell: bash
         run: echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
@@ -101,7 +108,7 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" >"$HOME/.ssh/id_ed25519"
           printf '%s\n' "$SSH_KNOWN_HOSTS" >"$HOME/.ssh/known_hosts"
 
-      - name: Run the VPS backup, migration, health, and rollback-gated deploy
+      - name: Transfer only operations files and run the guarded VPS deploy
         shell: bash
         env:
           OVH_HOST: ${{ secrets.OVH_HOST }}
@@ -110,7 +117,18 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$OVH_PORT" =~ ^[0-9]+$ ]]
-          remote="cd /opt/fleet-ai/repository && test -z \"\$(git status --porcelain)\" && git fetch --no-tags origin main && git checkout --detach '$DEPLOY_SHA' && bash scripts/production/deploy.sh --image-tag '$DEPLOY_SHA'"
-          ssh -i "$HOME/.ssh/id_ed25519" -p "$OVH_PORT" \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "$OVH_USER@$OVH_HOST" "$remote"
+          [[ "$OVH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$OVH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          run_id="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ "$run_id" =~ ^[0-9]+-[0-9]+$ ]]
+          archive="$RUNNER_TEMP/fleet-operations-$DEPLOY_SHA.tar.gz"
+          archive_sha="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          remote="$OVH_USER@$OVH_HOST"
+          ssh_options=(-i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          receiver=scripts/production/receive-deploy-bundle.sh
+          ssh "${ssh_options[@]}" -p "$OVH_PORT" "$remote" \
+            "bash -s -- prepare '$run_id'" <"$receiver"
+          scp "${ssh_options[@]}" -P "$OVH_PORT" "$archive" \
+            "$remote:/opt/fleet-ai/incoming/$run_id/deploy.tar.gz"
+          ssh "${ssh_options[@]}" -p "$OVH_PORT" "$remote" \
+            "bash -s -- install '$run_id' '$DEPLOY_SHA' '$archive_sha'" <"$receiver"

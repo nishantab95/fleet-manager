@@ -7,9 +7,10 @@ current deployment instructions. The current production authentication is
 
 "First committed" is the introduction date from local Git history, not an
 inferred decision date. Existing decision dates inside documents are retained
-even when they differ from the commit date. "This preparation" identifies new
-production-preparation ADRs whose introduction commit is this release's commit;
-consult Git for its date rather than inferring one from draft creation.
+even when they differ from the commit date. Production-preparation ADRs 0015 and
+0016 were introduced in commit `789dd878ec7dc5880899f520f24246463983d81c` on
+2026-10-16. Dates not established from history must be marked "not recorded",
+not inferred from file modification times.
 
 | ID | Decision | First committed | Current scope/status |
 | --- | --- | --- | --- |
@@ -27,10 +28,11 @@ consult Git for its date rather than inferring one from draft creation.
 | [0012](0012-company-managed-activation-pin.md) | Owner activation and device PIN | 2026-10-11 | Current activation contract; role selection/unlock amended by 0013 |
 | [0013](0013-device-auth-and-workspaces.md) | System device authentication and workspaces | 2026-10-12 | Current; preserves Build 28 credentials and backend membership authority |
 | [0014](0014-private-release-https-upload.md) | Private Pilot HTTPS publication | 2026-10-12 | Preserved Pilot-only release path |
-| [0015](0015-single-vps-production-deployment.md) | Single VPS and approved deployments | This preparation | Accepted for production preparation; external setup gates remain |
-| [0016](0016-google-play-and-pilot-release-separation.md) | Play/Pilot distribution separation | This preparation | Accepted for preparation; distinct packages require controlled migration |
+| [0015](0015-single-vps-production-deployment.md) | Single VPS and approved deployments | 2026-10-16 | Accepted for production preparation; external setup gates remain |
+| [0016](0016-google-play-and-pilot-release-separation.md) | Play/Pilot distribution separation | 2026-10-16 | Accepted for preparation; distinct packages require controlled migration |
 | [0017](0017-supervisor-operations-verification.md) | Site-scoped supervisor verification | 2026-09-22 | Accepted; renumbered former duplicate 0005 |
 | [0018](0018-public-brand-and-marketing-site.md) | Public brand and marketing isolation | 2026-10-10 | Isolation retained; cloud routing superseded by 0015 |
+| [0019](0019-operations-only-deployment-bundles.md) | Operations-only VPS bundles | Not yet committed at audit time | Extends 0015; approved images plus allowlisted operations files, not a server Git checkout |
 
 ## Identifier repair on 2026-10-16
 

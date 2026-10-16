@@ -7,6 +7,14 @@ deploy. The authoritative release decision and exact final revision are in
 [the readiness report](production-readiness-report.md). Start documentation
 navigation at [the index](index.md).
 
+Evidence boundary: the original sections below, through "Safe next maintenance
+sequence", record the earlier production preparation at implementation commit
+`789dd878ec7dc5880899f520f24246463983d81c` and report follow-up
+`06ecbc457d7e2fc0795310636fea0064f47ab0ff`. Their phrases "this task" and their
+test/build counts refer to that earlier work, not fresh application checks in
+the subsequent repository audit. The dated re-audit appendix records the new
+read-only assessment separately.
+
 ## Assessment and method
 
 **Engineering status: PARTIAL.** The reviewed architecture, transaction
@@ -305,3 +313,158 @@ history was reorganized by this audit. The only audit-driven mobile source chang
 is the bounded HTTP transport operation and its regression tests. The separate
 release work contains deployment, documentation and security corrections; its
 complete changed-file inventory belongs to the final readiness report.
+
+## Repository maintainability re-audit — 2026-10-16
+
+Scope: the subsequent sequential repository-quality task, starting from
+`06ecbc457d7e2fc0795310636fea0064f47ab0ff`. Reviewers read the updated project and
+component instructions, existing contracts, source, tests, and prior evidence.
+Application source, migrations, and Windows server-management behavior remain
+unchanged. No application tests/builds were rerun for this source/documentation
+review; the earlier PASS results above are retained evidence only.
+
+### Responsibility inventory, not a file-size verdict
+
+| Existing hotspot | Measured size | Responsibilities / extraction boundary |
+| --- | --- | --- |
+| `apps/mobile/lib/app.dart` | 2,917 lines; 98,033 bytes | Assembly `:50`, session `:162`, onboarding `:430`, Driver `:1213`, diagnostics `:2090`, capture widgets `:2569` |
+| `apps/mobile/lib/role_screens.dart` | 2,514 lines; 82,481 bytes | Supervisor `:20`, review `:303`, maintenance `:688`, Owner `:1227`, shared presentation `:2230` |
+| `apps/mobile/lib/data/api_client.dart` | 1,400 lines; 42,536 bytes | Seven role/domain interfaces at `:184`, shared refresh coordinator `:211`, HTTP/evidence transport |
+| `apps/mobile/lib/data/sync_engine.dart` | 1,103 lines; 39,893 bytes | Durable enqueue, duty recovery, ordered sync, payload translation and diagnostics |
+| `services/api/src/fleet_api/domain/owner_operations.py` | 2,619 lines | Locked preview/state tokens, lifecycle planning, relationship mutations and audit |
+| `services/api/src/fleet_api/domain/maintenance.py` | 1,704 lines | Pure due-state evaluation, plans, work orders, proof/history queries |
+| `services/api/src/fleet_api/domain/reporting.py` | 1,383 lines | Scoped query assembly, canonical metrics, daily/period reporting and closure |
+| `apps/web/features/owner/OwnerManagement.tsx` | 52,994 bytes | Shared action state `:39`, Fleet `:284`, People/activation `:421`, Sites `:509` |
+| `apps/web/features/owner/OwnerRelationshipManager.tsx` | 38,181 bytes | Shared preview/execute runner `:131`, asset/person forms and confirmation flows |
+| `apps/web/features/owner/Maintenance.tsx` | 36,558 bytes | Overview/plans/history, request state `:198`, loading `:219`, mutations `:272`, forms |
+| `scripts/server_manager.py` | 2,119 lines; 79,557 bytes | Process ownership/start-stop `:216`–`:1060`, signing/APK `:1075`–`:1446`, backup `:1464`–`:1752`, update `:1759`–`:2066` |
+
+These sizes identify review and test surfaces, not defects by themselves.
+Some React files compress substantial JSX into few physical lines. Existing
+interfaces, domain services, shared UI components and focused production scripts
+already provide useful boundaries. No microservices, new state framework,
+generic service hierarchy, or wholesale file split is justified by this review.
+
+### P2 — concrete UI error fallback and asynchronous characterization gaps
+
+Source-confirmed fallback behavior: `OwnerWorkspace.tsx:91` substitutes zero
+maintenance counts when that request fails; the rest of a successful reload then
+shows zero alerts. `OwnerOperations.tsx:35` similarly maps failed duty/template
+requests to empty arrays, while `:109` renders an empty-duty message. These paths
+conflate unavailable data with an actual empty result. This is a bounded UI
+correctness concern, not evidence of a backend authorization bypass, lost data,
+or a newly demonstrated production outage. Add rejected-request tests and an
+explicit unavailable state before changing the presentation contract.
+
+`Maintenance.tsx:219`–`:243` loads an asset plan across several awaits without a
+request-generation check; the effect at `:247` cancels only a pending timer.
+Delayed responses during selection changes therefore need characterization.
+Mobile `role_screens.dart:51`/`:1259` schedules loads at `:60`/`:1268` without an
+in-flight/generation guard; mounted checks do not establish latest-response
+ordering. Owner date reads at `:1271`, `:1274`, `:1288` can span the change at
+`:1322`. Use delayed/reversed-response, date/asset-switch and disposal tests before
+introducing a captured selection/date and latest-generation guard. These races
+were identified from source, not reproduced in this audit.
+
+Existing browser tests cover useful behavior: relationship stale-state handling
+and safe retry (`OwnerRelationshipManager.test.tsx:349`, `:366`), blocked fields
+(`:386`), force-close confirmation (`:413`), activation/reset
+(`OwnerManagement.test.tsx:426`), and maintenance copy errors/rental read-only
+state (`Maintenance.test.tsx:265`, `:278`). `OwnerWorkspace.test.tsx` primarily
+covers navigation. Owner workstation and maintenance Playwright suites use
+mocked API responses, not a real browser/backend activation session. Preserve
+these tests and add failure/order cases; do not replace them with size-driven
+component snapshots. The existing English-substring field classification remains
+the earlier bounded presentation-coupling finding.
+
+### P2 — backend duplication and query shape
+
+`owner_operations.py:2169` and `:2536` repeat the end-assignment/deployment,
+replacement deployment, KEEP-driver recreation and audit sequence for direct
+movement versus site-deactivation movement. Characterize both callers, then
+consider a helper receiving already locked records and one timestamp. Preserve
+replanning with `lock=True` and state-token validation at `:2011`, one API-owned
+commit (`api/owner_operations.py:115`–`:140`), and audit ordering. Relevant
+regressions include `test_owner_operations_api.py:491`, `:548`, `:711`, `:949`,
+`:1291`, `:1742`; do not split this into independently committing services.
+
+Maintenance evaluation caches meters per asset but queries criteria per schedule
+(`maintenance.py:622`–`:631`, `:717`–`:731`). History loading retrieves all rows
+(`:949`–`:976`) and resolves related records inside the row loop (`:995`–`:1066`).
+`reporting.py:1077`–`:1083` calls canonical daily reporting for each day, with an
+explicit 366-day limit at `:1044`. These are measurable query-shape candidates,
+not measured latency/SLA failures for thirty phones. Add SQL statement-count and
+representative-volume tests before batching tenant-scoped loads; assert identical
+results and authorization with the existing maintenance/report regressions.
+
+Do not blindly unify similar metric loops: current KM approval filtering at
+`reporting.py:585` differs from the accepted HMR states at `:618`. Capture that
+state matrix before any shared extraction. Pure maintenance criteria/result
+types are a safer first extraction than work-order completion, whose lock,
+meter baselines, immutable history and audit must stay together (`:837`).
+
+### P2 — mobile and Windows control boundaries to retain
+
+The earlier mobile coupling/corruption findings remain valid. In addition,
+`SyncEngine._toDomain` is called at `sync_engine.dart:581` before the per-row try
+at `:582`; enum lookups at `:1083`/`:1088` warrant malformed-persisted-value tests.
+There is no evidence here that real queues contain such corruption. Never clear
+or rewrite a row, UUID or photograph to make a test pass. Preserve the sync guard
+and `finally` release (`:543` onward), dependency order (`:570`), shared refresh
+gate, and existing bounded transport. Any later extraction of the two 401 retry
+branches (`api_client.dart:1139`, `:1230`) must retain that single coordinator.
+
+Use the existing company-PIN, API auth/timeout, role-screen, recovery,
+cold-restart and handover tests as characterization gates. Extract pure capture
+widgets or queue translation/error policy before moving session/transport
+ownership. OS authentication and real installed-device migration still require
+external acceptance.
+
+Windows `update_server` at `server_manager.py:1983` retains clean-main,
+fast-forward and verified-backup gates before stopping services; there is no
+automatic schema downgrade. Pure status/manifest/path helpers are safer future
+extractions than process, backup or release ownership. Preserve the existing
+server-manager, launch, Pilot-inbox and release-send tests. Console exception
+text at `:2113` may contain third-party diagnostics; add redaction fault tests
+before changing it. No credential leak is claimed from this source pattern.
+The Windows website blue/green helpers remain separate from the Linux topology.
+
+### P1 — verification-harness cleanup boundary (addressed in hygiene phase)
+
+The inspected baseline `scripts/production/local-smoke-test.sh` automatically
+removed its Compose volumes and temporary root. This conflicted with the new
+task's explicit prohibition on automatic volume deletion; the old helper was
+not run during this re-audit. This was an operator-policy/verification-harness
+gap, not a new business-logic bug or evidence of deleted live volumes.
+
+The hygiene change retains test containers, volumes and artifacts, stopping only
+validated exact IDs from a fresh collision-checked synthetic project. It pins a
+verified local Docker endpoint, binds test ingress to loopback and isolates
+synthetic configuration from ambient production settings. Safety regressions
+exercise refusal and retention paths; the final readiness report records the
+actual fixture and full-stack verification results. No automatic janitor is added.
+
+### Outcome and bounded follow-up
+
+No new P0 or demonstrated runtime P1 was confirmed in the reviewed application
+paths. The narrowly addressed harness-policy issue and existing external release
+gates remain distinct from P2 maintainability work. Static inspection is not exhaustive
+security testing, query benchmarking, or proof of an acyclic import graph.
+
+Recommended follow-up order: characterize unavailable/error and response-order
+cases; fix each confirmed behavior narrowly; extract one pure/cohesive helper
+behind those tests; measure query counts before optimizing; revalidate affected
+contracts and release artifacts. Use the
+[change workflows](development/change-workflows.md) for the component-specific
+verification/release boundary. No application logic, schema, authentication,
+offline format, signing identity, installed Pilot, or live infrastructure was
+modified by this re-audit.
+
+### Final regression follow-through
+
+The subsequent full verification found an order-dependent logging configuration
+failure: embedded Alembic execution disabled existing Fleet/Uvicorn loggers.
+The final audit changes only Alembic's `fileConfig` option to preserve existing
+loggers and adds a regression; schema versions and business behavior remain
+unchanged. See the [latest consolidated report](operations/repository-readiness-report.md)
+for reproduction, corrected regression results and the affected API rebuild.

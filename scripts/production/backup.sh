@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
+umask 077
 
 require_command docker
 require_command find
@@ -34,10 +35,13 @@ if ! install -d -m 0700 "$backup_path" "$evidence_path"; then
   mkdir -p "$backup_path" "$evidence_path"
 fi
 
-cleanup_partial() {
-  rm -f -- "$database_tmp"
+preserve_failed_backup() {
+  local status=$?
+  if (( status != 0 )); then
+    printf '[FAILED] Incomplete backup preserved for review: %s\n' "$backup_path" >&2
+  fi
 }
-trap cleanup_partial EXIT
+trap preserve_failed_backup EXIT
 
 fleet_compose exec -T postgres sh -ec \
   'exec pg_dump --format=custom --no-owner --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' \
@@ -54,8 +58,8 @@ FLEET_BACKUP_ID="$backup_id" fleet_compose --profile tools run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -e FLEET_BACKUP_ID="$backup_id" backup-tools -ec '
     # The bind mount is mode 0700 and belongs to the deployment account. Use
-    # that same UID/GID so Linux permissions remain private and retention can
-    # remove nested object directories without requiring root privileges.
+    # that same UID/GID so Linux permissions remain private and operators can
+    # inspect the backup without broadening access to protected evidence.
     mc --config-dir /tmp/fleet-backup-mc alias set fleet-local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
     mkdir -p "/backups/$FLEET_BACKUP_ID/evidence"
     mc --config-dir /tmp/fleet-backup-mc mirror --overwrite "fleet-local/$FLEET_S3_BUCKET" "/backups/$FLEET_BACKUP_ID/evidence" >/dev/null
@@ -69,7 +73,10 @@ find "$evidence_path" -type f -printf '.' -quit >"$backup_path/evidence.present"
 
 image_tag="$(current_image_tag)"
 git_commit="unknown"
-if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
+if [[ -f "$REPO_ROOT/release.sha" && ! -L "$REPO_ROOT/release.sha" ]]; then
+  git_commit="$(<"$REPO_ROOT/release.sha")"
+  [[ "$git_commit" =~ ^[0-9a-f]{40}$ ]] || die "Invalid operations bundle release marker."
+elif command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
   git_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 fi
 {

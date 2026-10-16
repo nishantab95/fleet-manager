@@ -27,7 +27,7 @@ existing `fleet-manager` / `Fleet Manager` names. They are compatibility
 boundaries, not public brand copy, and renaming them would add deployment risk
 without improving the user experience.
 
-## Owner web workstation
+## Preserved Pilot Owner web workstation
 
 On an Owner laptop connected to the private Tailscale network, set the server-side-only upstream in `apps/web/.env.local`:
 
@@ -64,8 +64,10 @@ updater. Existing `.pilot` installations require the controlled side-by-side
 migration in [`docs/google-play-release.md`](docs/google-play-release.md).
 
 No live infrastructure or Play release is created by the checked-in setup.
-Current blockers and validation evidence are tracked in
-[`docs/production-readiness-report.md`](docs/production-readiness-report.md).
+Current audit results and release gates are consolidated in the
+[repository readiness report](docs/operations/repository-readiness-report.md).
+The [earlier production report](docs/production-readiness-report.md) retains
+its dated implementation and build evidence.
 Host hardening, monitoring, scaling, incident response, provider migration, and
 data-handling reviews are in [`docs/production-operations.md`](docs/production-operations.md)
 and [`docs/production-data-handling.md`](docs/production-data-handling.md).
@@ -76,20 +78,20 @@ The core field workflow began with company-owned tippers and three roles:
 `DRIVER`, `SUPERVISOR`, and `OWNER_ADMIN`. The current pilot capability catalog
 also represents owned or rented tippers, excavators, backhoe loaders, rollers,
 and graders for capability-aware duty, meter, diesel, and reporting workflows.
-This narrow fleet extension does not bring later commercial or maintenance
-modules into scope.
+Existing Maintenance V2 is part of the implemented capability model; this does
+not authorize unrelated commercial modules or predictive maintenance.
 
 ## Repository layout
 
 ```text
-apps/mobile/       Flutter / Dart Android-first shell
-apps/web/          Private React / Next.js operations shell
+apps/mobile/       Flutter Android-first driver and role clients, offline queue
+apps/web/          Authenticated Next.js Owner/Supervisor operations client
 apps/marketing/    Public React / Next.js marketing site
 services/api/      FastAPI modular-monolith backend
-infra/             Local infrastructure notes and configuration
+infra/production/  Independent Linux Docker/Caddy production configuration
 docs/              Architecture, domain, development, security, and ADRs
-scripts/           Windows PowerShell development helpers
-.github/workflows/ CI skeleton
+scripts/           Local development, guarded maintenance, and release tooling
+.github/workflows/ Verification CI and explicitly approved release workflows
 ```
 
 ## Prerequisites
@@ -97,14 +99,14 @@ scripts/           Windows PowerShell development helpers
 Required for backend work:
 
 - Git
-- Python 3.12+ (3.13 recommended once selected for the local machine)
+- Python 3.12 (the verified locked environment; review upgrades separately)
 - uv
 - Docker Desktop with Compose
 
-Required for the checked-in shell verification:
+Required for client development and verification:
 
-- Node.js 24+ and npm for the web shell
-- Flutter 3.47.5, Android SDK 36, and JDK 17 for the mobile shell
+- Node.js 24 and npm for both Next.js applications
+- Flutter 3.47.5, Android SDK 36, and JDK 17 for the mobile application
 
 The verified workstation uses the official Python Launcher-backed CPython 3.12, Node.js 24.19.0/npm 11.17.0, Flutter 3.47.5/Dart 3.13.4, Temurin JDK 17.0.20.1, and Android SDK 36. See `docs/development.md` for the exact checks and user-local setup guidance.
 
@@ -122,7 +124,7 @@ running.
 Developer/bootstrap commands remain available:
 
 ```powershell
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 .\scripts\bootstrap.ps1
 services\api\.venv\Scripts\python.exe launch.py --status
 ```
@@ -142,7 +144,12 @@ payroll, accounting, customer billing, continuous GPS, predictive maintenance,
 WhatsApp, AI/LLM features, or asynchronous infrastructure until the core field
 workflow is reliable in production.
 
-## Current status
+## Implemented workflows and historical phase labels
+
+The phase labels below record implementation history, not a new task sequence.
+Current production authentication is `company_pin`; older OTP infrastructure is
+optional compatibility, not an onboarding requirement. Start new engineering
+work from [PROJECT_RULES.md](PROJECT_RULES.md) and the [documentation index](docs/index.md).
 
 Phase 4 contains the Android-first driver client with secure session storage,
 assignment-scoped duty-state event capture, camera evidence for meter readings

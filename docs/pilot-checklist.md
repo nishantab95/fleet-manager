@@ -1,13 +1,17 @@
 # One-Tipper Pilot Checklist
 
-Complete and sign this checklist before onboarding a real driver.
+Complete and sign this checklist before onboarding a real driver. It covers
+the controlled Pilot, not authorization to deploy the cloud stack or publish
+to Play; use the [production readiness gates](production-readiness-report.md)
+and [Play migration guide](google-play-release.md) for those releases.
 
 ## Infrastructure and security
 
 - Internal pilot only: use controlled local connectivity; do not expose the
   API or plaintext authentication traffic to the public Internet.
-- Internal pilot only: explicitly enabled non-production OTP is acceptable;
-  production must use a real provider and fail closed.
+- Legacy internal OTP testing only: explicitly enabled non-production OTP is
+  acceptable on an isolated test network. Current company/production releases
+  use `company_pin`; no SMS provider or Firebase login is required.
 - Internal pilot only: MIME/signature, size, private-object, and authorization
   checks are required; malware scanning is required before broader rollout.
 - [ ] Pilot environment is distinct from development and test.
@@ -16,8 +20,11 @@ Complete and sign this checklist before onboarding a real driver.
 - [ ] Explicit CORS origins and allowed hosts are configured.
 - [ ] TLS/secure-cookie termination is verified for pilot URLs.
 - [ ] Production/pilot JWT signing material is secret-managed and not a local default.
-- [ ] Real OTP provider boundary is configured, or controlled non-production OTP is explicitly documented.
-- [ ] Logs contain request IDs but no OTPs, JWTs, refresh tokens, passwords, or signed URLs.
+- [ ] Company-PIN activation expiry, single use/replay rejection, PIN lockout,
+      device binding and logout/reactivation are verified. Any legacy OTP test
+      is explicitly isolated and is not a production fallback.
+- [ ] Logs contain request IDs but no activation codes, PINs, device credentials,
+      OTPs, JWTs, refresh tokens, passwords, or signed URLs.
 
 ## Backup and recovery
 
@@ -47,10 +54,10 @@ Complete and sign this checklist before onboarding a real driver.
 - [ ] While off duty, only START DUTY and EMERGENCY are visible as operational
       actions.
 - [ ] While on duty, EMERGENCY is prominent; the tipper shows TRIP COMPLETE and
-      DIESEL, MAINTENANCE is disabled as `Coming later`, and END DUTY is at the
-      bottom.
-- [ ] START DUTY captures START KM and END DUTY captures END KM with the
-      required evidence; no standalone primary KM tile is shown.
+      DIESEL, and END DUTY is at the bottom. Maintenance visibility follows the
+      asset's responsibility/capability; Drivers submit proof, not completion.
+- [ ] START/END DUTY capture the asset's required meters and evidence (KM and
+      HMR for wheeled Pilot assets); no standalone primary KM tile is shown.
 - [ ] Offline trip captured, app terminated, restarted, and event still present.
 - [ ] Offline event synced after backend recovery.
 - [ ] Duplicate sync produced one logical event.

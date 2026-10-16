@@ -53,7 +53,18 @@ jobs:
       - run: uv run alembic upgrade head
       - run: uv run alembic check
       - run: uv run pytest --cov=fleet_api --cov-report=term-missing --cov-report=xml
-      - run: uv run pytest ../../scripts/test_validate_play_aab.py ../../scripts/test_production_deploy.py ../../scripts/test_mobile_update_contract.py
+      - name: Verify release, packaging, and maintenance safety contracts
+        run: >-
+          uv run pytest
+          ../../scripts/test_validate_play_aab.py
+          ../../scripts/test_production_deploy.py
+          ../../scripts/test_mobile_update_contract.py
+          ../../scripts/test_build_deploy_bundle.py
+          ../../scripts/test_receive_deploy_bundle.py
+          ../../scripts/test_host_resources.py
+          ../../scripts/test_backup_retention.py
+          ../../scripts/test_local_smoke_safety.py
+          ../../scripts/maintenance
       - run: uv run alembic upgrade head --sql
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

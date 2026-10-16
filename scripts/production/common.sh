@@ -20,6 +20,21 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "Required command is unavailable: $1"
 }
 
+acquire_deploy_lock() {
+  install -d -m 0700 "$STATE_DIR"
+  [[ ! -L "$LOCK_FILE" && ( ! -e "$LOCK_FILE" || -f "$LOCK_FILE" ) ]] ||
+    die "Deployment lock must be a regular file."
+  if [[ -n "${FLEET_DEPLOY_LOCK_INHERITED:-}" ]]; then
+    # The bundle receiver retains this same open-file description through the
+    # child deploy and atomic pointer activation. Never trust an env flag alone.
+    [[ "$FLEET_DEPLOY_LOCK_INHERITED" == 1 && -f /proc/self/fd/9 && /proc/self/fd/9 -ef "$LOCK_FILE" ]] ||
+      die "Inherited deployment lock descriptor is missing or targets another file."
+  else
+    exec 9>"$LOCK_FILE"
+  fi
+  flock -n 9 || die "Another production deploy or rollback is already running."
+}
+
 env_value() {
   local key="$1"
   local value

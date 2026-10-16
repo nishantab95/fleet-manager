@@ -4,8 +4,15 @@
 
 Fleet AI Systems is a modular monolith in a monorepo. The backend is one FastAPI
 deployment with explicit domain services, SQLAlchemy models, and one
-PostgreSQL database. Mobile and web clients remain separate shells and do not
-contain Phase 1 business workflows.
+PostgreSQL database. Flutter and Next.js are separate implemented clients:
+Flutter persists offline driver actions; the authenticated web application serves
+Owner/Supervisor operations. The backend remains authoritative for business
+invariants, tenant/role permissions and historical attribution.
+
+Historical phase headings below explain evolution, not missing features or a
+current implementation sequence. For current source locations and contracts use
+the [architecture index](architecture/index.md), [domain model](domain-model.md)
+and [ADR inventory](adr/README.md).
 
 ## Cloud production deployment boundary
 
@@ -52,11 +59,12 @@ keeps anonymous form traffic outside the authenticated product boundary. See
   assignments, devices, events, and audit concerns.
 - `fleet_api.domain`: invariant-protecting services and domain enums. The
   route layer is not used for Phase 1 CRUD.
-- `migrations/versions/0002_core_domain.py`: the authoritative PostgreSQL
+- `migrations/versions/0002_core_domain.py`: the foundational PostgreSQL
   schema migration, including composite tenant foreign keys, checks, indexes,
   event idempotency, and assignment exclusion constraints.
-- `fleet_api.auth`: phone normalization, OTP challenges, pre-session tokens,
-  server-side sessions, refresh rotation, and authorization predicates.
+- `fleet_api.auth`: company activation/PIN/device credentials, optional legacy
+  OTP/Firebase adapters, pre-session tokens, server-side sessions, refresh
+  rotation, and authorization predicates.
 - `fleet_api.api.dependencies`: authenticated request context, role checks,
   tenant consistency, and supervisor site-access dependencies.
 - `migrations/versions/0003_authentication.py`: OTP challenge and
@@ -95,8 +103,9 @@ events. All current Pilot types support duty, diesel, emergency, and reporting.
 The public 1.0.4 contract remains intentionally tipper-shaped. Existing
 `/tippers` routes, report routes, workbook layout, and fields such as
 `tipper_id`, `tipper_registration_number`, and `tipper_short_name` are adapters
-over `FleetAsset`. Generic management endpoints and UI are deferred to the
-next phase.
+over `FleetAsset`. This describes the original 1.0.4 compatibility boundary;
+current asset/people/site management and Owner operations are implemented in
+the later boundaries documented below. Do not introduce a duplicate asset model.
 
 ## Phase 2 authentication boundary
 
@@ -125,7 +134,14 @@ requires an authenticated `OWNER_ADMIN` membership and derives the company
 from that context. The default OTP provider is unavailable; no fake provider
 is selectable through production configuration.
 
-### Firebase phone authentication boundary
+### Current company-PIN and optional Firebase authentication boundaries
+
+Cloud and Google Play production select `FLEET_AUTH_MODE=company_pin`.
+Onboarding is Play install → owner-issued expiring single-use activation code →
+device activation/PIN setup → existing secure device/session access. No SMS,
+Tailscale, manual server address or additional Firebase login is required.
+Code expiration/replay protection, hashed PINs, lockouts, device binding,
+reactivation and server-side membership/assignment checks remain mandatory.
 
 Authentication has three explicit modes. `pilot` retains the controlled local
 OTP workflow, `firebase` accepts only a Firebase Phone Authentication ID token,
@@ -145,7 +161,7 @@ Every login and request rechecks active Fleet state. The client can select only
 memberships returned after verification, so a supplied role or company is not
 an authorization input. See [ADR 0011](adr/0011-firebase-phone-authentication.md).
 
-The controlled staging profile requires Firebase mode, explicit HTTPS web/CORS
+The optional Firebase-specific staging profile requires Firebase mode, explicit HTTPS web/CORS
 and host boundaries, secure cookies, and an independent Fleet JWT signing key.
 Its Android artifact reuses the `.pilot` package and protected Pilot signer but
 disables mutable Pilot server overrides and Pilot self-update behavior. An
@@ -177,7 +193,8 @@ token to localStorage.
 
 ## Phase 4 driver and sync boundary
 
-The driver client captures exactly four event types. It stores an immutable
+The driver client captures operational events, capability-aware meter captures
+and the existing maintenance proof workflow described below. It stores an immutable
 assignment snapshot and client event UUID in a local Drift queue before any
 network call. Sync uploads required private evidence first, submits the event
 envelope second, and keeps retryable failures in the queue with bounded delay.
@@ -209,8 +226,9 @@ The web client remains one Next.js application with route-specific workspaces:
 authentication keeps the short-lived access token in React runtime state and
 uses the existing `/api/v1/auth/web-refresh` HttpOnly cookie on reload. The
 backend remains the authorization authority; route guards are convenience
-only. Owner reporting calls the existing report APIs, Supervisor is an
-`INTERNAL / QA REFERENCE`, and Driver QA is a development/pilot-only client
+only. Owner reporting calls the existing report APIs; Supervisor now uses the
+implemented operations/verification boundary below. The earlier PC Role Lab
+label `INTERNAL / QA REFERENCE` is historical. Driver QA is a development/pilot-only client
 behind `NEXT_PUBLIC_ENABLE_DRIVER_QA=true`.
 
 The Driver QA client registers `DevicePlatform.WEB`, obtains the current

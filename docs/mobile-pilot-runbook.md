@@ -1,5 +1,18 @@
 # Fleet Manager Mobile Pilot Runbook
 
+This is the private Windows/Tailscale Pilot runbook, not the cloud or Google
+Play release procedure. Current company builds use `FLEET_AUTH_MODE=company_pin`:
+the Owner registers the person and issues an expiring, single-use activation
+code; the installation then uses the existing PIN/device authentication.
+No SMS or Firebase login is required. The legacy OTP smoke examples below are
+historical test fixtures, not company activation codes.
+
+For Play, follow [the production release and migration guide](google-play-release.md):
+the API is fixed to `https://api.fleetaisystems.com`, Tailscale/manual server
+entry and the private APK updater are disabled, and the distinct production
+package requires a controlled migration. Never uninstall Pilot or clear its
+data while queued UUIDs or photographs remain unsynced.
+
 ## Private Pilot APK releases
 
 Fleet Manager Pilot updates are private sideloaded APKs. They are not Play
@@ -80,7 +93,12 @@ then handed to the normal installer through a temporary content URI. Never
 use a browser download, USB/ADB installation, `file://` URI, or silent install
 as the Pilot update workflow.
 
-## Local Pilot credentials
+## Legacy local Pilot credentials (historical)
+
+The following credentials and three role smoke flows describe the original
+explicit `pilot` OTP test mode and its earlier UI, not the current company-PIN
+or Play acceptance contract. Preserve them only for isolated legacy testing;
+do not switch a working company installation back to this mode.
 
 All roles use phone `9606743463`.
 
@@ -88,9 +106,10 @@ All roles use phone `9606743463`.
 - Supervisor OTP: `222222`
 - Owner OTP: `333333`
 
-These fixed OTPs are local Pilot provider behavior only. Production authentication remains provider/configuration controlled.
+These fixed OTPs are local test-provider behavior only. Production uses
+owner-issued single-use activation and company PIN/device authentication.
 
-## Driver smoke flow
+## Legacy Driver smoke flow
 
 1. Select `DRIVER`, enter the phone, send OTP, and continue with `111111`.
 2. Set the server URL if needed.
@@ -107,7 +126,7 @@ These fixed OTPs are local Pilot provider behavior only. Production authenticati
    Confirm `START DUTY` begins the next sequential session.
 9. Send one emergency both off duty and on duty and confirm the success message.
 
-## Supervisor smoke flow
+## Legacy Supervisor smoke flow
 
 1. Select `SUPERVISOR` and continue with `222222`.
 2. Confirm only assigned sites are shown and open emergencies appear first.
@@ -117,7 +136,7 @@ These fixed OTPs are local Pilot provider behavior only. Production authenticati
 6. Review evidence through `VIEW PHOTO`; diesel without a photo remains reviewable.
 7. Approve, reject, or dispute pending operational records. Rejection/dispute requires a reason.
 
-## Owner smoke flow
+## Legacy Owner smoke flow
 
 1. Select `OWNER` and continue with `333333`.
 2. Review TODAY cards and ATTENTION cards.
@@ -137,7 +156,7 @@ These fixed OTPs are local Pilot provider behavior only. Production authenticati
 - Camera/gallery flows require Android permission and a real device/emulator image source.
 - Local HTTP remains available only for explicit Pilot API testing, but the
   in-app updater accepts only the private Tailscale HTTPS origin.
-- The final APK was built with `flutter build apk --flavor pilot --release --build-name=1.0.0 --build-number=1 --dart-define=FLEET_PILOT=true`.
+- Historical build-1 record, not the current release command: `flutter build apk --flavor pilot --release --build-name=1.0.0 --build-number=1 --dart-define=FLEET_PILOT=true`.
 - The app uses the existing backend authorization and report calculations; it does not calculate OT, distance, verification, or tenant access independently.
 
 ## Build a Pilot APK

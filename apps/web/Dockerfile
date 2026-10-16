@@ -1,4 +1,8 @@
 # syntax=docker/dockerfile:1.7
+# Optional local verification target: native Docker-filtered context, not runtime.
+FROM scratch AS context-audit
+COPY . /
+
 FROM node:24.9.0-alpine3.22 AS dependencies
 WORKDIR /app
 COPY apps/web/package.json apps/web/package-lock.json ./

@@ -3,6 +3,9 @@
 - Status: Accepted for production preparation
 - Date: 2026-10-16
 
+Delivery mechanics are extended by [ADR 0019](0019-operations-only-deployment-bundles.md):
+approved application images plus a small operations bundle, not a VPS Git checkout.
+
 ## Context
 
 The controlled Windows/Tailscale Pilot must remain usable while Fleet AI

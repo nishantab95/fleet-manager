@@ -75,12 +75,32 @@ backup, pulls the prior images, restarts API/web/marketing, and reruns health
 checks. PostgreSQL and evidence volumes are not replaced, and the script
 reports `DATABASE_DOWNGRADE_ATTEMPTED=NO`.
 
-This command rolls back application images only. It retains the currently
-checked-out Compose, Caddy, deployment scripts and secret configuration. For a
-configuration regression, review the corresponding versioned configuration
-diff and restore it deliberately together with compatible images before
-running the health gates. Do not assume an image rollback reverses firewall,
-schema, secret, or routing changes.
+This command rolls back application images only. It retains the active bundle's
+Compose, Caddy, deployment scripts and secret configuration; automatic failure
+rollback likewise uses the candidate configuration. For a configuration
+regression, review the previous retained bundle's `release.sha`, manifest and
+configuration diff, and run the explicitly approved image rollback **from that
+previous bundle**, for example:
+
+```bash
+cd /opt/fleet-ai/releases/<reviewed-previous-40-character-SHA>
+bash scripts/production/rollback.sh <reviewed-previous-40-character-SHA>
+```
+
+The same data-service hash gate and backup still apply. After successful health
+checks, the operator must separately reconcile the stable `repository` symlink
+to that verified existing bundle, while holding the deployment lock and checking
+the current state has not changed. Direct rollback does not switch the pointer.
+Do not improvise an overwrite of a real directory, delete a retained bundle or
+reuse an unverified partial extraction. Do not assume image/configuration
+rollback reverses firewall, schema, secrets or data-service maintenance.
+
+The SSH receiver holds the shared deployment lock across deployment and atomic
+bundle activation. Failed uploads/extraction/deployments retain incoming and
+release paths and leave the old pointer unchanged. A failure after state commit
+but before pointer activation requires reconciliation of state, actual images
+and bundle identity; retrying the same workflow refuses already-published image
+tags or existing release directories rather than overwriting them.
 
 If the old image is not compatible with the migrated schema, keep the new image
 offline or in maintenance and follow the data-restore incident procedure. Do
@@ -129,8 +149,16 @@ one-command deployment action.
 ## Backup retention and disaster recovery
 
 Database and evidence artifacts are independent but form one consistency
-generation through `manifest.txt`. Restic encrypts and stores that generation
-off-host before local rotation is allowed. Marketing lead PII is a third data
+generation through `manifest.txt`. Its `image_tag` identifies the running image
+being backed up; `source_commit` identifies the operations bundle executing the
+backup (which can be the candidate bundle before migration), not necessarily
+that running image. Restic encrypts and stores that generation
+off-host before any separately approved local retirement is considered. Releases
+and timers never delete backup generations. Retain at least two verified local
+recovery points and obtain explicit approval after offsite restore verification
+before retiring an exact older generation; the legacy-named
+`prune-local-backups.sh` only reports candidates. See
+[manual maintenance](operations/local-maintenance.md). Marketing lead PII is a third data
 class and requires its own encrypted backup/retention policy. Caddy certificates
 and image layers are reproducible; environment, JWT, MinIO, and Restic secret
 recovery must come from the owner-controlled secret store, not from Git.

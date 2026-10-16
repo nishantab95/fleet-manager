@@ -1,15 +1,20 @@
 # Owned-Tipper Pilot Runbook
 
-This runbook is for a controlled pilot. Never place real passwords, OTPs,
-database credentials, signing keys, or object-storage keys in this document or
-in the repository.
+This runbook is for a controlled Windows/local pilot, not the Ubuntu cloud
+deployment. Current company authentication is `company_pin`; legacy OTP
+testing below is optional and non-production only. Use the
+[cloud deployment guide](production-deployment.md) and
+[Play release/migration guide](google-play-release.md) for production.
+Never place real activation codes, PINs, device credentials, passwords, OTPs,
+database credentials, signing keys, or object-storage keys in this document,
+logs, or the repository.
 
 ## Start and stop
 
 From the repository root:
 
 ```powershell
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 # Fill local/test values; use secret management for pilot values.
 .\scripts\bootstrap.ps1
 .\scripts\dev.ps1
@@ -31,8 +36,8 @@ docker compose logs --tail 100 postgres minio
 
 `/health` is liveness. `/ready` checks PostgreSQL and returns `503` when the
 API should not receive traffic. The API returns a request ID and structured
-JSON logs; logs must not contain OTPs, JWTs, refresh tokens, or signed object
-URLs.
+JSON logs; logs must not contain activation codes, PINs, device credentials,
+OTPs, JWTs, refresh tokens, or signed object URLs.
 
 Local Compose publishes MinIO's S3 API on `http://localhost:19000` and its
 console on `http://localhost:19001` by default. These host ports intentionally
@@ -101,7 +106,10 @@ an isolated evidence directory. Validate the dump with container-matched
 3. Create the site and owned tipper.
 4. Grant the supervisor access to that site.
 5. Create an effective-dated assignment.
-6. Sign in as the driver and confirm the active assignment.
+6. In company-PIN mode, have the Owner issue a fresh single-use activation code
+   for the existing person; activate the installation and configure the
+   existing PIN/device authentication. Sign in as the driver and confirm the
+   active assignment. Do not create replacement People to migrate a device.
 7. Sign in as the supervisor and confirm only the granted site is available.
 8. Sign in as the owner and confirm dashboard, reports, exceptions, closure,
    and Excel export.
@@ -127,18 +135,19 @@ URL.
 
 ## If authentication fails
 
-OTP delivery is provider-dependent and development OTP is never a production
-fallback. Verify the phone/membership is active, wait for the resend cooldown,
-and inspect the generic API error with its request ID. Do not ask a driver to
-send an OTP through chat or record it in logs.
+For `company_pin`, verify the existing person, company membership and device
+status. An expired, consumed or replaced activation code requires a fresh
+Owner-issued code; never reuse a shared code or bypass lockout. Use the
+existing Owner reset/reactivation workflow when device credentials are lost
+or revoked, preserving the same person and operational history. Do not clear
+the app's offline database or photographs. Share only the generic error
+category/request ID with support, never activation codes, PINs or credentials.
 
-For the one-tipper internal pilot, an explicitly enabled development/test OTP
-provider is acceptable only on the controlled local test network. Production
-and public deployments must use a real provider and remain fail-closed when it
-is unavailable. Do not expose plaintext HTTP authentication traffic to the
-public Internet; HTTPS/TLS is required before broader rollout. A later manual
-pilot test should use an emulator/ADB reverse or another controlled local
-connection rather than public exposure.
+Legacy OTP testing is separate: delivery is provider-dependent, resend
+cooldowns apply, and development/test OTP is permitted only on a controlled
+local test network. It is never a production fallback. Production uses
+company-PIN activation, not SMS. Do not expose plaintext HTTP authentication
+traffic to the public Internet; HTTPS/TLS is required before broader rollout.
 
 Evidence uploads use MIME and magic-byte validation, a size limit, generated
 private object keys, private MinIO/S3 storage, and authorization checks. Malware

@@ -121,8 +121,8 @@ collisions.
    company/membership foreign key prevents a cross-tenant session row.
 9. Refresh rotation stores only hashes. Reuse of a previous refresh hash
    revokes the complete session family.
-- A company activation code is membership-bound, hashed, expires after 24
-    hours, has bounded attempts, and is consumed once. Regeneration invalidates
+- A company activation code is membership-bound, hashed, expires after its
+    configured TTL (24 hours by default), has bounded attempts, and is consumed once. Regeneration invalidates
     all earlier codes for that person in the company. A company PIN credential
     stores no recoverable PIN or device secret; only one unrevoked credential
     may exist per company/User. Owner reset revokes every company session and
@@ -183,10 +183,14 @@ append-only and requires an owner reason.
     off-duty teardown or the force-close exception in invariant 43. Neither
     path removes assignments, duty sessions, events, verification history,
     evidence, or report history.
-26. A People invitation creates or reuses the normalized global `User` and
-    creates a tenant-scoped `CompanyMembership` in `INVITED` state. A valid OTP
-    session selection activates that same membership UUID. Existing identities
-    in another company are not renamed or duplicated.
+26. People creation reuses the normalized global `User` without renaming or
+    duplicating an identity in another company. New Owner-authorized memberships
+    are `ACTIVE` in `company_pin`/`firebase` mode, or when the person already
+    has an active membership in that company. Otherwise the legacy `pilot`
+    flow creates `INVITED`, and its valid OTP session selection activates that
+    same membership UUID. Active membership alone is not a credential:
+    company-PIN access still requires Owner-issued activation and the existing
+    device/PIN authentication.
 27. Owner People management is limited to Driver and Supervisor memberships.
     Deactivation is rejected for effective assignments, active Driver duty, or
     remaining Supervisor site access. Records are never hard-deleted.

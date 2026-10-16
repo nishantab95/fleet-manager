@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -56,6 +57,21 @@ def test_database_is_at_the_single_model_complete_head(postgres_engine: Engine) 
     assert script.get_heads() == ["0024_company_pin_auth"]
     assert current == script.get_current_head()
     command.check(config)
+
+
+def test_embedded_migrations_do_not_disable_existing_fleet_or_server_loggers(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loggers = [
+        logging.getLogger(name)
+        for name in ("fleet_api.main", "uvicorn", "uvicorn.error", "uvicorn.access")
+    ]
+    for logger in loggers:
+        monkeypatch.setattr(logger, "disabled", False)
+
+    command.current(_alembic_config(postgres_engine))
+
+    assert all(not logger.disabled for logger in loggers)
 
 
 def _insert_legacy_graph(connection: Connection) -> None:

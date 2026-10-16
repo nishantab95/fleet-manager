@@ -31,9 +31,7 @@ require_command curl
 require_production_files
 bash "$SCRIPT_DIR/validate-config.sh"
 
-install -d -m 0700 "$STATE_DIR"
-exec 9>"$LOCK_FILE"
-flock -n 9 || die "Another production deploy or rollback is already running."
+acquire_deploy_lock
 
 previous_tag="$(state_value FLEET_IMAGE_TAG)"
 if [[ -n "$previous_tag" && ! "$previous_tag" =~ ^[0-9a-f]{40}$ ]]; then

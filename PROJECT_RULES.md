@@ -2,11 +2,20 @@
 
 ## Project Identity
 
-**Project:** Construction Fleet Operations System  
-**Repository:** `D:\Git\fleet maneger`  
+**Project:** Fleet AI Systems — construction fleet operations
+
+**Repository:** `D:\Git\fleet maneger\fleet manager` (confirm with `git rev-parse --show-toplevel`; the parent is not the checkout)
+
 **Branch policy:** Work on the existing `main` branch only. Do not create feature branches unless the owner explicitly changes this rule.
 
 This file is the persistent engineering contract for the project. Read it before making changes.
+
+Use [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md) as concise agent entry points,
+[docs/index.md](docs/index.md) for authoritative guides, and
+[change workflows](docs/development/change-workflows.md) to locate existing
+implementations and tests. Inspect before building: a requested feature may
+already exist. Explicit later owner instructions control the authorized task;
+historical phase plans below are not a request to rebuild completed features.
 
 ---
 
@@ -220,7 +229,7 @@ Do not market or architect this as a guaranteed emergency-response service.
 
 A supervisor may access only permitted sites.
 
-Supervisor functionality will include:
+Implemented Supervisor workflows include:
 
 - review pending trip events
 - approve/reject/dispute trips
@@ -245,7 +254,7 @@ Owner/admin manages:
 - supervisors
 - assignments
 
-Owner reporting will eventually show:
+Implemented Owner reporting includes:
 
 - active tippers
 - approved trips
@@ -265,18 +274,22 @@ Owner reporting will eventually show:
 
 Use a monorepo.
 
-Preferred structure:
+Existing structure (preserve working paths):
 
 ```text
 apps/
   mobile/
   web/
+  marketing/
 services/
   api/
 infra/
+  production/
 docs/
   adr/
 scripts/
+  production/
+  maintenance/
 ```
 
 Use a modular monolith.
@@ -305,7 +318,8 @@ Do not introduce Redis, Celery, Kafka, RabbitMQ, or other infrastructure unless 
 - TypeScript
 - strict TypeScript
 - owner/admin dashboard
-- supervisor web capability may be added later
+- implemented supervisor operations and verification workspace
+- separate public marketing application with no private product imports/proxy
 
 ## Backend
 
@@ -321,7 +335,7 @@ Do not introduce Redis, Celery, Kafka, RabbitMQ, or other infrastructure unless 
 ## Object Storage
 
 - S3-compatible abstraction
-- MinIO acceptable for local development
+- MinIO used locally and privately in the prepared single-VPS deployment
 - production storage must be replaceable by a managed S3-compatible service
 
 ---
@@ -410,7 +424,24 @@ Roles:
 - `SUPERVISOR`
 - `DRIVER`
 
-Design authentication so production phone/OTP authentication can be supported.
+Production selects `FLEET_AUTH_MODE=company_pin`: an Owner registers/manages
+the existing person and issues an expiring, single-use activation code. The
+installation activates and configures the existing PIN/device authentication;
+subsequent access uses secure device credentials and Fleet sessions. Preserve
+expiration/replay prevention, PIN hashing, lockout, device binding, session
+rotation/revocation, authorized memberships and secure handover/reactivation.
+The backend remains authoritative for company, role, device and assignment access.
+
+Do not replace this with SMS OTP or require Firebase Phone Authentication for
+Google Play. Existing optional Firebase/legacy OTP adapters may remain; remove
+dependencies only with proof that every supported mode remains safe. Never
+hardcode reusable activation codes or log PINs, activation codes or credentials.
+
+Google Play uses `https://api.fleetaisystems.com`, no Tailscale/manual server
+address and no private APK sideload updater. Distribution does not define
+authentication. Preserve existing Pilot package/signing identity; the different
+Play package requires the documented controlled migration, not a destructive
+app-data reset or an assumed in-place upgrade.
 
 A secure local-development auth mechanism may exist, but development shortcuts must not be baked into production execution paths.
 
@@ -578,7 +609,7 @@ Use:
 Use:
 
 - component/unit tests for critical logic
-- E2E tests later for key flows
+- existing Playwright E2E tests for key flows; fixtures do not prove real-device/live behavior
 
 Every phase ends by running relevant tests.
 
@@ -635,7 +666,11 @@ Maintain GitHub Actions capable of running:
 - analyze
 - tests
 
-Android APK generation can be added later.
+Private Pilot APK and production AAB workflows already exist. Preserve their
+separate package/signing/update contracts. A push to `main` verifies code only;
+production requires explicit manual dispatch, a verified full commit SHA and
+protected-environment approval. Play publication is separately approved.
+Never push, deploy, change DNS or publish merely because local tests pass.
 
 ---
 
@@ -662,6 +697,10 @@ Important ADR subjects include:
 - tenant separation
 
 Documentation must explain decisions and invariants, not merely list files.
+Keep one authoritative guide per subject and link instead of copying runbooks.
+Update behavior/API/schema docs and tests with code; add an ADR only for a
+meaningful architectural decision. Retain historical evidence with explicit
+scope/supersession and update the ADR/documentation indexes.
 
 ---
 
@@ -671,7 +710,7 @@ Primary development environment is Windows.
 
 Repository path:
 
-`D:\Git\fleet maneger`
+`D:\Git\fleet maneger\fleet manager`
 
 Because the path contains a space, scripts must quote paths correctly.
 
@@ -684,6 +723,14 @@ Prefer PowerShell support:
 Do not require Bash as the only local workflow.
 
 Docker may be used for PostgreSQL and local object storage.
+
+Laptop development must remain independent of cloud production and the working
+Windows Pilot. Never copy live secrets/data into the checkout. Treat `.git`,
+environment configuration, signing material, `.runtime`, releases, databases,
+evidence and backups as protected. No broad `git clean`, destructive Git
+maintenance, Docker volume prune or `docker compose down -v`. Cleanup requires
+an explicitly authorized, measured allowlist; it must not run automatically
+from normal development, tests, startup or release scripts.
 
 ---
 
@@ -717,7 +764,9 @@ Every material change must have a concrete reason.
 
 # 28. Phase Discipline
 
-Only implement the phase explicitly requested by the user.
+Only implement explicitly authorized work. If the owner requests several
+phases sequentially, verify each phase and then continue through that requested
+sequence; do not restart already completed work or expand into unrelated phases.
 
 Before implementing a phase:
 
@@ -740,13 +789,18 @@ At the end of every phase:
 7. verify no secrets were added
 8. report failures honestly
 9. list intentional technical debt
-10. stop
+10. stop at the authorized boundary or report a specific blocking condition
 
-Do not automatically continue to the next phase.
+Do not automatically continue into an unrequested phase. When verification is
+unaffected, retained evidence may be referenced with its revision/date instead
+of repeating expensive successful builds; never label it as a fresh test run.
 
 ---
 
-# 29. Current Phase Sequence
+# 29. Historical Foundation Phase Sequence
+
+This original plan is retained for context. Implemented capabilities are in
+README/architecture and the current source; numbering is not the current task.
 
 1. Phase 0 — foundation/bootstrap
 2. Phase 1 — core domain + database
@@ -765,7 +819,7 @@ scope until the core field workflow is proven.
 
 ---
 
-# 30. Phase 0 Scope
+# 30. Historical Phase 0 Scope
 
 Phase 0 is foundation/bootstrap only.
 
@@ -820,7 +874,8 @@ If any required item cannot be verified, phase status is `PARTIAL` or `FAIL`, no
 
 # 32. Required Completion Report
 
-Every Codex phase completion response must include:
+Every engineering handover (Codex or Claude Code) must include, concisely or
+through a linked consolidated report:
 
 1. `PHASE STATUS: PASS / PARTIAL / FAIL`
 2. What was inspected first
@@ -835,6 +890,6 @@ Every Codex phase completion response must include:
 11. Known limitations or technical debt
 12. Blockers
 13. Recommended next phase
-14. Confirmation that no later phase was started
+14. Confirmation that no unauthorized phase or live action was started
 
 Never claim success without executing the relevant verification commands.

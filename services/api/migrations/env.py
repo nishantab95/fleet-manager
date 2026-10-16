@@ -9,7 +9,7 @@ from fleet_api.db.base import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Keep the checked-in Alembic default useful for local development, while
 # allowing CI and isolated test databases to select their URL explicitly.

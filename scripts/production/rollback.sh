@@ -15,9 +15,7 @@ require_command flock
 require_production_files
 bash "$SCRIPT_DIR/validate-config.sh"
 
-install -d -m 0700 "$STATE_DIR"
-exec 9>"$LOCK_FILE"
-flock -n 9 || die "Another production deploy or rollback is already running."
+acquire_deploy_lock
 
 current_tag="$(current_image_tag)"
 export FLEET_IMAGE_TAG="$current_tag"
