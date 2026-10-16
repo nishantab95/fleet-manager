@@ -257,6 +257,15 @@ unrelated later feature phase was started.
 ## Git handover
 
 Base: `e7a19e61be0e91065ebe55962b8eced8f5819267` on `main`.
+
+Verified implementation commit:
+`789dd878ec7dc5880899f520f24246463983d81c` — 94 files, including the
+preserved earlier work and two history-preserving ADR renames. The working tree
+was clean immediately after that commit; only this report is changed by the
+metadata follow-up. No remote push is included.
+
 All listed local checks are complete; externally blocked gates remain above.
-The verified implementation revision is recorded in the report-only metadata
-follow-up after creating the implementation commit. No remote push is included.
+The follow-up does not alter tested application or deployment code. Obtain its
+exact final handover SHA with `git rev-parse HEAD`; the final user-facing handover
+also records it. Remote CI has not run for either new commit and remains a
+mandatory gate before any approved release.
