@@ -1,8 +1,12 @@
-# ADR 0005: Site-Scoped Supervisor Verification
+# ADR 0017: Site-Scoped Supervisor Verification
 
 ## Status
 
 Accepted for Phase 5.
+
+Renumbered from the duplicate ADR 0005 on 2026-10-16; the decision is unchanged.
+Git first records the original document on 2026-09-22. See the
+[ADR inventory](README.md) for the identifier mapping.
 
 ## Context
 

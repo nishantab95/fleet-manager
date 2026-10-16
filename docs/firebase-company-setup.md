@@ -1,5 +1,13 @@
 # Firebase company release setup
 
+Historical optional Firebase release path. This is not the current company
+production or Google Play onboarding process. The approved release uses
+`FLEET_AUTH_MODE=company_pin`, owner-issued activation codes, and existing
+PIN/device authentication without SMS. Preserve this guide for explicit legacy
+Firebase work only; follow [the Google Play guide](google-play-release.md) for
+the current release. Do not run its publication commands as part of cloud
+production preparation.
+
 These steps switch authentication and publish a company-facing APK without changing the installed Pilot package ID or its permanent signing certificate. Secrets stay outside Git.
 
 1. In Firebase Console, open the company project and enable **Authentication > Sign-in method > Phone**.

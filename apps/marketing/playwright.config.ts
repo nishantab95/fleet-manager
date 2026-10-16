@@ -18,7 +18,7 @@ export default defineConfig({
   webServer:
     process.env.PLAYWRIGHT_START_MARKETING === "1"
       ? {
-          command: "npm run dev",
+          command: process.env.PLAYWRIGHT_SERVER_COMMAND ?? "npm run dev",
           url: `${baseURL}/health`,
           reuseExistingServer: !process.env.CI,
         }

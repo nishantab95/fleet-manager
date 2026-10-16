@@ -1,5 +1,12 @@
 # Firebase staging and real-device OTP runbook
 
+Optional historical Firebase test path. Current cloud and Google Play release
+acceptance uses `company_pin` owner-issued activation and device authentication;
+this runbook's Firebase/SMS setup is not required. Its original migration and
+release snapshots describe that earlier phase, not the current Alembic head.
+Use [the production migration runbook](production-migration-and-rollback.md)
+and [the Google Play guide](google-play-release.md) for current release gates.
+
 ## Scope and stop conditions
 
 This runbook enables controlled Firebase Phone Authentication testing for Fleet

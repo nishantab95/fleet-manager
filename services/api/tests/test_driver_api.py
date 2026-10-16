@@ -215,6 +215,7 @@ def submit_km(
             "object_reference": uploaded.json()["object_reference"],
         },
     )
+    assert isinstance(response, Response)
     return response
 
 
@@ -233,7 +234,7 @@ def submit_hmr(
         files={"file": ("hmr.jpg", b"\xff\xd8\xffhmr", "image/jpeg")},
     )
     assert uploaded.status_code == 200
-    return client.post(
+    response = client.post(
         "/api/v1/driver/events",
         json={
             "client_event_uuid": client_event_uuid,
@@ -246,6 +247,8 @@ def submit_hmr(
             "object_reference": uploaded.json()["object_reference"],
         },
     )
+    assert isinstance(response, Response)
+    return response
 
 
 def test_rented_tracked_asset_keeps_hmr_duty_reporting_and_supervisor_review(

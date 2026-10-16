@@ -1,0 +1,116 @@
+name: Production deploy (manual approval)
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Full 40-character commit SHA from main
+        required: true
+        type: string
+      confirmation:
+        description: Type DEPLOY fleetaisystems.com
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+concurrency:
+  group: fleet-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, publish, and deploy approved commit
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      APPROVED_REF: ${{ inputs.git_ref }}
+      DEPLOY_CONFIRMATION: ${{ inputs.confirmation }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          fetch-depth: 0
+
+      - name: Verify explicit approval and main ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          [[ "$DEPLOY_CONFIRMATION" == "DEPLOY fleetaisystems.com" ]]
+          [[ "$APPROVED_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$checked_out_sha" == "$APPROVED_REF" ]]
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$checked_out_sha" origin/main
+          printf 'DEPLOY_SHA=%s\n' "$checked_out_sha" >>"$GITHUB_ENV"
+
+      - name: Require successful CI for this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$DEPLOY_SHA&status=completed&per_page=20" \
+            --jq '.workflow_runs | map(select(.event == "push" and .head_branch == "main")) | first | .conclusion // "missing"')"
+          [[ "$conclusion" == "success" ]] || {
+            echo "CI for $DEPLOY_SHA is not successful: $conclusion" >&2
+            exit 1
+          }
+
+      - name: Log in to GitHub Container Registry
+        shell: bash
+        run: echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish immutable production images
+        shell: bash
+        run: |
+          set -euo pipefail
+          namespace="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          for component in fleet-api fleet-web fleet-marketing; do
+            inspect_output=""
+            if inspect_output="$(docker manifest inspect "$namespace/$component:$DEPLOY_SHA" 2>&1)"; then
+              echo "Refusing to overwrite existing immutable image tag: $component:$DEPLOY_SHA" >&2
+              exit 1
+            fi
+            if ! grep -Eqi 'manifest unknown|name unknown|not found' <<<"$inspect_output"; then
+              echo "Could not prove that image tag is unused: $component:$DEPLOY_SHA" >&2
+              printf '%s\n' "$inspect_output" >&2
+              exit 1
+            fi
+          done
+          docker build --file services/api/Dockerfile --tag "$namespace/fleet-api:$DEPLOY_SHA" .
+          docker build --file apps/web/Dockerfile --tag "$namespace/fleet-web:$DEPLOY_SHA" .
+          docker build --file apps/marketing/Dockerfile --tag "$namespace/fleet-marketing:$DEPLOY_SHA" .
+          docker push "$namespace/fleet-api:$DEPLOY_SHA"
+          docker push "$namespace/fleet-web:$DEPLOY_SHA"
+          docker push "$namespace/fleet-marketing:$DEPLOY_SHA"
+
+      - name: Configure pinned SSH host identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.OVH_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          install -m 0600 /dev/null "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_PRIVATE_KEY" >"$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" >"$HOME/.ssh/known_hosts"
+
+      - name: Run the VPS backup, migration, health, and rollback-gated deploy
+        shell: bash
+        env:
+          OVH_HOST: ${{ secrets.OVH_HOST }}
+          OVH_PORT: ${{ secrets.OVH_PORT }}
+          OVH_USER: ${{ secrets.OVH_USER }}
+        run: |
+          set -euo pipefail
+          [[ "$OVH_PORT" =~ ^[0-9]+$ ]]
+          remote="cd /opt/fleet-ai/repository && test -z \"\$(git status --porcelain)\" && git fetch --no-tags origin main && git checkout --detach '$DEPLOY_SHA' && bash scripts/production/deploy.sh --image-tag '$DEPLOY_SHA'"
+          ssh -i "$HOME/.ssh/id_ed25519" -p "$OVH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$OVH_USER@$OVH_HOST" "$remote"

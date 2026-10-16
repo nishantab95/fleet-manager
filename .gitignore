@@ -66,3 +66,7 @@ Thumbs.db
 infra/data/
 *.log
 .runtime/
+.tmp/
+.production-smoke.*/
+.pytest-*/
+pytest-local-*/

@@ -17,6 +17,10 @@ export default defineConfig({
   },
   webServer:
     process.env.PLAYWRIGHT_START_WEB === "1"
-      ? { command: "npm run dev", url: baseURL, reuseExistingServer: !process.env.CI }
+      ? {
+          command: process.env.PLAYWRIGHT_SERVER_COMMAND ?? "npm run dev",
+          url: baseURL,
+          reuseExistingServer: !process.env.CI,
+        }
       : undefined,
 });

@@ -1,0 +1,270 @@
+name: fleet-ai-production
+
+x-app-security: &app-security
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  postgres:
+    image: postgres:17.6-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    stop_grace_period: 60s
+    shm_size: 256mb
+    mem_limit: 768m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 768m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  minio-init:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: "no"
+    entrypoint: ["/bin/sh", "/config/init-minio.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      FLEET_S3_BUCKET: ${FLEET_S3_BUCKET:?set FLEET_S3_BUCKET}
+      FLEET_S3_ACCESS_KEY_ID: ${FLEET_S3_ACCESS_KEY_ID:?set FLEET_S3_ACCESS_KEY_ID}
+      FLEET_S3_SECRET_ACCESS_KEY: ${FLEET_S3_SECRET_ACCESS_KEY:?set FLEET_S3_SECRET_ACCESS_KEY}
+    volumes:
+      - ./init-minio.sh:/config/init-minio.sh:ro
+      - ./minio-evidence-policy.json:/config/minio-evidence-policy.json:ro
+    networks:
+      - backend
+    depends_on:
+      minio:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+  api:
+    <<: *app-security
+    image: ${FLEET_IMAGE_REGISTRY:?set FLEET_IMAGE_REGISTRY}/fleet-api:${FLEET_IMAGE_TAG:?set FLEET_IMAGE_TAG}
+    environment:
+      FLEET_ENVIRONMENT: production
+      FLEET_LOG_LEVEL: ${FLEET_LOG_LEVEL:-INFO}
+      FLEET_DATABASE_URL: ${FLEET_DATABASE_URL:?set FLEET_DATABASE_URL}
+      FLEET_CORS_ALLOWED_ORIGINS: https://app.fleetaisystems.com
+      FLEET_ALLOWED_HOSTS: api.fleetaisystems.com,api,127.0.0.1,localhost
+      FLEET_WEB_PUBLIC_BASE_URL: https://app.fleetaisystems.com
+      FLEET_AUTH_MODE: ${FLEET_AUTH_MODE:?set FLEET_AUTH_MODE}
+      FLEET_OTP_PROVIDER: unavailable
+      FLEET_ENABLE_DEVELOPMENT_OTP: "false"
+      FLEET_PHONE_DEFAULT_REGION: ${FLEET_PHONE_DEFAULT_REGION:-}
+      FLEET_JWT_SIGNING_KEY: ${FLEET_JWT_SIGNING_KEY:?set FLEET_JWT_SIGNING_KEY}
+      FLEET_DATABASE_POOL_SIZE: ${FLEET_DATABASE_POOL_SIZE:-5}
+      FLEET_DATABASE_MAX_OVERFLOW: ${FLEET_DATABASE_MAX_OVERFLOW:-2}
+      FLEET_DATABASE_POOL_TIMEOUT_SECONDS: ${FLEET_DATABASE_POOL_TIMEOUT_SECONDS:-10}
+      FLEET_RATE_LIMIT_REQUESTS_PER_MINUTE: ${FLEET_RATE_LIMIT_REQUESTS_PER_MINUTE:-600}
+      FLEET_AUTH_RATE_LIMIT_REQUESTS_PER_MINUTE: ${FLEET_AUTH_RATE_LIMIT_REQUESTS_PER_MINUTE:-60}
+      FLEET_RATE_LIMIT_MAX_CLIENTS: ${FLEET_RATE_LIMIT_MAX_CLIENTS:-10000}
+      FLEET_OBJECT_STORAGE_PROVIDER: s3
+      FLEET_S3_ENDPOINT_URL: http://minio:9000
+      FLEET_S3_REGION: ${FLEET_S3_REGION:-us-east-1}
+      FLEET_S3_BUCKET: ${FLEET_S3_BUCKET:?set FLEET_S3_BUCKET}
+      FLEET_S3_ACCESS_KEY_ID: ${FLEET_S3_ACCESS_KEY_ID:?set FLEET_S3_ACCESS_KEY_ID}
+      FLEET_S3_SECRET_ACCESS_KEY: ${FLEET_S3_SECRET_ACCESS_KEY:?set FLEET_S3_SECRET_ACCESS_KEY}
+      FLEET_EVIDENCE_MAX_BYTES: ${FLEET_EVIDENCE_MAX_BYTES:-5000000}
+      FLEET_EVIDENCE_ALLOWED_MIME_TYPES: image/jpeg,image/png,image/webp
+      FLEET_INTERCOMPANY_RENTALS_ENABLED: "false"
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    mem_limit: 512m
+    cpus: 0.75
+
+  migrate:
+    <<: *app-security
+    image: ${FLEET_IMAGE_REGISTRY:?set FLEET_IMAGE_REGISTRY}/fleet-api:${FLEET_IMAGE_TAG:?set FLEET_IMAGE_TAG}
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      FLEET_ENVIRONMENT: production
+      FLEET_DATABASE_URL: ${FLEET_DATABASE_URL:?set FLEET_DATABASE_URL}
+      FLEET_CORS_ALLOWED_ORIGINS: https://app.fleetaisystems.com
+      FLEET_ALLOWED_HOSTS: api.fleetaisystems.com,api,127.0.0.1,localhost
+      FLEET_WEB_PUBLIC_BASE_URL: https://app.fleetaisystems.com
+      FLEET_AUTH_MODE: ${FLEET_AUTH_MODE:?set FLEET_AUTH_MODE}
+      FLEET_JWT_SIGNING_KEY: ${FLEET_JWT_SIGNING_KEY:?set FLEET_JWT_SIGNING_KEY}
+      FLEET_OBJECT_STORAGE_PROVIDER: s3
+      FLEET_S3_ENDPOINT_URL: http://minio:9000
+      FLEET_S3_BUCKET: ${FLEET_S3_BUCKET:?set FLEET_S3_BUCKET}
+      FLEET_S3_ACCESS_KEY_ID: ${FLEET_S3_ACCESS_KEY_ID:?set FLEET_S3_ACCESS_KEY_ID}
+      FLEET_S3_SECRET_ACCESS_KEY: ${FLEET_S3_SECRET_ACCESS_KEY:?set FLEET_S3_SECRET_ACCESS_KEY}
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    profiles:
+      - tools
+
+  web:
+    <<: *app-security
+    image: ${FLEET_IMAGE_REGISTRY:?set FLEET_IMAGE_REGISTRY}/fleet-web:${FLEET_IMAGE_TAG:?set FLEET_IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      NEXT_PUBLIC_ENABLE_DRIVER_QA: "false"
+      FLEET_API_UPSTREAM_URL: http://api:8000
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/.next/cache:size=64m,mode=1777
+    networks:
+      - backend
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 384m
+    cpus: 0.50
+
+  marketing:
+    <<: *app-security
+    image: ${FLEET_IMAGE_REGISTRY:?set FLEET_IMAGE_REGISTRY}/fleet-marketing:${FLEET_IMAGE_TAG:?set FLEET_IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3001"
+      FLEET_MARKETING_LEAD_DIR: /var/lib/fleet-ai/leads
+    volumes:
+      - ${FLEET_LEAD_DIR:?set FLEET_LEAD_DIR}:/var/lib/fleet-ai/leads
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/.next/cache:size=64m,mode=1777
+    networks:
+      - backend
+    mem_limit: 256m
+    cpus: 0.35
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      FLEET_TLS_EMAIL: ${FLEET_TLS_EMAIL:?set FLEET_TLS_EMAIL}
+      FLEET_CADDY_LOCAL_OPTIONS: ${FLEET_CADDY_LOCAL_OPTIONS:-}
+    ports:
+      - "${FLEET_HTTP_PORT:-80}:80/tcp"
+      - "${FLEET_HTTPS_PORT:-443}:443/tcp"
+      - "${FLEET_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - backend
+    depends_on:
+      web:
+        condition: service_healthy
+      marketing:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: "10"
+
+  backup-tools:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: "no"
+    entrypoint: ["/bin/sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      FLEET_S3_BUCKET: ${FLEET_S3_BUCKET:?set FLEET_S3_BUCKET}
+    volumes:
+      - ${FLEET_BACKUP_DIR:?set FLEET_BACKUP_DIR}:/backups
+    networks:
+      - backend
+    depends_on:
+      minio:
+        condition: service_healthy
+    profiles:
+      - tools
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  minio_data:
+  caddy_data:
+  caddy_config:

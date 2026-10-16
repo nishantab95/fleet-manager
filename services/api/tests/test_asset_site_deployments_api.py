@@ -154,7 +154,7 @@ def remove_deployment(
     plan: dict[str, object] | None = None,
 ) -> Response:
     current = plan or removal_plan(client, asset)
-    return client.request(
+    response = client.request(
         "DELETE",
         f"/api/v1/owner/assets/{asset.id}/deployment",
         json={
@@ -163,6 +163,8 @@ def remove_deployment(
             "expected_duty_status": current["duty_status"],
         },
     )
+    assert isinstance(response, Response)
+    return response
 
 
 def active_assignment(

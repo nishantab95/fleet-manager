@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -17,7 +18,7 @@ final String defaultApiBaseUrl = isPilotBuild
           ? 'http://127.0.0.1:8000'
           : _configuredApiBaseUrl)
     : (_configuredApiBaseUrl.isEmpty
-          ? 'https://api.fleetmanager.example'
+          ? 'https://api.fleetaisystems.com'
           : _configuredApiBaseUrl);
 
 const String sessionExpiredMessage =
@@ -193,7 +194,9 @@ class ApiClient
     String? baseUrl,
     http.Client? client,
     SessionTokensPersistor? persistSession,
-  }) : _baseUrl = (baseUrl ?? defaultApiBaseUrl).replaceFirst(
+    this.requestTimeout = const Duration(seconds: 45),
+  }) : assert(requestTimeout > Duration.zero),
+       _baseUrl = (baseUrl ?? defaultApiBaseUrl).replaceFirst(
          RegExp(r'/$'),
          '',
        ),
@@ -202,6 +205,7 @@ class ApiClient
 
   String _baseUrl;
   final http.Client _client;
+  final Duration requestTimeout;
   final SessionTokensPersistor? _persistSession;
   SessionTokens? _tokens;
   Future<SessionTokens>? _refreshInFlight;
@@ -232,7 +236,7 @@ class ApiClient
 
   Future<bool> testConnection() async {
     try {
-      final response = await _client.get(_uri('/health'));
+      final response = await _request('GET', '/health');
       return response.statusCode >= 200 && response.statusCode < 300;
     } on SocketException {
       return false;
@@ -1111,10 +1115,12 @@ class ApiClient
       throw const ApiException(401, sessionExpiredMessage);
     }
     final mimeType = await evidenceMimeTypeForPath(evidencePath);
+    final abort = Completer<void>();
     final request =
-        http.MultipartRequest(
+        http.AbortableMultipartRequest(
             'POST',
             _uri('/api/v1/driver/evidence?client_event_uuid=$clientEventUuid'),
+            abortTrigger: abort.future,
           )
           ..headers['Authorization'] = 'Bearer $token'
           ..files.add(
@@ -1126,8 +1132,7 @@ class ApiClient
           );
     late final http.Response materialized;
     try {
-      final response = await _client.send(request);
-      materialized = await http.Response.fromStream(response);
+      materialized = await _sendWithTimeout(request, abort);
     } on SocketException catch (error) {
       throw ApiException(503, error.message);
     }
@@ -1216,11 +1221,12 @@ class ApiClient
     }
     final encoded = body == null ? null : jsonEncode(body);
     try {
-      final request = http.Request(method, _uri(path))
-        ..headers.addAll(headers)
-        ..body = encoded ?? '';
-      final streamed = await _client.send(request);
-      final response = await http.Response.fromStream(streamed);
+      final abort = Completer<void>();
+      final request =
+          http.AbortableRequest(method, _uri(path), abortTrigger: abort.future)
+            ..headers.addAll(headers)
+            ..body = encoded ?? '';
+      final response = await _sendWithTimeout(request, abort);
       if (authenticated && response.statusCode == 401) {
         if (retryAfterRefresh) {
           if (_tokens?.accessToken == requestAccessToken) {
@@ -1242,6 +1248,28 @@ class ApiClient
     } on SocketException catch (error) {
       throw ApiException(503, error.message);
     }
+  }
+
+  Future<http.Response> _sendWithTimeout(
+    http.BaseRequest request,
+    Completer<void> abort,
+  ) async {
+    // One deadline includes sending the request and reading the entire body.
+    // Cancellation releases supported transports; the timeout also bounds
+    // custom clients that ignore the abort signal. Never change event UUIDs or
+    // expire authentication after an ambiguous network result.
+    final response = _client.send(request).then(http.Response.fromStream);
+    return response.timeout(
+      requestTimeout,
+      onTimeout: () {
+        abort.complete();
+        throw const ApiException(
+          408,
+          'The server request timed out. Please try again.',
+          code: 'REQUEST_TIMEOUT',
+        );
+      },
+    );
   }
 
   Future<void> _expireSession() async {

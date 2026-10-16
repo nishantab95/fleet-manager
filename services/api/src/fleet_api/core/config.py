@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://fleet:fleet@localhost:5432/fleet"
+    database_pool_size: int = 5
+    database_max_overflow: int = 2
+    database_pool_timeout_seconds: int = 10
+    rate_limit_requests_per_minute: int = 0
+    auth_rate_limit_requests_per_minute: int = 0
+    rate_limit_max_clients: int = 10_000
     cors_allowed_origins: str = "http://localhost:3000"
     allowed_hosts: str = "*"
     web_public_base_url: str = "http://localhost:3000"
@@ -86,6 +92,18 @@ class Settings(BaseSettings):
             raise ValueError("refresh token lifetime must exceed access token lifetime")
         if self.evidence_max_bytes <= 0:
             raise ValueError("evidence_max_bytes must be positive")
+        if self.database_pool_size <= 0:
+            raise ValueError("database_pool_size must be positive")
+        if self.database_max_overflow < 0:
+            raise ValueError("database_max_overflow cannot be negative")
+        if self.database_pool_timeout_seconds <= 0:
+            raise ValueError("database_pool_timeout_seconds must be positive")
+        if self.rate_limit_requests_per_minute < 0:
+            raise ValueError("rate_limit_requests_per_minute cannot be negative")
+        if self.auth_rate_limit_requests_per_minute < 0:
+            raise ValueError("auth_rate_limit_requests_per_minute cannot be negative")
+        if self.rate_limit_max_clients <= 0:
+            raise ValueError("rate_limit_max_clients must be positive")
         if self.event_future_skew_seconds < 0:
             raise ValueError("event_future_skew_seconds cannot be negative")
         if not 1_000_000 <= self.pilot_release_upload_max_bytes <= 1_000_000_000:

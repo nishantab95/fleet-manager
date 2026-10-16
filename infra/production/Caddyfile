@@ -1,0 +1,77 @@
+{
+	admin 127.0.0.1:2019
+	email {$FLEET_TLS_EMAIL}
+	{$FLEET_CADDY_LOCAL_OPTIONS}
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+(fleet_security_headers) {
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+
+(fleet_access_log) {
+	log {
+		output stdout
+		format json
+	}
+}
+
+www.fleetaisystems.com {
+	redir https://fleetaisystems.com{uri} permanent
+}
+
+fleetaisystems.com {
+	encode zstd gzip
+	import fleet_security_headers
+	import fleet_access_log
+
+	@private path /login* /owner* /supervisor* /driver-test* /lab* /api /api/* /admin* /docs* /redoc* /openapi.json /evidence* /internal*
+	respond @private 404
+
+	reverse_proxy marketing:3001 {
+		health_uri /health
+		health_interval 15s
+		health_timeout 3s
+	}
+}
+
+app.fleetaisystems.com {
+	encode zstd gzip
+	import fleet_security_headers
+	import fleet_access_log
+
+	@development_only path /lab* /driver-test*
+	respond @development_only 404
+
+	reverse_proxy web:3000 {
+		health_uri /api/backend/health
+		health_interval 15s
+		health_timeout 3s
+	}
+}
+
+api.fleetaisystems.com {
+	encode zstd gzip
+	import fleet_security_headers
+	import fleet_access_log
+
+	# Owner/admin browser traffic reaches these authenticated routes only through
+	# app.fleetaisystems.com's same-origin server proxy on the private network.
+	@private_admin path /api/v1/admin* /api/v1/owner* /api/v1/reports* /docs* /redoc* /openapi.json
+	respond @private_admin 404
+
+	reverse_proxy api:8000 {
+		health_uri /health
+		health_interval 15s
+		health_timeout 3s
+	}
+}

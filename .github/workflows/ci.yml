@@ -31,21 +31,36 @@ jobs:
     env:
       FLEET_TEST_DATABASE_URL: postgresql+psycopg://fleet:fleet@localhost:5432/fleet_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           enable-cache: true
       - run: uv sync --locked --all-groups
+      - name: Audit locked production dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv export --frozen --no-dev --no-emit-project --format requirements.txt \
+            --no-hashes --output-file "$RUNNER_TEMP/api-requirements.txt"
+          uvx --from pip-audit==2.10.1 pip-audit \
+            --requirement "$RUNNER_TEMP/api-requirements.txt"
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests migrations
       - run: uv run mypy src tests
       - run: uv run alembic upgrade head
       - run: uv run alembic check
-      - run: uv run pytest
+      - run: uv run pytest --cov=fleet_api --cov-report=term-missing --cov-report=xml
+      - run: uv run pytest ../../scripts/test_validate_play_aab.py ../../scripts/test_production_deploy.py ../../scripts/test_mobile_update_contract.py
       - run: uv run alembic upgrade head --sql
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backend-coverage
+          path: services/api/coverage.xml
+          if-no-files-found: error
+          retention-days: 14
 
   web:
     runs-on: ubuntu-latest
@@ -53,17 +68,49 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Production owner browser regressions (API fixtures)
+        run: npm run test:e2e -- e2e/owner-workstation.spec.ts e2e/maintenance.spec.ts
+        env:
+          PLAYWRIGHT_START_WEB: "1"
+          PLAYWRIGHT_SERVER_COMMAND: npm run start
+
+  marketing:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/marketing
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/marketing/package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Production marketing browser regressions
+        run: npm run test:e2e
+        env:
+          PLAYWRIGHT_START_MARKETING: "1"
+          PLAYWRIGHT_SERVER_COMMAND: npm run start
 
   mobile:
     runs-on: ubuntu-latest
@@ -71,8 +118,8 @@ jobs:
       run:
         working-directory: apps/mobile
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
           flutter-version: "3.47.5"
@@ -80,4 +127,52 @@ jobs:
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
-      - run: flutter test
+      - run: flutter test --coverage
+      - run: >-
+          flutter build appbundle --flavor production --debug
+          --dart-define=FLEET_AUTH_MODE=company_pin
+          --dart-define=FLEET_API_BASE_URL=https://api.fleetaisystems.com
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mobile-coverage
+          path: apps/mobile/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
+  production-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate production Compose configuration
+        run: >-
+          docker compose
+          --env-file infra/production/production.env.example
+          --file infra/production/docker-compose.yml
+          config --quiet
+      - name: Validate production shell syntax
+        run: for script in scripts/production/*.sh infra/production/init-minio.sh; do bash -n "$script"; done
+      - name: Build API image
+        run: docker build --file services/api/Dockerfile --tag fleet-api:ci .
+      - name: Build owner and supervisor web image
+        run: docker build --file apps/web/Dockerfile --tag fleet-web:ci .
+      - name: Build marketing image
+        run: docker build --file apps/marketing/Dockerfile --tag fleet-marketing:ci .
+
+  workflow-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Lint GitHub Actions workflows
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo" -w /repo
+          rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -color
+      - name: Scan complete Git history for secrets
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo" -w /repo
+          ghcr.io/gitleaks/gitleaks@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9
+          --no-banner --redact=100 git .

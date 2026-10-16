@@ -1,0 +1,134 @@
+# Production operations, hardening, scaling, and provider migration
+
+## Operating boundary
+
+The initial topology is intentionally one Ubuntu VPS: 2 vCPU, 4 GB RAM, and
+40 GB disk in Singapore. It is sized for two browser users and approximately
+30 Android phones, not for high availability. Only Caddy exposes host ports.
+The API, PostgreSQL, MinIO, browser applications, and Caddy remain replaceable
+containers; persistent state is PostgreSQL, MinIO evidence, marketing leads,
+deployment history, and external secrets.
+
+The provisional service objectives are a 24-hour recovery point and four-hour
+recovery time. They are not accepted objectives until a timed offsite restore
+drill proves them and the Owner signs off. Mobile offline queues reduce the
+impact of a short outage but are not a server backup.
+
+## Ubuntu provisioning and hardening checklist
+
+Perform these on the purchased host only after reviewing the current Ubuntu,
+Docker, OVH, and Restic guidance.
+
+1. Install a supported Ubuntu LTS image and immediately apply all security
+   updates. Enable time synchronisation and `unattended-upgrades`.
+2. Create the unprivileged `fleetdeploy` account. Use a dedicated SSH key,
+   disable password authentication, and disable direct root login only after
+   console/recovery access is proven. Treat Docker-group membership as
+   root-equivalent access.
+3. Install Docker Engine and Compose from Docker's signed Ubuntu repository.
+   Install Git, curl, ca-certificates, OpenSSH, Restic, and basic monitoring
+   tools. Do not install a database or web server on the host.
+4. Configure the OVH network firewall and UFW to allow public TCP 80/443,
+   optional UDP 443, and administrative SSH only from approved source
+   addresses. Explicitly deny public 5432, 9000, 9001, 2019, 3000, 3001, and
+   8000.
+5. Create the paths and ownership documented in
+   `docs/production-deployment.md`. Put secrets only in mode-600 files outside
+   Git. Store the Restic password in a second owner-controlled secret system.
+6. Enable an OVH volume/snapshot only as an additional recovery layer. It does
+   not replace the independently encrypted offsite PostgreSQL/evidence backup.
+7. Set DNS only after internal health, restore, resource, and port-exposure
+   tests pass. Use a low TTL during migration and remove stale records after
+   the acceptance window.
+
+Before enabling production traffic, record `ss -lntup`, UFW status, OVH
+firewall rules, Compose config, image digests, disk encryption/provider
+controls, system time, the successful restore drill, and an external port scan.
+
+## Monitoring and routine checks
+
+The checked-in systemd timers run daily backup/verification and five-minute
+health checks. Docker JSON logs are size-bounded. Send timer failures and disk,
+memory, container restart, TLS, and external health alarms to an owner-approved
+channel before go-live; alert delivery is not configured by this repository.
+
+Review at least weekly:
+
+- backup timer success, offsite snapshot age, and a sample Restic check;
+- disk use by Docker, PostgreSQL, MinIO, logs, and the two local backups;
+- memory pressure/OOM events, CPU/load, container restarts, API p50/p95/p99,
+  HTTP 429/5xx rates, and database pool waits;
+- certificate expiry, firewall exposure, dependency/security findings, and
+  failed authentication/activation/lockout patterns without logging secrets;
+- PostgreSQL and evidence growth compared with the 40 GB envelope.
+
+Run an offsite restore drill at least quarterly and before a provider move:
+
+```bash
+bash scripts/production/verify-offsite-backup.sh <snapshot-id> /var/tmp/fleet-restore-drill
+```
+
+The target must be new and empty. The script restores into that isolated path,
+checks evidence hashes, restores PostgreSQL into a disposable container, and
+never targets live data.
+
+## Incident response
+
+For suspected compromise or data loss:
+
+1. Record the incident time, reporter, affected host/image digests, and current
+   health without printing secrets or evidence.
+2. Restrict traffic at the firewall or stop application writes if continued
+   operation could worsen loss. Preserve database/evidence and logs.
+3. Rotate only credentials known or reasonably suspected to be exposed. Do not
+   replace Android signing keys as an incident reflex; follow Google/Pilot key
+   recovery rules.
+4. Take a new forensic backup to a separate generation. Never overwrite the
+   recovery point selected for investigation.
+5. Restore and verify in an isolated environment, reconcile company,
+   membership, assignment, event UUID, device, and evidence counts, then obtain
+   explicit approval before any live restore.
+6. Use application rollback only for a backward-compatible release. Never run
+   an improvised Alembic downgrade.
+7. Preserve a timeline and determine contractual/regulatory notification duties
+   with qualified counsel. Close the incident only after credentials,
+   monitoring, backup integrity, and the root cause are addressed.
+
+## Capacity and scale triggers
+
+Container memory ceilings are 768 MiB each for PostgreSQL and MinIO, 512 MiB
+for API, 384 MiB for the authenticated web app, 256 MiB for marketing, and
+128 MiB for Caddy. These are safety ceilings, not reservations. The API pool is
+five plus two overflow connections and Uvicorn runs one worker so the in-memory
+rate limiter is consistent.
+
+Upgrade the VPS before sustained memory exceeds 70%, disk exceeds 75%, swap or
+OOM events occur, load exceeds 1.5 for 15 minutes, API p95 exceeds one second,
+or backup/restore no longer fits the approved objective. Moving to multiple API
+processes/hosts requires a shared rate-limit store and an explicit session/load
+balancing design. Move PostgreSQL or evidence storage only after testing backup,
+network, IAM, latency, and cost consequences.
+
+## Provider migration
+
+There is no OVH-specific runtime dependency. To move providers:
+
+1. Provision and harden a new supported Ubuntu host with equivalent or greater
+   resources; do not reuse secrets blindly.
+2. Pull the exact recorded image digests and restore the latest independently
+   verified Restic generation into isolated PostgreSQL and S3-compatible
+   storage.
+3. Reconcile migrations, row/object counts, hashes, authentication/device
+   records, and representative tenant-scoped reads.
+4. Lower DNS TTL, schedule a write freeze, drain mobile queues, take and offsite
+   a final backup, restore the matching database/evidence generation, and run
+   health/security acceptance.
+5. Switch DNS, monitor, and keep the old server read-only and recoverable until
+   acceptance closes. Then revoke old credentials and follow the approved data
+   disposal process.
+
+Recurring cost categories are the VPS, independent backup storage/requests,
+domain/DNS, monitoring/alert delivery, Google Play developer account, and any
+future support or managed services. Firebase SMS is not a production cost for
+this release. Confirm current provider prices before purchase; none were
+purchased or configured by this work.

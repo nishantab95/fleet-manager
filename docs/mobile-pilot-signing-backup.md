@@ -6,7 +6,14 @@ The single permanent Fleet Pilot signing keystore is:
 
 Key alias: `fleet-pilot`
 
-Signing certificate SHA-256: `9f613076ce4c0dcaf4b0e713aa021e0f9b4f08eb86e3467f651e4e51d47b6520`
+Signing certificate SHA-1: `11d4b4dc04f0d3068903e1c333c1894e7ae47a74`
+
+Signing certificate SHA-256: `fd25115e20ac18a8a7cda91b9f4d5f6153f54b4d79c751b5005a3ac734cc3c29`
+
+These fingerprints were re-audited from the configured permanent Pilot
+keystore on 2026-10-16 and match the existing APK validator. The previous
+SHA-256 printed in this document was stale documentation; no keystore or
+certificate was changed.
 
 Preserve this exact keystore for every future Pilot APK. Do not regenerate it,
 commit it, send it to GitHub, or copy it to the Fleet server. Keep its password

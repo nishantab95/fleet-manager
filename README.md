@@ -4,12 +4,21 @@ Fleet AI Systems is the public product brand for this construction fleet
 operations platform. The canonical public website is
 `https://fleetaisystems.com`.
 
+Start with the [documentation index](docs/index.md) for current production,
+development, Pilot, and historical guides, and the
+[ADR inventory](docs/adr/README.md) for architectural decisions and supersession.
+
 The public marketing site is the isolated `apps/marketing` deployment at `/`,
-`/features`, `/how-it-works`, `/solutions`, `/pricing`, and `/contact`.
+`/features`, `/how-it-works`, `/solutions`, `/pricing`, `/contact`, and
+`/privacy`.
 `apps/web` remains the private Owner/Supervisor operations client and is never
-routed through the public website proxy. See
+routed through the public marketing hostname. The prepared cloud topology
+publishes it separately at `https://app.fleetaisystems.com`, with its
+same-origin API proxy. See
+[`docs/production-deployment.md`](docs/production-deployment.md) for the Ubuntu
+OVHcloud Docker/Caddy topology and
 [`docs/public-website-deployment.md`](docs/public-website-deployment.md) for the
-Windows/Caddy topology, go-live gates, and website-only update process.
+preserved Windows/Caddy Pilot website path.
 
 Internal identifiers such as package names, Android application IDs, API route
 prefixes, database names, environment variables, service identifiers, launcher
@@ -31,6 +40,35 @@ keeps its existing filename, checks the remote `/health` and `/ready` gates,
 starts only the local Next.js web app, waits for its same-origin API proxy, and
 opens the Fleet AI Systems Owner workspace. It does not start a local API or
 database.
+
+## Prepared cloud production
+
+Production is prepared as a separate Linux Docker deployment under
+`infra/production`. It runs FastAPI, PostgreSQL, private MinIO evidence storage,
+the Owner/Supervisor web application, the marketing site, and Caddy. Only Caddy
+publishes host ports. Cloud clients do not require Tailscale; the existing
+Tailscale Pilot path remains available during migration.
+
+A push to `main` runs CI and never deploys. Production changes require a manual
+`production-deploy.yml` dispatch for a full `main` commit SHA, the exact
+confirmation phrase, successful CI, and approval through the protected GitHub
+`production` Environment. The VPS command is backup-, restore-verification-,
+migration-, health-, and rollback-gated.
+
+The Google Play path is separately manual and protected. It retains production
+package `com.fleetmanager.fleet_manager_mobile`, uses a separate externally
+supplied Play upload identity, connects to
+`https://api.fleetaisystems.com`, uses the existing owner-issued activation and
+device PIN flow (`company_pin`), and cannot enable the Pilot APK sideload
+updater. Existing `.pilot` installations require the controlled side-by-side
+migration in [`docs/google-play-release.md`](docs/google-play-release.md).
+
+No live infrastructure or Play release is created by the checked-in setup.
+Current blockers and validation evidence are tracked in
+[`docs/production-readiness-report.md`](docs/production-readiness-report.md).
+Host hardening, monitoring, scaling, incident response, provider migration, and
+data-handling reviews are in [`docs/production-operations.md`](docs/production-operations.md)
+and [`docs/production-data-handling.md`](docs/production-data-handling.md).
 
 Production foundation for a civil-construction company's fleet operations.
 
@@ -147,4 +185,7 @@ cookies, durable mobile sync diagnostics, cold-restart/retry tests, evidence
 content validation, backup/restore tooling, and pilot documentation. It does
 not add new equipment or change the Driver event/offline contract. See
 `docs/phase7-e2e-matrix.md`, `docs/pilot-runbook.md`,
-`docs/pilot-checklist.md`, and `docs/firebase-staging-runbook.md`.
+`docs/pilot-checklist.md`, and `docs/firebase-staging-runbook.md`. Cloud
+production deliberately uses the existing owner-issued activation and device
+PIN flow (`FLEET_AUTH_MODE=company_pin`); the Firebase runbook remains an
+optional legacy/staging path and is not a Google Play prerequisite.

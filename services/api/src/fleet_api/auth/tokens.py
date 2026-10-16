@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
-from typing import Any, cast
+from typing import Any
 from uuid import UUID, uuid4
 
 import jwt
@@ -48,7 +48,7 @@ def _decode(token: str, settings: Settings) -> dict[str, Any]:
         )
     except (PyJWTError, AuthConfigurationError) as exc:
         raise InvalidTokenError("token is invalid") from exc
-    return cast(dict[str, Any], payload)
+    return payload
 
 
 def issue_pre_session(

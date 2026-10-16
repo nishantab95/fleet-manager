@@ -16,7 +16,7 @@ void main() {
     if (isPilotBuild) {
       expect(defaultApiBaseUrl, 'http://127.0.0.1:8000');
     } else {
-      expect(defaultApiBaseUrl, 'https://api.fleetmanager.example');
+      expect(defaultApiBaseUrl, 'https://api.fleetaisystems.com');
       expect(defaultApiBaseUrl, isNot('http://10.0.2.2:8000'));
     }
   });

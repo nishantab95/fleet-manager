@@ -1,5 +1,12 @@
 # Firebase phone authentication setup
 
+This is an optional compatibility guide. The current cloud/Google Play release
+uses owner-issued activation and device authentication with
+`FLEET_AUTH_MODE=company_pin`; Firebase Phone Authentication, SMS, and Firebase
+credentials are not release prerequisites. Use
+[the production deployment guide](production-deployment.md) and
+[the Google Play guide](google-play-release.md) for that release.
+
 This guide describes the Firebase authentication architecture and base setup.
 For the controlled staging build, exact configuration placement, real-device
 test matrix, and rollback procedure, use

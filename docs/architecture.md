@@ -7,6 +7,22 @@ deployment with explicit domain services, SQLAlchemy models, and one
 PostgreSQL database. Mobile and web clients remain separate shells and do not
 contain Phase 1 business workflows.
 
+## Cloud production deployment boundary
+
+The prepared cloud deployment keeps the modular monolith on one Ubuntu VPS.
+Caddy is the sole public listener and routes three fixed HTTPS origins: the
+marketing site at `fleetaisystems.com`, the authenticated browser client at
+`app.fleetaisystems.com`, and the mobile API at `api.fleetaisystems.com`.
+PostgreSQL, MinIO/evidence, API container ports, and Next.js container ports are
+not published. Owner/admin/report API families are refused on the public API
+hostname and are reached by browser users through the web application's
+same-origin server proxy on the Docker network.
+
+Production images are immutable full-commit tags. Deployment is manual and
+GitHub-Environment-approved, with backup/restore verification, forward-only
+Alembic migration, health gates, and prior-image rollback. The local Windows
+Compose and Tailscale Pilot are independent compatibility paths. See ADR 0015.
+
 ## Public marketing deployment boundary
 
 `apps/marketing` is a separate Next.js build and runtime containing only the
@@ -27,7 +43,8 @@ object storage, evidence, and mobile distribution are not restarted or routed.
 Public leads are individual JSON records in an ACL-restricted directory outside
 the repository and Fleet data stores. This deliberately small write-only store
 keeps anonymous form traffic outside the authenticated product boundary. See
-`docs/public-website-deployment.md` and ADR 0012.
+`docs/public-website-deployment.md` and
+[ADR 0018](adr/0018-public-brand-and-marketing-site.md).
 
 ## Phase 1 and Phase 2 backend boundaries
 

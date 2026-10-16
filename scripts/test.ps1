@@ -49,6 +49,12 @@ if ($LASTEXITCODE -eq 0) {
         Invoke-RequiredCheck "Backend formatter" { & $projectPython -m ruff format --check src tests migrations }
         Invoke-RequiredCheck "Backend mypy" { & $projectPython -m mypy src tests }
         Invoke-RequiredCheck "Backend pytest" { & $projectPython -m pytest -p no:cacheprovider }
+        Invoke-RequiredCheck "Production release helper tests" {
+            & $projectPython -m pytest -p no:cacheprovider `
+                (Join-Path $repoRoot "scripts\test_validate_play_aab.py") `
+                (Join-Path $repoRoot "scripts\test_production_deploy.py") `
+                (Join-Path $repoRoot "scripts\test_mobile_update_contract.py")
+        }
         Invoke-RequiredCheck "Alembic upgrade" { & $projectPython -m alembic upgrade head }
         Invoke-RequiredCheck "Alembic schema check" { & $projectPython -m alembic check }
         Invoke-RequiredCheck "Alembic offline migration check" { & $projectPython -m alembic upgrade head --sql }
@@ -96,6 +102,12 @@ if ($flutter) {
 }
 
 Invoke-RequiredCheck "Docker Compose config" { docker compose config --quiet }
+Invoke-RequiredCheck "Production Docker Compose config" {
+    docker compose `
+        --env-file (Join-Path $repoRoot "infra\production\production.env.example") `
+        --file (Join-Path $repoRoot "infra\production\docker-compose.yml") `
+        config --quiet
+}
 
 if ($failures.Count -gt 0) {
     throw "Required checks failed: $($failures -join ', ')"

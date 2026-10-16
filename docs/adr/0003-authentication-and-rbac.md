@@ -4,6 +4,12 @@
 
 Accepted for Phase 2.
 
+The OTP-provider choice is historical. The current production release uses
+[ADR 0012's owner-issued activation](0012-company-managed-activation-pin.md)
+and [ADR 0013's device authentication](0013-device-auth-and-workspaces.md).
+The session rotation, revocation, tenant isolation, and RBAC decisions below
+remain applicable; an SMS provider is not a production prerequisite.
+
 ## Context
 
 The Phase 1 domain model has users and company memberships but no authenticated

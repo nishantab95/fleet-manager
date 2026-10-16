@@ -1,0 +1,16 @@
+[Unit]
+Description=Fleet AI Systems independent database and evidence backup verification
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=fleetdeploy
+Group=fleetdeploy
+Environment=FLEET_PRODUCTION_ENV_FILE=/etc/fleet-ai/production.env
+Environment=FLEET_PRODUCTION_STATE_DIR=/var/lib/fleet-ai/deploy
+WorkingDirectory=/opt/fleet-ai/repository
+ExecStart=/usr/bin/bash /opt/fleet-ai/repository/scripts/production/backup-and-verify.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

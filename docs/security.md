@@ -1,5 +1,25 @@
 # Security Baseline
 
+## Cloud production network and release boundary
+
+The prepared Ubuntu production stack publishes only Caddy on TCP 80/443 and
+UDP 443. PostgreSQL, MinIO, its console, FastAPI, and Next.js have no host port
+mapping. Caddy refuses API documentation plus legacy admin, Owner, and report
+route families on `api.fleetaisystems.com`; authenticated browser access uses
+the app hostname's server-side proxy. Backend RBAC and tenant isolation remain
+authoritative for every permitted route.
+
+Production deployment and Google Play release workflows are manual dispatches
+bound to protected GitHub Environments. They require an exact confirmation,
+full `main` commit SHA, and successful push CI for that SHA. A push alone cannot
+deploy. Secrets remain in GitHub Environment secrets or root-controlled VPS
+files, and generated images are addressed by immutable commit tags.
+
+The Play AAB uses the production package and a separate upload signer. Build
+validation refuses the Pilot certificate and
+`android.permission.REQUEST_INSTALL_PACKAGES`. The permanent Pilot package,
+signer, and private updater remain isolated. See ADRs 0015 and 0016.
+
 ## Private mobile release publisher
 
 The Pilot release upload route is reachable only through the existing private
@@ -43,7 +63,11 @@ object on metadata-flush failure when the provider supports deletion. Malware
 scanning, content inspection, and production secret management remain deferred
 controls.
 
-## Phase 2 authentication controls
+## Historical/optional OTP authentication controls
+
+These controls describe the retained Pilot/optional OTP path. The production
+release uses the company-managed activation controls below; it does not require
+an SMS delivery provider.
 
 - Phone numbers are normalized to E.164 using the configured default region
   only when needed. Invalid input is rejected before a challenge is created.
@@ -67,12 +91,13 @@ controls.
 - HTTP responses use generic authentication failures and do not expose OTPs,
   token values, or raw provider/configuration details.
 
-## Phase 3 management controls
-
 ## Company-managed activation and PIN controls
 
 - `company_pin` is an explicit authentication mode. It does not initialize or
   require Firebase Admin credentials, and it refuses Pilot OTP material.
+- The cloud API and Google Play build both fail closed unless production is
+  explicitly `company_pin`; Google Play distribution introduces no SMS or
+  Firebase login boundary.
 - Owner-generated six-digit activation codes use the existing challenge table,
   a random salt, PBKDF2-HMAC-SHA256, a 24-hour expiry, bounded attempts, and
   one-time consumption. Regeneration cancels every earlier pending code for the
@@ -104,6 +129,8 @@ controls.
   Build 29 is adopted. Build 29 exchanges the same stored random credential for
   a company-scoped membership-selection context, so safe existing credentials
   do not require reactivation.
+
+## Management controls
 
 - All management routes require the backend `OWNER_ADMIN` dependency. Hiding
   a web tab is only convenience; supervisor and driver sessions receive a
@@ -279,9 +306,9 @@ controls.
 Phase 7 adds a hashed source-address OTP cooldown in addition to the
 per-phone cooldown, magic-byte checks for configured image types, explicit
 security headers, and production profile validation. The PC Role Lab already
-uses the browser HttpOnly refresh-cookie adapter described above. A real SMS
-provider is still an integration boundary and must be configured explicitly;
-the unavailable provider fails closed.
+uses the browser HttpOnly refresh-cookie adapter described above. Optional
+legacy OTP modes require an explicitly configured provider and otherwise fail
+closed. No SMS provider is used or required by production `company_pin`.
 
 Malware scanning/content inspection, automated key rotation, and a full BFF
 that removes the browser access token from JavaScript remain follow-up work.
@@ -312,6 +339,9 @@ Phase 2 dependencies are not a substitute for endpoint-specific validation.
 
 ## Firebase phone authentication controls
 
+- This section documents optional compatibility/staging code. It is not the
+  production Google Play authentication design and no Firebase credential or
+  SMS quota is required by the `company_pin` release.
 - Firebase-specific profiles require explicit Firebase mode. Pilot OTP
   endpoints and codes are unavailable in Firebase mode, preventing a fallback
   downgrade. Protected deployments may instead explicitly select company PIN
@@ -340,8 +370,9 @@ Phase 2 dependencies are not a substitute for endpoint-specific validation.
 The one-tipper internal pilot may use an explicitly enabled development/test
 OTP provider and controlled local connectivity. This is not an Internet or
 production deployment: public exposure and plaintext authentication traffic are
-forbidden, and HTTPS/TLS plus a real OTP provider are required before broader
-rollout. Evidence MIME/signature, size, private-key, storage, and authorization
+forbidden. Broader rollout requires HTTPS/TLS and the production `company_pin`
+activation/device authentication workflow; development OTP must be disabled.
+Evidence MIME/signature, size, private-key, storage, and authorization
 controls are the pilot baseline; malware scanning/content inspection remains a
 required pre-production follow-up.
 
@@ -423,7 +454,12 @@ Tokens and OTP values are never written to handover audit records.
   Assignment and duty state instead of retaining a stale phone-side relationship
   as authoritative.
 
-## Public website boundary
+## Preserved Windows Pilot public website boundary
+
+This section applies to the standalone Windows marketing deployment only.
+The Ubuntu cloud topology additionally publishes the authenticated app and
+restricted API hostnames through the boundary documented at the top of this
+file and in `production-deployment.md`.
 
 - Only the standalone `apps/marketing` process is approved for Caddy routing.
   The private Next.js app, Fleet API, PostgreSQL, object storage, evidence,

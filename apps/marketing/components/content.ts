@@ -7,6 +7,7 @@ export const publicRoutes = [
   "/solutions",
   "/pricing",
   "/contact",
+  "/privacy",
 ] as const;
 export const primaryNavigation = [
   { href: "/", label: "Home" },

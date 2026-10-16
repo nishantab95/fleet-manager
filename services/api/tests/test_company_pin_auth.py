@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from fleet_api.api.dependencies import get_otp_provider
 from fleet_api.auth.providers import UnavailableOtpProvider
 from fleet_api.auth.service import AuthContext, AuthService
 from fleet_api.core.config import Settings
@@ -17,11 +20,23 @@ from fleet_api.db.models import (
     Company,
     CompanyMembership,
     CompanyPinCredential,
+    FleetAsset,
+    OperationalEvent,
     OtpChallenge,
+    Site,
     User,
 )
 from fleet_api.db.models.common import utc_now
-from fleet_api.domain.enums import MembershipRole, MembershipStatus, UserStatus
+from fleet_api.db.session import get_db as session_get_db
+from fleet_api.domain.assignments import create_assignment
+from fleet_api.domain.enums import (
+    AssetOwnershipType,
+    FleetAssetStatus,
+    FleetAssetType,
+    MembershipRole,
+    MembershipStatus,
+    UserStatus,
+)
 from fleet_api.domain.errors import (
     ActivationCodeError,
     DeviceCredentialError,
@@ -31,6 +46,7 @@ from fleet_api.domain.errors import (
     PinLockedError,
 )
 from fleet_api.domain.owner_people_sites import OwnerPeopleSiteService
+from fleet_api.main import create_app
 
 pytestmark = pytest.mark.postgres
 
@@ -190,6 +206,113 @@ def test_valid_first_activation_hashes_secrets_and_pin_login_is_membership_bound
     )
     assert logged_in.context.membership.id == membership.id
     assert logged_in.context.membership.role == MembershipRole.DRIVER
+
+
+def test_thirty_company_pin_drivers_sync_unique_events_idempotently(
+    db_session: Session,
+    tenant_records: dict[str, object],
+) -> None:
+    """Exercise the initially planned 30-phone production workload locally."""
+    config = settings()
+    app = create_app(config)
+
+    def override_db() -> Iterator[Session]:
+        yield db_session
+
+    app.dependency_overrides[session_get_db] = override_db
+    app.dependency_overrides[get_otp_provider] = lambda: UnavailableOtpProvider()
+    company = value(tenant_records, "company_a", Company)
+    supervisor = value(tenant_records, "supervisor_a", CompanyMembership)
+    site = value(tenant_records, "site_a", Site)
+    owner = owner_service(db_session, tenant_records, config)
+    auth = auth_service(db_session, config)
+    event_ids: set[str] = set()
+
+    with TestClient(app) as client:
+        for index in range(30):
+            phone = f"+91880000{index:04d}"
+            user = User(
+                phone_number=phone,
+                display_name=f"Capacity Driver {index + 1}",
+                status=UserStatus.ACTIVE,
+            )
+            db_session.add(user)
+            db_session.flush()
+            membership = CompanyMembership(
+                company_id=company.id,
+                user_id=user.id,
+                role=MembershipRole.DRIVER,
+                display_name=user.display_name,
+                status=MembershipStatus.ACTIVE,
+            )
+            asset = FleetAsset(
+                company_id=company.id,
+                asset_type=FleetAssetType.TIPPER,
+                ownership_type=AssetOwnershipType.OWNED,
+                asset_code=f"CAP-{index + 1:02d}",
+                registration_number=f"KA99CP{index + 1:04d}",
+                short_name=f"Capacity {index + 1}",
+                status=FleetAssetStatus.ACTIVE,
+            )
+            db_session.add_all([membership, asset])
+            db_session.flush()
+            create_assignment(
+                db_session,
+                company_id=company.id,
+                driver_membership_id=membership.id,
+                supervisor_membership_id=supervisor.id,
+                asset_id=asset.id,
+                site_id=site.id,
+                starts_at=datetime.now(UTC) - timedelta(hours=1),
+            )
+
+            activation_code = owner.generate_person_activation_code(membership.id).activation_code
+            installation = f"capacity-android-{index + 1:02d}"
+            activation = auth.begin_company_activation(
+                phone=phone,
+                activation_code=activation_code,
+                installation_identifier=installation,
+            )
+            tokens, _device_credential = auth.complete_company_pin_activation(
+                activation_token=activation.device_credential,
+                installation_identifier=installation,
+                pin="246810",
+            )
+            headers = {"Authorization": f"Bearer {tokens.access_token}"}
+            device = client.post(
+                "/api/v1/driver/device",
+                headers=headers,
+                json={
+                    "installation_identifier": installation,
+                    "platform": "ANDROID",
+                },
+            )
+            assert device.status_code == 200
+            assert device.json()["membership_id"] == str(membership.id)
+
+            event_id = str(uuid4())
+            event_ids.add(event_id)
+            payload = {
+                "client_event_uuid": event_id,
+                "event_type": "EMERGENCY",
+                "device_created_at": datetime.now(UTC).isoformat(),
+                "installation_identifier": installation,
+                "platform": "ANDROID",
+            }
+            accepted = client.post("/api/v1/driver/events", headers=headers, json=payload)
+            assert accepted.status_code == 200
+            assert accepted.json()["status"] == "accepted"
+            replay = client.post("/api/v1/driver/events", headers=headers, json=payload)
+            assert replay.status_code == 200
+            assert replay.json()["status"] == "already_accepted"
+            assert replay.json()["event_id"] == accepted.json()["event_id"]
+
+    synchronized = db_session.scalar(
+        select(func.count(OperationalEvent.id)).where(
+            OperationalEvent.client_event_uuid.in_(event_ids)
+        )
+    )
+    assert synchronized == 30
 
 
 def test_activation_rejects_wrong_expired_reused_and_regenerated_codes(

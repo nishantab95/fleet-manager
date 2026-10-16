@@ -28,6 +28,7 @@ from fleet_api.api.pilot_releases import (
 from fleet_api.api.reports import router as reports_router
 from fleet_api.api.supervisor import router as supervisor_router
 from fleet_api.core.config import Settings, get_settings
+from fleet_api.core.rate_limit import RateLimitMiddleware
 from fleet_api.core.request_id import RequestIdMiddleware
 from fleet_api.core.structured_logging import configure_logging
 from fleet_api.db.session import check_database
@@ -69,6 +70,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(supervisor_router)
     app.include_router(reports_router)
     app.add_middleware(RequestIdMiddleware)
+    if (
+        runtime_settings.rate_limit_requests_per_minute > 0
+        or runtime_settings.auth_rate_limit_requests_per_minute > 0
+    ):
+        app.add_middleware(
+            RateLimitMiddleware,
+            requests_per_minute=runtime_settings.rate_limit_requests_per_minute,
+            auth_requests_per_minute=runtime_settings.auth_rate_limit_requests_per_minute,
+            max_clients=runtime_settings.rate_limit_max_clients,
+        )
 
     @app.middleware("http")
     async def pilot_release_upload_guard(request: Request, call_next: Any) -> Any:
@@ -111,9 +122,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.exception_handler(Exception)
-    async def unhandled_exception_handler(request: Request, _: Exception) -> JSONResponse:
+    async def unhandled_exception_handler(request: Request, error: Exception) -> JSONResponse:
         request_id = request.headers.get("x-request-id")
-        logger.exception("unhandled_request_error", extra={"path": request.url.path})
+        logger.error(
+            "unhandled_request_error",
+            exc_info=(type(error), error, error.__traceback__),
+        )
         body: dict[str, Any] = {"detail": "Internal server error"}
         if request_id:
             body["request_id"] = request_id

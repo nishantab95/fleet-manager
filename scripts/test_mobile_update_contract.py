@@ -71,3 +71,24 @@ def test_company_button_has_safe_config_and_private_publish_preflights() -> None
     assert "HTTPS_UPLOAD_PATH" in sender
     assert "TAILDROP FALLBACK" in sender
     assert '"ping"' not in sender
+
+
+def test_google_play_release_is_company_pin_only_and_has_no_firebase_secret_boundary() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "google-play-release.yml").read_text(
+        encoding="utf-8"
+    )
+    builder = (ROOT / "scripts" / "build-play-aab.ps1").read_text(encoding="utf-8")
+    runtime = (ROOT / "apps" / "mobile" / "lib" / "main.dart").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--dart-define=FLEET_AUTH_MODE=company_pin" in workflow
+    assert "--dart-define=FLEET_AUTH_MODE=company_pin" in builder
+    assert "https://api.fleetaisystems.com" in workflow
+    assert "https://api.fleetaisystems.com" in builder
+    assert "FIREBASE_ANDROID_" not in workflow
+    assert "FIREBASE_PROJECT_ID" not in workflow
+    assert "FIREBASE_ANDROID_" not in builder
+    assert "FIREBASE_PROJECT_ID" not in builder
+    assert "if (authMode == FleetAuthMode.firebase)" in runtime
+    assert "Firebase.initializeApp" in runtime

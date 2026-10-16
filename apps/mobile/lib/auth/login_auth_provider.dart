@@ -28,6 +28,7 @@ FleetAuthMode resolveFleetAuthMode({
       'FLEET_AUTH_MODE must be pilot, firebase, or company_pin.',
     );
   }
+  if (productionBuild) return FleetAuthMode.companyPin;
   return pilotBuild ? FleetAuthMode.pilot : FleetAuthMode.firebase;
 }
 

@@ -1,0 +1,10 @@
+title = "Fleet AI Systems secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated build output, dependency caches, and local test artifacts"
+paths = [
+  '''(^|/)(\.git|\.gradle|\.next|\.dart_tool|\.venv|\.uv-cache|\.mypy_cache|\.pytest_cache|\.pytest-[^/]*|\.ruff_cache|\.runtime|node_modules|build|coverage|dist|outputs|test-results|playwright-report|blob-report|pytest-[^/]*|\.tmp|\.production-smoke\.[^/]*|infra/data)(/|$)''',
+]

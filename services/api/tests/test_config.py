@@ -17,15 +17,15 @@ def test_cors_origins_are_parsed_from_environment_style_string() -> None:
 
 
 def test_production_configuration_fails_closed_for_local_defaults() -> None:
-    with pytest.raises(ValueError, match="Firebase authentication mode"):
+    with pytest.raises(ValueError, match="company PIN authentication mode"):
         _settings(
             environment="production",
             jwt_signing_key="production-signing-key-that-is-longer-than-32-characters",
         )
 
 
-def test_staging_configuration_requires_firebase_and_secure_public_boundaries() -> None:
-    with pytest.raises(ValueError, match="staging requires Firebase authentication mode"):
+def test_staging_configuration_requires_secure_auth_and_public_boundaries() -> None:
+    with pytest.raises(ValueError, match="company PIN authentication mode"):
         _settings(
             environment="staging",
             jwt_signing_key="staging-signing-key-that-is-longer-than-32-characters",
@@ -72,6 +72,31 @@ def test_company_pin_mode_accepts_protected_profile_without_firebase_and_rejects
 
     with pytest.raises(ValueError, match="forbidden in company PIN auth mode"):
         _settings(auth_mode="company_pin", pilot_otp="123456")
+
+
+def test_database_pool_limits_are_bounded_and_validated() -> None:
+    configured = _settings(
+        database_pool_size=5,
+        database_max_overflow=2,
+        database_pool_timeout_seconds=10,
+    )
+    assert configured.database_pool_size + configured.database_max_overflow == 7
+
+    with pytest.raises(ValueError, match="database_pool_size"):
+        _settings(database_pool_size=0)
+    with pytest.raises(ValueError, match="database_max_overflow"):
+        _settings(database_max_overflow=-1)
+    with pytest.raises(ValueError, match="database_pool_timeout_seconds"):
+        _settings(database_pool_timeout_seconds=0)
+
+
+def test_rate_limit_settings_reject_invalid_bounds() -> None:
+    with pytest.raises(ValueError, match="rate_limit_requests_per_minute"):
+        _settings(rate_limit_requests_per_minute=-1)
+    with pytest.raises(ValueError, match="auth_rate_limit_requests_per_minute"):
+        _settings(auth_rate_limit_requests_per_minute=-1)
+    with pytest.raises(ValueError, match="rate_limit_max_clients"):
+        _settings(rate_limit_max_clients=0)
 
 
 def test_allowed_hosts_are_parsed_and_secure_cookies_follow_profile() -> None:

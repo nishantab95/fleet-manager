@@ -1,5 +1,12 @@
 # Development on Windows
 
+Laptop development and the Windows/Tailscale Pilot remain independent of cloud
+production. Continue using the root `.env`, root `docker-compose.yml`, and
+PowerShell helpers. Do not copy `/etc/fleet-ai/production.env`, Restic
+credentials, Google Play signing files, or GitHub Environment
+secrets into the checkout. Production Compose is isolated under
+`infra/production` and requires an explicit external environment file.
+
 ## Toolchain audit
 
 The Phase 0 verification on 2026-09-21 recorded:
@@ -103,7 +110,7 @@ settings are:
 ```text
 FLEET_AUTH_MODE=pilot               # pilot, firebase, or company_pin
 FLEET_PHONE_DEFAULT_REGION=IN       # optional; only for non-E.164 input
-FLEET_OTP_PROVIDER=unavailable      # production must use a real provider
+FLEET_OTP_PROVIDER=unavailable      # production company_pin keeps this unavailable
 FLEET_ENABLE_DEVELOPMENT_OTP=false
 FLEET_FIREBASE_PROJECT_ID=          # required when auth mode is firebase
 FLEET_FIREBASE_CHECK_REVOKED_TOKENS=true
@@ -139,8 +146,8 @@ The end-to-end staging configuration, protected APK build command, physical
 device matrix, and explicit Pilot rollback are in
 [Firebase staging and real-device OTP runbook](firebase-staging-runbook.md).
 
-The web shell uses `NEXT_PUBLIC_API_BASE_URL` when set and otherwise calls
-`http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3
+The web shell proxies through `FLEET_API_UPSTREAM_URL` when set and otherwise
+uses `http://localhost:8000`. Run it from `apps/web` with `npm run dev`. The Phase 3
 owner shell and Phase 5 supervisor verification shell keep access tokens in
 memory only; an HttpOnly refresh cookie restores the browser session after a
 page reload. A development OTP provider and signing key must be configured in

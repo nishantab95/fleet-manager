@@ -258,10 +258,12 @@ def execute(
     payload: dict[str, object],
     plan: dict[str, object],
 ) -> Response:
-    return client.post(
+    response = client.post(
         "/api/v1/owner/operations/execute",
         json={**payload, "state_token": plan["state_token"]},
     )
+    assert isinstance(response, Response)
+    return response
 
 
 def test_assign_driver_to_undeployed_asset_deploys_and_assigns_atomically(

@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted for implementation. Production enablement remains a separate deployment decision.
+Accepted as optional compatibility/staging integration. Production provider
+selection is superseded by
+[ADR 0012](0012-company-managed-activation-pin.md) and
+[ADR 0013](0013-device-auth-and-workspaces.md): this cloud/Google Play release
+uses `FLEET_AUTH_MODE=company_pin`, with no Firebase Phone Authentication or
+SMS requirement. The original Firebase-specific design below is retained for
+explicit Firebase deployments only.
 
 ## Context
 

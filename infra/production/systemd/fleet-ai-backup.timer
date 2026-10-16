@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Fleet AI Systems backup and restore verification daily
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=900
+Persistent=true
+Unit=fleet-ai-backup.service
+
+[Install]
+WantedBy=timers.target

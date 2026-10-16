@@ -1,8 +1,15 @@
-# ADR 0012: Public brand and marketing-site boundary
+# ADR 0018: Public brand and marketing-site boundary
 
 ## Status
 
-Accepted.
+Accepted for the Windows Pilot website. The marketing-only public routing
+decision below is superseded for cloud production by
+[ADR 0015](0015-single-vps-production-deployment.md), which adds separately
+secured app/API hostnames. Marketing process isolation and compatibility
+identifiers remain in force.
+
+Renumbered from the duplicate ADR 0012 on 2026-10-16. Git first records the
+original document on 2026-10-10; renumbering does not create a new decision.
 
 ## Context
 

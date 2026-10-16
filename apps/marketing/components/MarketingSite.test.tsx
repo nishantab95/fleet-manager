@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import HomePage from "../app/page";
+import PrivacyPage from "../app/privacy/page";
 import { ContactForm } from "./ContactForm";
 import { MarketingFooter, MarketingHeader } from "./MarketingChrome";
 
@@ -53,5 +54,13 @@ describe("Fleet AI Systems public site", () => {
       fleetSize: "11-30",
       fleetType: "mixed",
     });
+  });
+
+  it("publishes a truthful privacy notice and links it from the footer", () => {
+    render(<><PrivacyPage /><MarketingFooter /></>);
+    expect(screen.getByRole("heading", { level: 1, name: /Clear information/ })).toBeInTheDocument();
+    expect(screen.getByText(/does not provide continuous GPS tracking/i)).toBeInTheDocument();
+    expect(screen.getByText(/Firebase Phone Authentication is not initialised/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
   });
 });

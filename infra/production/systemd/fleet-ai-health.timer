@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Fleet AI Systems production health every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=fleet-ai-health.service
+
+[Install]
+WantedBy=timers.target

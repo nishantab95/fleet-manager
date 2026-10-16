@@ -57,7 +57,7 @@ export function MarketingFooter() {
         </div>
         <div className="marketing-footer__links">
           <div><strong>Platform</strong><Link href="/features">Features</Link><Link href="/how-it-works">How it works</Link><Link href="/solutions">Solutions</Link></div>
-          <div><strong>Company</strong><Link href="/pricing">Pricing</Link><Link href="/contact">Contact</Link><Link href="/contact">Book a demo</Link></div>
+          <div><strong>Company</strong><Link href="/pricing">Pricing</Link><Link href="/contact">Contact</Link><Link href="/privacy">Privacy</Link></div>
           <div><strong>Operations</strong><span>Private access only</span><span>No public Owner login</span></div>
         </div>
       </div>

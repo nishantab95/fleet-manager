@@ -26,6 +26,17 @@ void main() {
     );
   });
 
+  test('production defaults to company PIN without Firebase configuration', () {
+    expect(
+      resolveFleetAuthMode(
+        configured: '',
+        pilotBuild: false,
+        productionBuild: true,
+      ),
+      FleetAuthMode.companyPin,
+    );
+  });
+
   test(
     'Firebase on the Pilot package disables mutable Pilot runtime features',
     () {
@@ -114,6 +125,24 @@ void main() {
       privateApkUpdatesEnabled(
         pilotBuild: true,
         authMode: FleetAuthMode.firebase,
+        firebaseCompanyBuild: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('Google Play production cannot enable private APK sideload updates', () {
+    final mode = resolveFleetAuthMode(
+      configured: 'company_pin',
+      pilotBuild: false,
+      productionBuild: true,
+    );
+
+    expect(mode, FleetAuthMode.companyPin);
+    expect(
+      privateApkUpdatesEnabled(
+        pilotBuild: false,
+        authMode: mode,
         firebaseCompanyBuild: false,
       ),
       isFalse,
