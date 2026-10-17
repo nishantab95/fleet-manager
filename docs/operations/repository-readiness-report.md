@@ -377,3 +377,13 @@ in Play. Optional Firebase compatibility stays intact.
 Recommended next phase: owner reviews this report and supplies the external
 prerequisites, then separately authorizes a staged cloud/device acceptance plan.
 No live or publishing step is automatically authorized by this local handover.
+
+## Subsequent workstation cleanup note
+
+A separate, verified final cleanup on 2026-10-16 reduced the checkout from
+**6,906,911,446 to 5,333,043,971 logical bytes**, a further
+**1,573,867,475-byte net reduction**. Its exact deletion provenance, latest
+Docker accounting, preserved assets and post-cleanup checks are in the
+[local disk audit](local-disk-audit.md#subsequent-final-safe-cleanup-2026-10-16).
+The earlier measurements and release gates above retain their dated scope;
+this workstation cleanup does not approve deployment or Google Play submission.
